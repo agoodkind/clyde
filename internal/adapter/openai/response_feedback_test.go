@@ -43,30 +43,43 @@ func TestAppendTextItemAddsCompleteMessageBeforeTerminalEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AppendTextItem: %v", err)
 	}
-	if !bytes.Contains(augmented, []byte(": keep this comment")) || !bytes.Contains(augmented, []byte(`"future":"preserved"`)) {
+
+	if !bytes.Contains(augmented, []byte(": keep this comment")) ||
+		!bytes.Contains(augmented, []byte(`"future":"preserved"`)) {
 		t.Fatalf("unknown data was removed: %s", augmented)
 	}
-	if strings.Index(string(augmented), "retry") > strings.Index(string(augmented), "event: response.completed") {
+
+	if strings.Index(string(augmented), "retry") > strings.Index(
+		string(augmented),
+		"event: response.completed",
+	) {
 		t.Fatalf("feedback appears after response.completed: %s", augmented)
 	}
+
 	events := parseResponseSSE(augmented)
 	wantSequence := 8
+
 	for _, event := range events {
 		var identity responseEventIdentity
 		if json.Unmarshal(event.data, &identity) != nil || identity.SequenceNumber == nil {
 			continue
 		}
+
 		if *identity.SequenceNumber < wantSequence {
 			continue
 		}
+
 		if *identity.SequenceNumber != wantSequence {
 			t.Fatalf("sequence = %d, want %d", *identity.SequenceNumber, wantSequence)
 		}
+
 		wantSequence++
 	}
+
 	if wantSequence != 15 {
 		t.Fatalf("next sequence = %d, want 15", wantSequence)
 	}
+
 	if got := ResponseText(augmented); got != "answerretry" {
 		t.Fatalf("ResponseText(augmented) = %q", got)
 	}

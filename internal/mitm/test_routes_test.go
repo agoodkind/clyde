@@ -39,6 +39,7 @@ func (p testRouteProvider) ClassifyPlain(path string) PlainRouteClaim {
 	if p.prefix != "" && strings.HasPrefix(path, p.prefix) {
 		return PlainRouteClaim{Claimed: true, Provider: p.provider, UpstreamURL: p.upstream}
 	}
+
 	return PlainRouteClaim{Claimed: false, Provider: "", UpstreamURL: ""}
 }
 
@@ -58,6 +59,7 @@ func registerTestRoute(t *testing.T, id testRouteID, upstream string) func() {
 		prefix:   prefixForTestRoute(id),
 	}
 	RegisterProviderFirst(provider)
+
 	return func() { UnregisterProvider(provider.id) }
 }
 
@@ -68,6 +70,7 @@ func providerIDForTestRoute(id testRouteID) ProviderID {
 	case testRouteOpenAIBackend:
 		return testRouteProviderOpenAIBackend
 	}
+
 	return ProviderIDUnknown
 }
 
@@ -78,6 +81,7 @@ func providerNameForTestRoute(id testRouteID) string {
 	case testRouteOpenAIBackend:
 		return "codex"
 	}
+
 	return ""
 }
 
@@ -88,5 +92,6 @@ func prefixForTestRoute(id testRouteID) string {
 	case testRouteOpenAIBackend:
 		return "/backend-api"
 	}
+
 	return ""
 }

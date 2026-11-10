@@ -38,46 +38,66 @@ type egressExchange struct {
 
 // attachEgressObservers buffers the streamed response up to captureStoreBodyCap
 // while diagnostic recording is active. It does not write bodies to logs.
-func (c *Client) attachEgressObservers(ctx context.Context, resp *http.Response, base responseEvent, ex egressExchange) {
+func (c *Client) attachEgressObservers(
+	ctx context.Context,
+	resp *http.Response,
+	base responseEvent,
+	ex egressExchange,
+) {
 	if !c.cfg.CaptureStore.RecordingEnabled() {
 		return
 	}
+
 	respHeaders := resp.Header.Clone()
 	// Detach from request cancellation so the on-close emission still fires
 	// after the SSE stream completes; correlation values survive WithoutCancel.
 	emitCtx := context.WithoutCancel(ctx)
-	resp.Body = newCaptureTee(resp.Body, captureStoreBodyCap, func(captured []byte, _ bool, _ int) {
-		c.recordEgress(emitCtx, ex, base.Status, respHeaders, captured)
-	})
+	resp.Body = newCaptureTee(
+		resp.Body,
+		captureStoreBodyCap,
+		func(captured []byte, _ bool, _ int) {
+			c.recordEgress(emitCtx, ex, base.Status, respHeaders, captured)
+		},
+	)
 }
 
 // recordEgress writes one outbound /v1/messages exchange to the capture store
 // tagged client="adapter.anthropic" so the BYOK egress lands in capture.db with
 // full request and response bodies. A nil store is a no-op; the store's Record
 // is asynchronous and non-blocking.
-func (c *Client) recordEgress(ctx context.Context, ex egressExchange, status int, respHeaders http.Header, respBody []byte) {
+func (c *Client) recordEgress(
+	ctx context.Context,
+	ex egressExchange,
+	status int,
+	respHeaders http.Header,
+	respBody []byte,
+) {
 	store := c.cfg.CaptureStore
 	if !store.RecordingEnabled() {
 		return
 	}
-	store.RecordExchange(correlation.FromContext(ctx), capture.Exchange{
-		Client:             captureClientAnthropic,
-		Provider:           "anthropic",
-		Concern:            captureEgressConcern,
-		Host:               ex.host,
-		Method:             ex.method,
-		Path:               ex.path,
-		Status:             status,
-		UpstreamRequestID:  respHeaders.Get("Request-Id"),
-		SessionID:          sessionID,
-		ConversationID:     "",
-		ConversationSource: "",
-		RequestHeaders:     ex.reqHeaders,
-		ResponseHeaders:    respHeaders,
-		RequestBody:        ex.reqBody,
-		ResponseBody:       respBody,
-		RequestType:        ex.reqType,
-		ResponseType:       respHeaders.Get("Content-Type"),
-		Started:            ex.started,
-	})
+
+	store.RecordExchange(
+		correlation.FromContext(ctx),
+		capture.Exchange{
+			Client:             captureClientAnthropic,
+			Provider:           "anthropic",
+			Concern:            captureEgressConcern,
+			Host:               ex.host,
+			Method:             ex.method,
+			Path:               ex.path,
+			Status:             status,
+			UpstreamRequestID:  respHeaders.Get("Request-Id"),
+			SessionID:          sessionID,
+			ConversationID:     "",
+			ConversationSource: "",
+			RequestHeaders:     ex.reqHeaders,
+			ResponseHeaders:    respHeaders,
+			RequestBody:        ex.reqBody,
+			ResponseBody:       respBody,
+			RequestType:        ex.reqType,
+			ResponseType:       respHeaders.Get("Content-Type"),
+			Started:            ex.started,
+		},
+	)
 }

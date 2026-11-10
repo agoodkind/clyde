@@ -27,6 +27,7 @@ func TestRenderCobraNestsGroups(t *testing.T) {
 	if len(roots) != 1 {
 		t.Fatalf("roots: got %d, want 1", len(roots))
 	}
+
 	if roots[0].Use != "outer" {
 		t.Fatalf("root Use: got %q, want outer", roots[0].Use)
 	}
@@ -35,6 +36,7 @@ func TestRenderCobraNestsGroups(t *testing.T) {
 	if err != nil {
 		t.Fatalf("find inner under outer: %v", err)
 	}
+
 	if innerCmd.Use != "inner" {
 		t.Fatalf("inner Use: got %q, want inner", innerCmd.Use)
 	}
@@ -43,6 +45,7 @@ func TestRenderCobraNestsGroups(t *testing.T) {
 	if err != nil {
 		t.Fatalf("find leaf under inner: %v", err)
 	}
+
 	if leaf.Name() != "probe-op" {
 		t.Fatalf("leaf name: got %q, want probe-op", leaf.Name())
 	}
@@ -61,6 +64,7 @@ func TestRenderCobraMergesGroupedOpsIntoHandwrittenRoot(t *testing.T) {
 		Build: func(_ *cli.Factory) *cobra.Command {
 			cmd := &cobra.Command{Use: "shared"}
 			cmd.AddCommand(&cobra.Command{Use: "handwritten"})
+
 			return cmd
 		},
 	})
@@ -75,9 +79,11 @@ func TestRenderCobraMergesGroupedOpsIntoHandwrittenRoot(t *testing.T) {
 	if shared.Name() != "shared" {
 		t.Fatalf("root name: got %q, want shared", shared.Name())
 	}
+
 	if _, _, err := shared.Find([]string{"probe-op"}); err != nil {
 		t.Fatalf("find clispec child under shared root: %v", err)
 	}
+
 	if _, _, err := shared.Find([]string{"handwritten"}); err != nil {
 		t.Fatalf("find handwritten child under shared root: %v", err)
 	}

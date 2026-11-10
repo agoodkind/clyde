@@ -9,6 +9,7 @@ import "context"
 // interval.
 func (w *conversationSemanticSyncWorker) runBacklog(ctx context.Context) {
 	previousNeeded := -1
+
 	for {
 		w.lastNeeded = 0
 		w.runPassAndLog(ctx)
@@ -16,9 +17,11 @@ func (w *conversationSemanticSyncWorker) runBacklog(ctx context.Context) {
 		if semanticSyncContextDone(ctx) || needed == 0 {
 			return
 		}
+
 		if previousNeeded >= 0 && needed >= previousNeeded {
 			return
 		}
+
 		previousNeeded = needed
 	}
 }

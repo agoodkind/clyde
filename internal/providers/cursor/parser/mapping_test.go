@@ -16,45 +16,55 @@ import (
 func TestMapJSONLMessageMapsRolesTextAndTools(t *testing.T) {
 	t.Parallel()
 
-	message, include := mapJSONLMessage(cursorjsonl.TranscriptMessage{
-		Role: cursorjsonl.RoleAssistant,
-		Parts: []cursorjsonl.ContentPart{
-			{Type: cursorjsonl.PartTypeText, Text: "first", ToolName: "", ToolInput: nil},
-			{Type: cursorjsonl.PartTypeText, Text: "second", ToolName: "", ToolInput: nil},
-			{
-				Type:      cursorjsonl.PartTypeToolUse,
-				Text:      "",
-				ToolName:  "read_file",
-				ToolInput: json.RawMessage(`{"path":"README.md"}`),
+	message, include := mapJSONLMessage(
+		cursorjsonl.TranscriptMessage{
+			Role: cursorjsonl.RoleAssistant,
+			Parts: []cursorjsonl.ContentPart{
+				{Type: cursorjsonl.PartTypeText, Text: "first", ToolName: "", ToolInput: nil},
+				{Type: cursorjsonl.PartTypeText, Text: "second", ToolName: "", ToolInput: nil},
+				{
+					Type:      cursorjsonl.PartTypeToolUse,
+					Text:      "",
+					ToolName:  "read_file",
+					ToolInput: json.RawMessage(`{"path":"README.md"}`),
+				},
 			},
 		},
-	}, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-	})
+		conversation.LoadOptions{
+			IncludeSystemPrompts:  false,
+			IncludeSystemMessages: false,
+			IncludeToolOutputs:    false,
+		},
+	)
 	if !include {
 		t.Fatal("include = false, want true")
 	}
+
 	if message.Role != "assistant" {
 		t.Fatalf("Role = %q, want assistant", message.Role)
 	}
+
 	if message.Text != "first\nsecond" {
 		t.Fatalf("Text = %q, want joined text", message.Text)
 	}
+
 	if message.Visibility != transcript.MessageVisibilityVisible {
 		t.Fatalf("Visibility = %q, want visible", message.Visibility)
 	}
+
 	if !message.HasTools {
 		t.Fatal("HasTools = false, want true")
 	}
+
 	if len(message.Tools) != 1 {
 		t.Fatalf("Tools len = %d, want 1", len(message.Tools))
 	}
+
 	tool := message.Tools[0]
 	if tool.Name != "read_file" {
 		t.Fatalf("Tool.Name = %q, want read_file", tool.Name)
 	}
+
 	if string(tool.Input.Raw) != `{"path":"README.md"}` {
 		t.Fatalf("Tool.Input.Raw = %s", tool.Input.Raw)
 	}
@@ -77,57 +87,73 @@ func TestMapComposerBubbleMapsRolesThinkingAndToolOutputGate(t *testing.T) {
 		},
 	}
 
-	withoutOutput, include := mapComposerBubble(assistant, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-	})
+	withoutOutput, include := mapComposerBubble(
+		assistant,
+		conversation.LoadOptions{
+			IncludeSystemPrompts:  false,
+			IncludeSystemMessages: false,
+			IncludeToolOutputs:    false,
+		},
+	)
 	if !include {
 		t.Fatal("include = false, want true")
 	}
+
 	if withoutOutput.Role != "assistant" {
 		t.Fatalf("Role = %q, want assistant", withoutOutput.Role)
 	}
+
 	if withoutOutput.Thinking != "thought" {
 		t.Fatalf("Thinking = %q, want thought", withoutOutput.Thinking)
 	}
+
 	if len(withoutOutput.Tools) != 1 {
 		t.Fatalf("Tools len = %d, want 1", len(withoutOutput.Tools))
 	}
+
 	if withoutOutput.Tools[0].Output != "" {
 		t.Fatalf("tool output = %q, want empty", withoutOutput.Tools[0].Output)
 	}
+
 	if !withoutOutput.Tools[0].IsError {
 		t.Fatal("IsError = false, want true")
 	}
 
-	withOutput, include := mapComposerBubble(assistant, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    true,
-	})
+	withOutput, include := mapComposerBubble(
+		assistant,
+		conversation.LoadOptions{
+			IncludeSystemPrompts:  false,
+			IncludeSystemMessages: false,
+			IncludeToolOutputs:    true,
+		},
+	)
 	if !include {
 		t.Fatal("include with output = false, want true")
 	}
+
 	if withOutput.Tools[0].Output != "output" {
 		t.Fatalf("tool output = %q, want output", withOutput.Tools[0].Output)
 	}
 
-	user, include := mapComposerBubble(cursorstore.Bubble{
-		BubbleID:      "bubble-user",
-		Type:          cursorstore.BubbleTypeUser,
-		SchemaVersion: 3,
-		Text:          "hello",
-		Thinking:      cursorstore.BubbleThinking{Text: ""},
-		ToolCall:      nil,
-	}, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-	})
+	user, include := mapComposerBubble(
+		cursorstore.Bubble{
+			BubbleID:      "bubble-user",
+			Type:          cursorstore.BubbleTypeUser,
+			SchemaVersion: 3,
+			Text:          "hello",
+			Thinking:      cursorstore.BubbleThinking{Text: ""},
+			ToolCall:      nil,
+		},
+		conversation.LoadOptions{
+			IncludeSystemPrompts:  false,
+			IncludeSystemMessages: false,
+			IncludeToolOutputs:    false,
+		},
+	)
 	if !include {
 		t.Fatal("user include = false, want true")
 	}
+
 	if user.Role != "user" {
 		t.Fatalf("user Role = %q, want user", user.Role)
 	}
@@ -140,45 +166,53 @@ func TestMapComposerBubbleMapsRolesThinkingAndToolOutputGate(t *testing.T) {
 func TestMapComposerBubbleCarriesTheStoredWriteTime(t *testing.T) {
 	t.Parallel()
 
-	dated, include := mapComposerBubble(cursorstore.Bubble{
-		BubbleID:       "bubble-dated",
-		Type:           cursorstore.BubbleTypeUser,
-		SchemaVersion:  3,
-		Text:           "hello",
-		Thinking:       cursorstore.BubbleThinking{Text: ""},
-		ToolCall:       nil,
-		CreatedAt:      "2026-05-06T05:00:30.500Z",
-		ServerBubbleID: "",
-	}, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-	})
+	dated, include := mapComposerBubble(
+		cursorstore.Bubble{
+			BubbleID:       "bubble-dated",
+			Type:           cursorstore.BubbleTypeUser,
+			SchemaVersion:  3,
+			Text:           "hello",
+			Thinking:       cursorstore.BubbleThinking{Text: ""},
+			ToolCall:       nil,
+			CreatedAt:      "2026-05-06T05:00:30.500Z",
+			ServerBubbleID: "",
+		},
+		conversation.LoadOptions{
+			IncludeSystemPrompts:  false,
+			IncludeSystemMessages: false,
+			IncludeToolOutputs:    false,
+		},
+	)
 	if !include {
 		t.Fatal("include = false, want true")
 	}
+
 	want := time.Date(2026, time.May, 6, 5, 0, 30, 500_000_000, time.UTC)
 	if !dated.Timestamp.Equal(want) {
 		t.Fatalf("Timestamp = %s, want %s", dated.Timestamp, want)
 	}
 
-	undated, include := mapComposerBubble(cursorstore.Bubble{
-		BubbleID:       "bubble-undated",
-		Type:           cursorstore.BubbleTypeUser,
-		SchemaVersion:  3,
-		Text:           "hello",
-		Thinking:       cursorstore.BubbleThinking{Text: ""},
-		ToolCall:       nil,
-		CreatedAt:      "",
-		ServerBubbleID: "",
-	}, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-	})
+	undated, include := mapComposerBubble(
+		cursorstore.Bubble{
+			BubbleID:       "bubble-undated",
+			Type:           cursorstore.BubbleTypeUser,
+			SchemaVersion:  3,
+			Text:           "hello",
+			Thinking:       cursorstore.BubbleThinking{Text: ""},
+			ToolCall:       nil,
+			CreatedAt:      "",
+			ServerBubbleID: "",
+		},
+		conversation.LoadOptions{
+			IncludeSystemPrompts:  false,
+			IncludeSystemMessages: false,
+			IncludeToolOutputs:    false,
+		},
+	)
 	if !include {
 		t.Fatal("undated include = false, want true")
 	}
+
 	if !undated.Timestamp.IsZero() {
 		t.Fatalf("undated Timestamp = %s, want the zero time", undated.Timestamp)
 	}
@@ -187,26 +221,30 @@ func TestMapComposerBubbleCarriesTheStoredWriteTime(t *testing.T) {
 func TestMapComposerBubbleWrapsNonJSONArgs(t *testing.T) {
 	t.Parallel()
 
-	message, include := mapComposerBubble(cursorstore.Bubble{
-		BubbleID:      "bubble-tool",
-		Type:          cursorstore.BubbleTypeAssistant,
-		SchemaVersion: 3,
-		Text:          "",
-		Thinking:      cursorstore.BubbleThinking{Text: ""},
-		ToolCall: &cursorstore.BubbleToolCall{
-			Name:    "tool",
-			RawArgs: "plain text",
-			Result:  "",
-			Status:  "success",
+	message, include := mapComposerBubble(
+		cursorstore.Bubble{
+			BubbleID:      "bubble-tool",
+			Type:          cursorstore.BubbleTypeAssistant,
+			SchemaVersion: 3,
+			Text:          "",
+			Thinking:      cursorstore.BubbleThinking{Text: ""},
+			ToolCall: &cursorstore.BubbleToolCall{
+				Name:    "tool",
+				RawArgs: "plain text",
+				Result:  "",
+				Status:  "success",
+			},
 		},
-	}, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-	})
+		conversation.LoadOptions{
+			IncludeSystemPrompts:  false,
+			IncludeSystemMessages: false,
+			IncludeToolOutputs:    false,
+		},
+	)
 	if !include {
 		t.Fatal("include = false, want true")
 	}
+
 	if string(message.Tools[0].Input.Raw) != `"plain text"` {
 		t.Fatalf("Input.Raw = %s, want JSON string", message.Tools[0].Input.Raw)
 	}
@@ -215,32 +253,40 @@ func TestMapComposerBubbleWrapsNonJSONArgs(t *testing.T) {
 func TestMapLegacyBubbleMapsStringRoles(t *testing.T) {
 	t.Parallel()
 
-	user, include := mapLegacyBubble(cursorstore.LegacyChatBubble{
-		Type: cursorstore.LegacyChatRoleUser,
-		Text: "hello",
-	}, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-	})
+	user, include := mapLegacyBubble(
+		cursorstore.LegacyChatBubble{
+			Type: cursorstore.LegacyChatRoleUser,
+			Text: "hello",
+		},
+		conversation.LoadOptions{
+			IncludeSystemPrompts:  false,
+			IncludeSystemMessages: false,
+			IncludeToolOutputs:    false,
+		},
+	)
 	if !include {
 		t.Fatal("user include = false, want true")
 	}
+
 	if user.Role != "user" {
 		t.Fatalf("user Role = %q, want user", user.Role)
 	}
 
-	assistant, include := mapLegacyBubble(cursorstore.LegacyChatBubble{
-		Type: cursorstore.LegacyChatRoleAssistant,
-		Text: "hi",
-	}, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-	})
+	assistant, include := mapLegacyBubble(
+		cursorstore.LegacyChatBubble{
+			Type: cursorstore.LegacyChatRoleAssistant,
+			Text: "hi",
+		},
+		conversation.LoadOptions{
+			IncludeSystemPrompts:  false,
+			IncludeSystemMessages: false,
+			IncludeToolOutputs:    false,
+		},
+	)
 	if !include {
 		t.Fatal("assistant include = false, want true")
 	}
+
 	if assistant.Role != "assistant" {
 		t.Fatalf("assistant Role = %q, want assistant", assistant.Role)
 	}
@@ -249,42 +295,51 @@ func TestMapLegacyBubbleMapsStringRoles(t *testing.T) {
 func TestMappingSkipsEmptyMessages(t *testing.T) {
 	t.Parallel()
 
-	_, includeJSONL := mapJSONLMessage(cursorjsonl.TranscriptMessage{
-		Role:  cursorjsonl.RoleUser,
-		Parts: nil,
-	}, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-	})
+	_, includeJSONL := mapJSONLMessage(
+		cursorjsonl.TranscriptMessage{
+			Role:  cursorjsonl.RoleUser,
+			Parts: nil,
+		},
+		conversation.LoadOptions{
+			IncludeSystemPrompts:  false,
+			IncludeSystemMessages: false,
+			IncludeToolOutputs:    false,
+		},
+	)
 	if includeJSONL {
 		t.Fatal("empty JSONL include = true, want false")
 	}
 
-	_, includeComposer := mapComposerBubble(cursorstore.Bubble{
-		BubbleID:      "empty",
-		Type:          cursorstore.BubbleTypeAssistant,
-		SchemaVersion: 3,
-		Text:          "",
-		Thinking:      cursorstore.BubbleThinking{Text: ""},
-		ToolCall:      nil,
-	}, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-	})
+	_, includeComposer := mapComposerBubble(
+		cursorstore.Bubble{
+			BubbleID:      "empty",
+			Type:          cursorstore.BubbleTypeAssistant,
+			SchemaVersion: 3,
+			Text:          "",
+			Thinking:      cursorstore.BubbleThinking{Text: ""},
+			ToolCall:      nil,
+		},
+		conversation.LoadOptions{
+			IncludeSystemPrompts:  false,
+			IncludeSystemMessages: false,
+			IncludeToolOutputs:    false,
+		},
+	)
 	if includeComposer {
 		t.Fatal("empty composer include = true, want false")
 	}
 
-	_, includeLegacy := mapLegacyBubble(cursorstore.LegacyChatBubble{
-		Type: cursorstore.LegacyChatRoleAssistant,
-		Text: "",
-	}, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-	})
+	_, includeLegacy := mapLegacyBubble(
+		cursorstore.LegacyChatBubble{
+			Type: cursorstore.LegacyChatRoleAssistant,
+			Text: "",
+		},
+		conversation.LoadOptions{
+			IncludeSystemPrompts:  false,
+			IncludeSystemMessages: false,
+			IncludeToolOutputs:    false,
+		},
+	)
 	if includeLegacy {
 		t.Fatal("empty legacy include = true, want false")
 	}
@@ -299,7 +354,10 @@ func TestMappingSkipsEmptyMessages(t *testing.T) {
 const synthenticNoPaddingBoundaryEnvelopeBody = "note"
 
 func synthenticNoPaddingBoundaryText() string {
-	return "Alpha" + adapterrender.FormatSyntheticContent(adapterrender.SyntheticNotice, synthenticNoPaddingBoundaryEnvelopeBody) + "Bravo"
+	return "Alpha" + adapterrender.FormatSyntheticContent(
+		adapterrender.SyntheticNotice,
+		synthenticNoPaddingBoundaryEnvelopeBody,
+	) + "Bravo"
 }
 
 const synthenticNoPaddingBoundaryWant = "Alpha\n\nBravo"
@@ -307,21 +365,25 @@ const synthenticNoPaddingBoundaryWant = "Alpha\n\nBravo"
 func TestMapComposerBubbleStripsSyntheticEnvelopeExactOutputNoPadding(t *testing.T) {
 	t.Parallel()
 
-	message, include := mapComposerBubble(cursorstore.Bubble{
-		BubbleID:      "bubble-notice",
-		Type:          cursorstore.BubbleTypeAssistant,
-		SchemaVersion: 3,
-		Text:          synthenticNoPaddingBoundaryText(),
-		Thinking:      cursorstore.BubbleThinking{Text: ""},
-		ToolCall:      nil,
-	}, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-	})
+	message, include := mapComposerBubble(
+		cursorstore.Bubble{
+			BubbleID:      "bubble-notice",
+			Type:          cursorstore.BubbleTypeAssistant,
+			SchemaVersion: 3,
+			Text:          synthenticNoPaddingBoundaryText(),
+			Thinking:      cursorstore.BubbleThinking{Text: ""},
+			ToolCall:      nil,
+		},
+		conversation.LoadOptions{
+			IncludeSystemPrompts:  false,
+			IncludeSystemMessages: false,
+			IncludeToolOutputs:    false,
+		},
+	)
 	if !include {
 		t.Fatal("include = false, want true")
 	}
+
 	if message.Text != synthenticNoPaddingBoundaryWant {
 		t.Fatalf("Text = %q, want exactly %q", message.Text, synthenticNoPaddingBoundaryWant)
 	}
@@ -331,21 +393,25 @@ func TestMapComposerBubbleNoMarkerByteIdentical(t *testing.T) {
 	t.Parallel()
 
 	const plain = "Plain assistant reply with no envelopes at all."
-	message, include := mapComposerBubble(cursorstore.Bubble{
-		BubbleID:      "bubble-plain",
-		Type:          cursorstore.BubbleTypeAssistant,
-		SchemaVersion: 3,
-		Text:          plain,
-		Thinking:      cursorstore.BubbleThinking{Text: ""},
-		ToolCall:      nil,
-	}, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-	})
+	message, include := mapComposerBubble(
+		cursorstore.Bubble{
+			BubbleID:      "bubble-plain",
+			Type:          cursorstore.BubbleTypeAssistant,
+			SchemaVersion: 3,
+			Text:          plain,
+			Thinking:      cursorstore.BubbleThinking{Text: ""},
+			ToolCall:      nil,
+		},
+		conversation.LoadOptions{
+			IncludeSystemPrompts:  false,
+			IncludeSystemMessages: false,
+			IncludeToolOutputs:    false,
+		},
+	)
 	if !include {
 		t.Fatal("include = false, want true")
 	}
+
 	if message.Text != plain {
 		t.Fatalf("Text = %q, want byte-identical %q", message.Text, plain)
 	}
@@ -369,42 +435,61 @@ func TestMapComposerBubbleNoMarkerByteIdentical(t *testing.T) {
 func TestMapComposerBubbleUserRoleNeverStripped(t *testing.T) {
 	t.Parallel()
 
-	pasted := adapterrender.FormatSyntheticContent(adapterrender.SyntheticReasoning, "not real reasoning, just a paste")
+	pasted := adapterrender.FormatSyntheticContent(
+		adapterrender.SyntheticReasoning,
+		"not real reasoning, just a paste",
+	)
 
-	user, includeUser := mapComposerBubble(cursorstore.Bubble{
-		BubbleID:      "bubble-user-pasted",
-		Type:          cursorstore.BubbleTypeUser,
-		SchemaVersion: 3,
-		Text:          pasted,
-		Thinking:      cursorstore.BubbleThinking{Text: ""},
-		ToolCall:      nil,
-	}, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-	})
+	user, includeUser := mapComposerBubble(
+		cursorstore.Bubble{
+			BubbleID:      "bubble-user-pasted",
+			Type:          cursorstore.BubbleTypeUser,
+			SchemaVersion: 3,
+			Text:          pasted,
+			Thinking:      cursorstore.BubbleThinking{Text: ""},
+			ToolCall:      nil,
+		},
+		conversation.LoadOptions{
+			IncludeSystemPrompts:  false,
+			IncludeSystemMessages: false,
+			IncludeToolOutputs:    false,
+		},
+	)
 	if !includeUser {
-		t.Fatal("user include = false, want true: a user message must never disappear because it quotes the marker syntax")
-	}
-	if user.Text != pasted {
-		t.Fatalf("user Text = %q, want byte-identical %q (user text must never be stripped)", user.Text, pasted)
+		t.Fatal(
+			"user include = false, want true: a user message must never disappear because it quotes the marker syntax",
+		)
 	}
 
-	assistant, includeAssistant := mapComposerBubble(cursorstore.Bubble{
-		BubbleID:      "bubble-assistant-same-text",
-		Type:          cursorstore.BubbleTypeAssistant,
-		SchemaVersion: 3,
-		Text:          pasted,
-		Thinking:      cursorstore.BubbleThinking{Text: ""},
-		ToolCall:      nil,
-	}, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-	})
-	if includeAssistant {
-		t.Fatalf("assistant include = true, want false: the same text as an assistant bubble is only an envelope and must collapse to empty")
+	if user.Text != pasted {
+		t.Fatalf(
+			"user Text = %q, want byte-identical %q (user text must never be stripped)",
+			user.Text,
+			pasted,
+		)
 	}
+
+	assistant, includeAssistant := mapComposerBubble(
+		cursorstore.Bubble{
+			BubbleID:      "bubble-assistant-same-text",
+			Type:          cursorstore.BubbleTypeAssistant,
+			SchemaVersion: 3,
+			Text:          pasted,
+			Thinking:      cursorstore.BubbleThinking{Text: ""},
+			ToolCall:      nil,
+		},
+		conversation.LoadOptions{
+			IncludeSystemPrompts:  false,
+			IncludeSystemMessages: false,
+			IncludeToolOutputs:    false,
+		},
+	)
+	if includeAssistant {
+		t.Fatalf(
+			"assistant include = true, want false: the same text as an assistant bubble is only an envelope and must collapse to empty",
+		)
+	}
+
 	_ = assistant
 }
 
@@ -421,56 +506,80 @@ func TestMapComposerBubbleUserRoleNeverStripped(t *testing.T) {
 func TestMapComposerBubbleUnmatchedMarkerNeverStripped(t *testing.T) {
 	t.Parallel()
 
-	t.Run("close_marker_mentioned_in_prose", func(t *testing.T) {
-		t.Parallel()
-		const text = "The closing marker is <!--/clyde-notice-->"
-		message, include := mapComposerBubble(cursorstore.Bubble{
-			BubbleID:      "bubble-mentions-close",
-			Type:          cursorstore.BubbleTypeAssistant,
-			SchemaVersion: 3,
-			Text:          text,
-			Thinking:      cursorstore.BubbleThinking{Text: ""},
-			ToolCall:      nil,
-		}, conversation.LoadOptions{
-			IncludeSystemPrompts:  false,
-			IncludeSystemMessages: false,
-			IncludeToolOutputs:    false,
-		})
-		if !include {
-			t.Fatal("include = false, want true: a message merely mentioning the marker must not disappear")
-		}
-		if message.Text != text {
-			t.Fatalf("Text = %q, want byte-identical %q", message.Text, text)
-		}
-	})
+	t.Run(
+		"close_marker_mentioned_in_prose",
+		func(t *testing.T) {
+			t.Parallel()
+			const text = "The closing marker is <!--/clyde-notice-->"
+			message, include := mapComposerBubble(
+				cursorstore.Bubble{
+					BubbleID:      "bubble-mentions-close",
+					Type:          cursorstore.BubbleTypeAssistant,
+					SchemaVersion: 3,
+					Text:          text,
+					Thinking:      cursorstore.BubbleThinking{Text: ""},
+					ToolCall:      nil,
+				},
+				conversation.LoadOptions{
+					IncludeSystemPrompts:  false,
+					IncludeSystemMessages: false,
+					IncludeToolOutputs:    false,
+				},
+			)
+			if !include {
+				t.Fatal(
+					"include = false, want true: a message merely mentioning the marker must not disappear",
+				)
+			}
 
-	t.Run("dangling_open_marker_no_close", func(t *testing.T) {
-		t.Parallel()
-		abortedTail := adapterrender.FormatSyntheticContentDeltaWithRef(
-			adapterrender.SyntheticReasoning, true, true, "", adapterrender.OriginUnknown,
-			"partial reasoning cut short by an abort",
-		)
-		text := "Before.\n\n" + abortedTail // no close marker anywhere
+			if message.Text != text {
+				t.Fatalf("Text = %q, want byte-identical %q", message.Text, text)
+			}
+		},
+	)
 
-		message, include := mapComposerBubble(cursorstore.Bubble{
-			BubbleID:      "bubble-dangling-open",
-			Type:          cursorstore.BubbleTypeAssistant,
-			SchemaVersion: 3,
-			Text:          text,
-			Thinking:      cursorstore.BubbleThinking{Text: ""},
-			ToolCall:      nil,
-		}, conversation.LoadOptions{
-			IncludeSystemPrompts:  false,
-			IncludeSystemMessages: false,
-			IncludeToolOutputs:    false,
-		})
-		if !include {
-			t.Fatal("include = false, want true")
-		}
-		if message.Text != text {
-			t.Fatalf("Text = %q, want byte-identical %q (an unmatched open marker must not be treated as Clyde's content)", message.Text, text)
-		}
-	})
+	t.Run(
+		"dangling_open_marker_no_close",
+		func(t *testing.T) {
+			t.Parallel()
+			abortedTail := adapterrender.FormatSyntheticContentDeltaWithRef(
+				adapterrender.SyntheticReasoning,
+				true,
+				true,
+				"",
+				adapterrender.OriginUnknown,
+				"partial reasoning cut short by an abort",
+			)
+			text := "Before.\n\n" + abortedTail // no close marker anywhere
+
+			message, include := mapComposerBubble(
+				cursorstore.Bubble{
+					BubbleID:      "bubble-dangling-open",
+					Type:          cursorstore.BubbleTypeAssistant,
+					SchemaVersion: 3,
+					Text:          text,
+					Thinking:      cursorstore.BubbleThinking{Text: ""},
+					ToolCall:      nil,
+				},
+				conversation.LoadOptions{
+					IncludeSystemPrompts:  false,
+					IncludeSystemMessages: false,
+					IncludeToolOutputs:    false,
+				},
+			)
+			if !include {
+				t.Fatal("include = false, want true")
+			}
+
+			if message.Text != text {
+				t.Fatalf(
+					"Text = %q, want byte-identical %q (an unmatched open marker must not be treated as Clyde's content)",
+					message.Text,
+					text,
+				)
+			}
+		},
+	)
 }
 
 // TestMapComposerBubbleUnknownTypeNeverStripped covers CLYDE-601's
@@ -483,23 +592,32 @@ func TestMapComposerBubbleUnknownTypeNeverStripped(t *testing.T) {
 	t.Parallel()
 
 	const unknownBubbleType = 0 // neither BubbleTypeUser (1) nor BubbleTypeAssistant (2)
-	pasted := adapterrender.FormatSyntheticContent(adapterrender.SyntheticReasoning, "user-authored text that happens to quote the marker")
+	pasted := adapterrender.FormatSyntheticContent(
+		adapterrender.SyntheticReasoning,
+		"user-authored text that happens to quote the marker",
+	)
 
-	message, include := mapComposerBubble(cursorstore.Bubble{
-		BubbleID:      "bubble-unknown-type",
-		Type:          unknownBubbleType,
-		SchemaVersion: 3,
-		Text:          pasted,
-		Thinking:      cursorstore.BubbleThinking{Text: ""},
-		ToolCall:      nil,
-	}, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-	})
+	message, include := mapComposerBubble(
+		cursorstore.Bubble{
+			BubbleID:      "bubble-unknown-type",
+			Type:          unknownBubbleType,
+			SchemaVersion: 3,
+			Text:          pasted,
+			Thinking:      cursorstore.BubbleThinking{Text: ""},
+			ToolCall:      nil,
+		},
+		conversation.LoadOptions{
+			IncludeSystemPrompts:  false,
+			IncludeSystemMessages: false,
+			IncludeToolOutputs:    false,
+		},
+	)
 	if !include {
-		t.Fatal("include = false, want true: an unrecognized bubble type must not default to the destructive strip branch")
+		t.Fatal(
+			"include = false, want true: an unrecognized bubble type must not default to the destructive strip branch",
+		)
 	}
+
 	if message.Text != pasted {
 		t.Fatalf("Text = %q, want byte-identical %q", message.Text, pasted)
 	}
@@ -516,23 +634,31 @@ func TestMapComposerBubbleIndentedCodeAfterEnvelopeSurvives(t *testing.T) {
 	envelope := adapterrender.FormatSyntheticContent(adapterrender.SyntheticNotice, "heads up")
 	text := envelope + "    indented code line"
 
-	message, include := mapComposerBubble(cursorstore.Bubble{
-		BubbleID:      "bubble-indented-code",
-		Type:          cursorstore.BubbleTypeAssistant,
-		SchemaVersion: 3,
-		Text:          text,
-		Thinking:      cursorstore.BubbleThinking{Text: ""},
-		ToolCall:      nil,
-	}, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-	})
+	message, include := mapComposerBubble(
+		cursorstore.Bubble{
+			BubbleID:      "bubble-indented-code",
+			Type:          cursorstore.BubbleTypeAssistant,
+			SchemaVersion: 3,
+			Text:          text,
+			Thinking:      cursorstore.BubbleThinking{Text: ""},
+			ToolCall:      nil,
+		},
+		conversation.LoadOptions{
+			IncludeSystemPrompts:  false,
+			IncludeSystemMessages: false,
+			IncludeToolOutputs:    false,
+		},
+	)
 	if !include {
 		t.Fatal("include = false, want true")
 	}
+
 	if message.Text != "    indented code line" {
-		t.Fatalf("Text = %q, want %q with leading indentation intact", message.Text, "    indented code line")
+		t.Fatalf(
+			"Text = %q, want %q with leading indentation intact",
+			message.Text,
+			"    indented code line",
+		)
 	}
 }
 
@@ -545,20 +671,25 @@ func TestMapComposerBubbleFullyStrippedEnvelopeExcludesMessage(t *testing.T) {
 	t.Parallel()
 
 	envelope := adapterrender.FormatSyntheticContent(adapterrender.SyntheticNotice, "just a notice")
-	_, include := mapComposerBubble(cursorstore.Bubble{
-		BubbleID:      "bubble-only-envelope",
-		Type:          cursorstore.BubbleTypeAssistant,
-		SchemaVersion: 3,
-		Text:          envelope,
-		Thinking:      cursorstore.BubbleThinking{Text: ""},
-		ToolCall:      nil,
-	}, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-	})
+	_, include := mapComposerBubble(
+		cursorstore.Bubble{
+			BubbleID:      "bubble-only-envelope",
+			Type:          cursorstore.BubbleTypeAssistant,
+			SchemaVersion: 3,
+			Text:          envelope,
+			Thinking:      cursorstore.BubbleThinking{Text: ""},
+			ToolCall:      nil,
+		},
+		conversation.LoadOptions{
+			IncludeSystemPrompts:  false,
+			IncludeSystemMessages: false,
+			IncludeToolOutputs:    false,
+		},
+	)
 	if include {
-		t.Fatal("include = true, want false: a bubble that is only a synthetic envelope has nothing left once stripped")
+		t.Fatal(
+			"include = true, want false: a bubble that is only a synthetic envelope has nothing left once stripped",
+		)
 	}
 }
 
@@ -581,47 +712,64 @@ func TestMapComposerBubbleDualSurfaceReasoningKeepsThinkingFieldSeparate(t *test
 	t.Parallel()
 
 	const duplicatedReasoning = "duplicated reasoning body"
-	envelope := adapterrender.FormatSyntheticContent(adapterrender.SyntheticReasoning, duplicatedReasoning)
-	message, include := mapComposerBubble(cursorstore.Bubble{
-		BubbleID:      "bubble-dual-surface",
-		Type:          cursorstore.BubbleTypeAssistant,
-		SchemaVersion: 3,
-		Text:          "Answer." + envelope,
-		Thinking:      cursorstore.BubbleThinking{Text: duplicatedReasoning},
-		ToolCall:      nil,
-	}, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-	})
+	envelope := adapterrender.FormatSyntheticContent(
+		adapterrender.SyntheticReasoning,
+		duplicatedReasoning,
+	)
+	message, include := mapComposerBubble(
+		cursorstore.Bubble{
+			BubbleID:      "bubble-dual-surface",
+			Type:          cursorstore.BubbleTypeAssistant,
+			SchemaVersion: 3,
+			Text:          "Answer." + envelope,
+			Thinking:      cursorstore.BubbleThinking{Text: duplicatedReasoning},
+			ToolCall:      nil,
+		},
+		conversation.LoadOptions{
+			IncludeSystemPrompts:  false,
+			IncludeSystemMessages: false,
+			IncludeToolOutputs:    false,
+		},
+	)
 	if !include {
 		t.Fatal("include = false, want true")
 	}
+
 	if !strings.Contains(message.Text, "Answer.") {
 		t.Fatalf("Text = %q, want the visible answer preserved", message.Text)
 	}
+
 	if strings.Contains(message.Text, duplicatedReasoning) {
 		t.Fatalf("Text = %q, want the marker-wrapped copy stripped", message.Text)
 	}
+
 	if message.Thinking != duplicatedReasoning {
-		t.Fatalf("Thinking = %q, want the pre-existing dual-surface field left untouched: %q", message.Thinking, duplicatedReasoning)
+		t.Fatalf(
+			"Thinking = %q, want the pre-existing dual-surface field left untouched: %q",
+			message.Thinking,
+			duplicatedReasoning,
+		)
 	}
 }
 
 func TestMapLegacyBubbleStripsSyntheticEnvelopeExactOutputNoPadding(t *testing.T) {
 	t.Parallel()
 
-	message, include := mapLegacyBubble(cursorstore.LegacyChatBubble{
-		Type: cursorstore.LegacyChatRoleAssistant,
-		Text: synthenticNoPaddingBoundaryText(),
-	}, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-	})
+	message, include := mapLegacyBubble(
+		cursorstore.LegacyChatBubble{
+			Type: cursorstore.LegacyChatRoleAssistant,
+			Text: synthenticNoPaddingBoundaryText(),
+		},
+		conversation.LoadOptions{
+			IncludeSystemPrompts:  false,
+			IncludeSystemMessages: false,
+			IncludeToolOutputs:    false,
+		},
+	)
 	if !include {
 		t.Fatal("include = false, want true")
 	}
+
 	if message.Text != synthenticNoPaddingBoundaryWant {
 		t.Fatalf("Text = %q, want exactly %q", message.Text, synthenticNoPaddingBoundaryWant)
 	}
@@ -635,33 +783,51 @@ func TestMapLegacyBubbleStripsSyntheticEnvelopeExactOutputNoPadding(t *testing.T
 func TestMapLegacyBubbleUserRoleNeverStripped(t *testing.T) {
 	t.Parallel()
 
-	pasted := adapterrender.FormatSyntheticContent(adapterrender.SyntheticReasoning, "not real reasoning, just a paste")
+	pasted := adapterrender.FormatSyntheticContent(
+		adapterrender.SyntheticReasoning,
+		"not real reasoning, just a paste",
+	)
 
-	user, includeUser := mapLegacyBubble(cursorstore.LegacyChatBubble{
-		Type: cursorstore.LegacyChatRoleUser,
-		Text: pasted,
-	}, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-	})
+	user, includeUser := mapLegacyBubble(
+		cursorstore.LegacyChatBubble{
+			Type: cursorstore.LegacyChatRoleUser,
+			Text: pasted,
+		},
+		conversation.LoadOptions{
+			IncludeSystemPrompts:  false,
+			IncludeSystemMessages: false,
+			IncludeToolOutputs:    false,
+		},
+	)
 	if !includeUser {
-		t.Fatal("user include = false, want true: a user message must never disappear because it quotes the marker syntax")
-	}
-	if user.Text != pasted {
-		t.Fatalf("user Text = %q, want byte-identical %q (user text must never be stripped)", user.Text, pasted)
+		t.Fatal(
+			"user include = false, want true: a user message must never disappear because it quotes the marker syntax",
+		)
 	}
 
-	_, includeAssistant := mapLegacyBubble(cursorstore.LegacyChatBubble{
-		Type: cursorstore.LegacyChatRoleAssistant,
-		Text: pasted,
-	}, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-	})
+	if user.Text != pasted {
+		t.Fatalf(
+			"user Text = %q, want byte-identical %q (user text must never be stripped)",
+			user.Text,
+			pasted,
+		)
+	}
+
+	_, includeAssistant := mapLegacyBubble(
+		cursorstore.LegacyChatBubble{
+			Type: cursorstore.LegacyChatRoleAssistant,
+			Text: pasted,
+		},
+		conversation.LoadOptions{
+			IncludeSystemPrompts:  false,
+			IncludeSystemMessages: false,
+			IncludeToolOutputs:    false,
+		},
+	)
 	if includeAssistant {
-		t.Fatalf("assistant include = true, want false: the same text as an assistant bubble is only an envelope and must collapse to empty")
+		t.Fatalf(
+			"assistant include = true, want false: the same text as an assistant bubble is only an envelope and must collapse to empty",
+		)
 	}
 }
 
@@ -673,35 +839,49 @@ func TestMapLegacyBubbleFullyStrippedEnvelopeExcludesMessage(t *testing.T) {
 	t.Parallel()
 
 	envelope := adapterrender.FormatSyntheticContent(adapterrender.SyntheticNotice, "just a notice")
-	_, include := mapLegacyBubble(cursorstore.LegacyChatBubble{
-		Type: cursorstore.LegacyChatRoleAssistant,
-		Text: envelope,
-	}, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-	})
+	_, include := mapLegacyBubble(
+		cursorstore.LegacyChatBubble{
+			Type: cursorstore.LegacyChatRoleAssistant,
+			Text: envelope,
+		},
+		conversation.LoadOptions{
+			IncludeSystemPrompts:  false,
+			IncludeSystemMessages: false,
+			IncludeToolOutputs:    false,
+		},
+	)
 	if include {
-		t.Fatal("include = true, want false: a bubble that is only a synthetic envelope has nothing left once stripped")
+		t.Fatal(
+			"include = true, want false: a bubble that is only a synthetic envelope has nothing left once stripped",
+		)
 	}
 }
 
 func TestMapJSONLMessageStripsSyntheticEnvelopeExactOutputNoPadding(t *testing.T) {
 	t.Parallel()
 
-	message, include := mapJSONLMessage(cursorjsonl.TranscriptMessage{
-		Role: cursorjsonl.RoleAssistant,
-		Parts: []cursorjsonl.ContentPart{
-			{Type: cursorjsonl.PartTypeText, Text: synthenticNoPaddingBoundaryText(), ToolName: "", ToolInput: nil},
+	message, include := mapJSONLMessage(
+		cursorjsonl.TranscriptMessage{
+			Role: cursorjsonl.RoleAssistant,
+			Parts: []cursorjsonl.ContentPart{
+				{
+					Type:      cursorjsonl.PartTypeText,
+					Text:      synthenticNoPaddingBoundaryText(),
+					ToolName:  "",
+					ToolInput: nil,
+				},
+			},
 		},
-	}, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-	})
+		conversation.LoadOptions{
+			IncludeSystemPrompts:  false,
+			IncludeSystemMessages: false,
+			IncludeToolOutputs:    false,
+		},
+	)
 	if !include {
 		t.Fatal("include = false, want true")
 	}
+
 	if message.Text != synthenticNoPaddingBoundaryWant {
 		t.Fatalf("Text = %q, want exactly %q", message.Text, synthenticNoPaddingBoundaryWant)
 	}
@@ -715,37 +895,55 @@ func TestMapJSONLMessageStripsSyntheticEnvelopeExactOutputNoPadding(t *testing.T
 func TestMapJSONLMessageUserRoleNeverStripped(t *testing.T) {
 	t.Parallel()
 
-	pasted := adapterrender.FormatSyntheticContent(adapterrender.SyntheticReasoning, "not real reasoning, just a paste")
+	pasted := adapterrender.FormatSyntheticContent(
+		adapterrender.SyntheticReasoning,
+		"not real reasoning, just a paste",
+	)
 
-	user, includeUser := mapJSONLMessage(cursorjsonl.TranscriptMessage{
-		Role: cursorjsonl.RoleUser,
-		Parts: []cursorjsonl.ContentPart{
-			{Type: cursorjsonl.PartTypeText, Text: pasted, ToolName: "", ToolInput: nil},
+	user, includeUser := mapJSONLMessage(
+		cursorjsonl.TranscriptMessage{
+			Role: cursorjsonl.RoleUser,
+			Parts: []cursorjsonl.ContentPart{
+				{Type: cursorjsonl.PartTypeText, Text: pasted, ToolName: "", ToolInput: nil},
+			},
 		},
-	}, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-	})
+		conversation.LoadOptions{
+			IncludeSystemPrompts:  false,
+			IncludeSystemMessages: false,
+			IncludeToolOutputs:    false,
+		},
+	)
 	if !includeUser {
-		t.Fatal("user include = false, want true: a user message must never disappear because it quotes the marker syntax")
-	}
-	if user.Text != pasted {
-		t.Fatalf("user Text = %q, want byte-identical %q (user text must never be stripped)", user.Text, pasted)
+		t.Fatal(
+			"user include = false, want true: a user message must never disappear because it quotes the marker syntax",
+		)
 	}
 
-	_, includeAssistant := mapJSONLMessage(cursorjsonl.TranscriptMessage{
-		Role: cursorjsonl.RoleAssistant,
-		Parts: []cursorjsonl.ContentPart{
-			{Type: cursorjsonl.PartTypeText, Text: pasted, ToolName: "", ToolInput: nil},
+	if user.Text != pasted {
+		t.Fatalf(
+			"user Text = %q, want byte-identical %q (user text must never be stripped)",
+			user.Text,
+			pasted,
+		)
+	}
+
+	_, includeAssistant := mapJSONLMessage(
+		cursorjsonl.TranscriptMessage{
+			Role: cursorjsonl.RoleAssistant,
+			Parts: []cursorjsonl.ContentPart{
+				{Type: cursorjsonl.PartTypeText, Text: pasted, ToolName: "", ToolInput: nil},
+			},
 		},
-	}, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-	})
+		conversation.LoadOptions{
+			IncludeSystemPrompts:  false,
+			IncludeSystemMessages: false,
+			IncludeToolOutputs:    false,
+		},
+	)
 	if includeAssistant {
-		t.Fatalf("assistant include = true, want false: the same text as an assistant role is only an envelope and must collapse to empty")
+		t.Fatalf(
+			"assistant include = true, want false: the same text as an assistant role is only an envelope and must collapse to empty",
+		)
 	}
 }
 
@@ -755,30 +953,42 @@ func TestMapJSONLMessageUserRoleNeverStripped(t *testing.T) {
 func TestMapJSONLMessageUnwrapsUserEnvelope(t *testing.T) {
 	t.Parallel()
 
-	message, include := mapJSONLMessage(cursorjsonl.TranscriptMessage{
-		Role: cursorjsonl.RoleUser,
-		Parts: []cursorjsonl.ContentPart{{
-			Type: cursorjsonl.PartTypeText,
-			Text: "<timestamp>Wednesday, Jul 29, 2026, 10:27 PM (UTC+2)</timestamp>\n\n" +
-				"<user_query>fix the failing build</user_query>",
-			ToolName: "", ToolInput: nil,
-		}},
-	}, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-	})
+	message, include := mapJSONLMessage(
+		cursorjsonl.TranscriptMessage{
+			Role: cursorjsonl.RoleUser,
+			Parts: []cursorjsonl.ContentPart{
+				{
+					Type: cursorjsonl.PartTypeText,
+					Text: "<timestamp>Wednesday, Jul 29, 2026, 10:27 PM (UTC+2)</timestamp>\n\n" +
+						"<user_query>fix the failing build</user_query>",
+					ToolName:  "",
+					ToolInput: nil,
+				},
+			},
+		},
+		conversation.LoadOptions{
+			IncludeSystemPrompts:  false,
+			IncludeSystemMessages: false,
+			IncludeToolOutputs:    false,
+		},
+	)
 	if !include {
 		t.Fatal("include = false, want true")
 	}
+
 	if message.Text != "fix the failing build" {
 		t.Fatalf("Text = %q, want the envelope removed", message.Text)
 	}
+
 	if message.Timestamp.UTC().Format(time.RFC3339) != "2026-07-29T20:27:00Z" {
 		t.Fatalf("Timestamp = %v, want the turn time lifted out of the text", message.Timestamp)
 	}
+
 	if message.Visibility != transcript.MessageVisibilityVisible {
-		t.Fatalf("Visibility = %q, want a message a person wrote to stay visible", message.Visibility)
+		t.Fatalf(
+			"Visibility = %q, want a message a person wrote to stay visible",
+			message.Visibility,
+		)
 	}
 }
 
@@ -790,24 +1000,32 @@ func TestMapJSONLMessageMarksCursorsOwnPromptMetaOnly(t *testing.T) {
 	t.Parallel()
 
 	injected := "Briefly inform the user about the task result and perform any follow-up actions (if needed)."
-	message, include := mapJSONLMessage(cursorjsonl.TranscriptMessage{
-		Role: cursorjsonl.RoleUser,
-		Parts: []cursorjsonl.ContentPart{{
-			Type:     cursorjsonl.PartTypeText,
-			Text:     "<user_query>" + injected + "</user_query>",
-			ToolName: "", ToolInput: nil,
-		}},
-	}, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-	})
+	message, include := mapJSONLMessage(
+		cursorjsonl.TranscriptMessage{
+			Role: cursorjsonl.RoleUser,
+			Parts: []cursorjsonl.ContentPart{
+				{
+					Type:      cursorjsonl.PartTypeText,
+					Text:      "<user_query>" + injected + "</user_query>",
+					ToolName:  "",
+					ToolInput: nil,
+				},
+			},
+		},
+		conversation.LoadOptions{
+			IncludeSystemPrompts:  false,
+			IncludeSystemMessages: false,
+			IncludeToolOutputs:    false,
+		},
+	)
 	if !include {
 		t.Fatal("include = false, want true: the message stays so its answer still has a question")
 	}
+
 	if message.Text != injected {
 		t.Fatalf("Text = %q, want the prompt kept verbatim", message.Text)
 	}
+
 	if message.Visibility != transcript.MessageVisibilityMetaOnly {
 		t.Fatalf("Visibility = %q, want meta_only", message.Visibility)
 	}

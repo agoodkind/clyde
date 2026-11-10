@@ -13,6 +13,7 @@ func TestApplyPatchArgsRepairsNestedAddFileHeaderInsideUpdateWrapper(t *testing.
 	if !ok {
 		t.Fatal("ApplyPatchArgs returned !ok")
 	}
+
 	want := "*** Begin Patch\n" +
 		"*** Add File: /tmp/render_scope_test.go\n" +
 		"+package tools\n" +
@@ -34,6 +35,7 @@ func TestApplyPatchArgsKeepsNormalUpdatePatch(t *testing.T) {
 	if !ok {
 		t.Fatal("ApplyPatchArgs returned !ok")
 	}
+
 	if got != input {
 		t.Fatalf("normal update patch changed:\n%s", got)
 	}

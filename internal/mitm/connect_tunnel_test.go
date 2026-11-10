@@ -55,7 +55,12 @@ func TestHandleConnectTunnelsBytesBothWays(t *testing.T) {
 	}
 	defer client.Close()
 
-	if _, err := fmt.Fprintf(client, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", upstream.addr, upstream.addr); err != nil {
+	if _, err := fmt.Fprintf(
+		client,
+		"CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n",
+		upstream.addr,
+		upstream.addr,
+	); err != nil {
 		t.Fatalf("write CONNECT: %v", err)
 	}
 
@@ -64,15 +69,18 @@ func TestHandleConnectTunnelsBytesBothWays(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read status: %v", err)
 	}
+
 	if !strings.HasPrefix(statusLine, "HTTP/1.1 200") {
 		t.Fatalf("status = %q, want 200 Connection Established", strings.TrimSpace(statusLine))
 	}
+
 	// Drain headers up to the empty line.
 	for {
 		line, err := br.ReadString('\n')
 		if err != nil {
 			t.Fatalf("read header: %v", err)
 		}
+
 		if line == "\r\n" {
 			break
 		}
@@ -84,6 +92,7 @@ func TestHandleConnectTunnelsBytesBothWays(t *testing.T) {
 	if _, err := client.Write([]byte(payload + "\n")); err != nil {
 		t.Fatalf("write payload: %v", err)
 	}
+
 	// Half-close client write so upstream's reader returns EOF and
 	// the server's reverse-and-write goroutine flushes.
 	if cw, ok := client.(interface{ CloseWrite() error }); ok {
@@ -94,6 +103,7 @@ func TestHandleConnectTunnelsBytesBothWays(t *testing.T) {
 	if err != nil && !errors.Is(err, io.EOF) {
 		t.Fatalf("read tunneled response: %v", err)
 	}
+
 	want := reverse(payload)
 	if !strings.Contains(string(got), want) {
 		t.Errorf("tunneled response %q does not contain reversed payload %q", string(got), want)
@@ -113,11 +123,13 @@ func TestHandleConnectRejectsMissingTarget(t *testing.T) {
 	if _, err := client.Write([]byte("CONNECT  HTTP/1.1\r\nHost: \r\n\r\n")); err != nil {
 		t.Fatalf("write: %v", err)
 	}
+
 	br := bufio.NewReader(client)
 	status, err := br.ReadString('\n')
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
+
 	// Either 400 from our handler or 400/404 from net/http parsing
 	// before our handler sees it. Both are acceptable rejections.
 	if !strings.Contains(status, "400") && !strings.Contains(status, "404") {
@@ -130,42 +142,55 @@ func TestHandleConnectInterceptsCursorTLSAndCapturesRawFiles(t *testing.T) {
 	const requestID = "req_cursor_capture_123"
 	const sentinel = "CURSOR_SENTINEL_DO_NOT_LOG"
 	upstreamBody := bytes.Repeat([]byte("streaming-cursor-response\n"), 900)
-	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.ProtoMajor != 1 {
-			t.Errorf("upstream protocol = %s, want HTTP/1.x", r.Proto)
-		}
-		if r.URL.Path != "/aiserver.v1.AiService/BidiAppend" {
-			t.Errorf("path = %q", r.URL.Path)
-		}
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Errorf("read upstream body: %v", err)
-		}
-		decodedBody, _ := decodeForCapture(body, r.Header.Get("content-encoding"))
-		if !bytes.Contains(decodedBody, []byte(sentinel)) {
-			t.Errorf("upstream body did not contain sentinel")
-		}
-		w.Header().Set("content-type", "application/protobuf")
-		w.WriteHeader(http.StatusAccepted)
-		for i := 0; i < len(upstreamBody); i += 1024 {
-			end := i + 1024
-			if end > len(upstreamBody) {
-				end = len(upstreamBody)
+	upstream := httptest.NewTLSServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.ProtoMajor != 1 {
+				t.Errorf("upstream protocol = %s, want HTTP/1.x", r.Proto)
 			}
-			_, _ = w.Write(upstreamBody[i:end])
-			if flusher, ok := w.(http.Flusher); ok {
-				flusher.Flush()
+
+			if r.URL.Path != "/aiserver.v1.AiService/BidiAppend" {
+				t.Errorf("path = %q", r.URL.Path)
 			}
-		}
-	}))
+
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Errorf("read upstream body: %v", err)
+			}
+
+			decodedBody, _ := decodeForCapture(body, r.Header.Get("content-encoding"))
+			if !bytes.Contains(decodedBody, []byte(sentinel)) {
+				t.Errorf("upstream body did not contain sentinel")
+			}
+
+			w.Header().Set("content-type", "application/protobuf")
+			w.WriteHeader(http.StatusAccepted)
+
+			for i := 0; i < len(upstreamBody); i += 1024 {
+				end := i + 1024
+				if end > len(upstreamBody) {
+					end = len(upstreamBody)
+				}
+
+				_, _ = w.Write(upstreamBody[i:end])
+				if flusher, ok := w.(http.Flusher); ok {
+					flusher.Flush()
+				}
+			}
+		}),
+	)
 	defer upstream.Close()
 
 	captureDir := t.TempDir()
 	dbPath := filepath.Join(captureDir, "capture.db")
-	store, err := capture.Open(context.Background(), capture.Config{DBPath: dbPath}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	store, err := capture.Open(
+		context.Background(),
+		capture.Config{DBPath: dbPath},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
 	if err != nil {
 		t.Fatalf("open capture store: %v", err)
 	}
+
 	proxy := startCursorMITMTestProxy(t, captureDir, cursorHost, upstream, store)
 	defer proxy.shutdown()
 
@@ -176,42 +201,64 @@ func TestHandleConnectInterceptsCursorTLSAndCapturesRawFiles(t *testing.T) {
 		t.Fatalf("dial proxy: %v", err)
 	}
 	defer client.Close()
-	if _, err := fmt.Fprintf(client, "CONNECT %s:443 HTTP/1.1\r\nHost: %s:443\r\n\r\n", cursorHost, cursorHost); err != nil {
+	if _, err := fmt.Fprintf(
+		client,
+		"CONNECT %s:443 HTTP/1.1\r\nHost: %s:443\r\n\r\n",
+		cursorHost,
+		cursorHost,
+	); err != nil {
 		t.Fatalf("write CONNECT: %v", err)
 	}
+
 	br := bufio.NewReader(client)
 	statusLine, err := br.ReadString('\n')
 	if err != nil {
 		t.Fatalf("read CONNECT status: %v", err)
 	}
+
 	if !strings.HasPrefix(statusLine, "HTTP/1.1 200") {
 		t.Fatalf("CONNECT status = %q", strings.TrimSpace(statusLine))
 	}
+
 	for {
 		line, err := br.ReadString('\n')
 		if err != nil {
 			t.Fatalf("read CONNECT header: %v", err)
 		}
+
 		if line == "\r\n" {
 			break
 		}
 	}
-	tlsClient := tls.Client(&bufferedConn{Conn: client, reader: br}, &tls.Config{
-		ServerName: cursorHost,
-		RootCAs:    caPool,
-		NextProtos: []string{"http/1.1"},
-		MinVersion: tls.VersionTLS12,
-	})
+
+	tlsClient := tls.Client(
+		&bufferedConn{Conn: client, reader: br},
+		&tls.Config{
+			ServerName: cursorHost,
+			RootCAs:    caPool,
+			NextProtos: []string{"http/1.1"},
+			MinVersion: tls.VersionTLS12,
+		},
+	)
 	if err := tlsClient.Handshake(); err != nil {
 		t.Fatalf("client TLS handshake: %v", err)
 	}
+
 	defer tlsClient.Close()
 
-	requestBody := gzipBytes(t, cursorBidiAppendPayload(requestID, 7, []byte("prefix "+sentinel+" suffix")))
-	req, err := http.NewRequest(http.MethodPost, "https://"+cursorHost+"/aiserver.v1.AiService/BidiAppend", bytes.NewReader(requestBody))
+	requestBody := gzipBytes(
+		t,
+		cursorBidiAppendPayload(requestID, 7, []byte("prefix "+sentinel+" suffix")),
+	)
+	req, err := http.NewRequest(
+		http.MethodPost,
+		"https://"+cursorHost+"/aiserver.v1.AiService/BidiAppend",
+		bytes.NewReader(requestBody),
+	)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
+
 	req.Header.Set("content-encoding", "gzip")
 	req.Header.Set("content-type", "application/protobuf")
 	req.Header.Set("authorization", "Bearer should-not-appear-in-jsonl")
@@ -222,18 +269,22 @@ func TestHandleConnectInterceptsCursorTLSAndCapturesRawFiles(t *testing.T) {
 	if err := req.Write(tlsClient); err != nil {
 		t.Fatalf("write TLS HTTP request: %v", err)
 	}
+
 	resp, err := http.ReadResponse(bufio.NewReader(tlsClient), req)
 	if err != nil {
 		t.Fatalf("read TLS HTTP response: %v", err)
 	}
+
 	gotBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read response body: %v", err)
 	}
+
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d want %d", resp.StatusCode, http.StatusAccepted)
 	}
+
 	if len(gotBody) != len(upstreamBody) {
 		t.Fatalf("response bytes = %d want %d", len(gotBody), len(upstreamBody))
 	}
@@ -251,21 +302,27 @@ func TestHandleConnectInterceptsCursorTLSAndCapturesRawFiles(t *testing.T) {
 	if record["provider"] != "cursor" {
 		t.Fatalf("provider = %q want cursor: %#v", record["provider"], record)
 	}
-	if record["request_id"] != requestID || record["upstream_request_id"] != "orig-123" || record["session_id"] != "sess-123" {
+
+	if record["request_id"] != requestID || record["upstream_request_id"] != "orig-123" ||
+		record["session_id"] != "sess-123" {
 		t.Fatalf("metadata ids not captured: %#v", record)
 	}
+
 	cursorFacet, ok := record["cursor"].(map[string]any)
 	if !ok || cursorFacet["request_id"] != requestID {
 		t.Fatalf("cursor facet missing request id: %#v", record)
 	}
+
 	for _, line := range records {
 		if strings.Contains(fmt.Sprint(line), sentinel) {
 			t.Fatalf("JSONL metadata leaked sentinel prompt text: %#v", line)
 		}
+
 		if strings.Contains(fmt.Sprint(line), "should-not-appear") {
 			t.Fatalf("JSONL metadata leaked authorization header: %#v", line)
 		}
 	}
+
 	// The full decoded request/response bodies persist to the SQLite capture
 	// store, not to per-leg .raw files. Wait for the row before closing: the
 	// store's Record is asynchronous and a Record that arrives after Close is
@@ -276,10 +333,12 @@ func TestHandleConnectInterceptsCursorTLSAndCapturesRawFiles(t *testing.T) {
 	if err := store.Close(context.Background(), "test"); err != nil {
 		t.Fatalf("close capture store: %v", err)
 	}
+
 	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("open verifier db: %v", err)
 	}
+
 	defer func() { _ = db.Close() }()
 
 	var (
@@ -287,35 +346,58 @@ func TestHandleConnectInterceptsCursorTLSAndCapturesRawFiles(t *testing.T) {
 		gotProvider string
 		gotConcern  string
 	)
-	row := db.QueryRow(`SELECT client, provider, concern FROM requests WHERE request_id=? ORDER BY ts DESC LIMIT 1`, requestID)
+	row := db.QueryRow(
+		`SELECT client, provider, concern FROM requests WHERE request_id=? ORDER BY ts DESC LIMIT 1`,
+		requestID,
+	)
 	if err := row.Scan(&gotClient, &gotProvider, &gotConcern); err != nil {
 		t.Fatalf("scan request row: %v", err)
 	}
+
 	if gotClient != "test" {
 		t.Fatalf("client = %q want test", gotClient)
 	}
+
 	if gotProvider != "cursor" {
 		t.Fatalf("provider = %q want cursor", gotProvider)
 	}
+
 	if gotConcern != "cursor.bidi" {
 		t.Fatalf("concern = %q want cursor.bidi", gotConcern)
 	}
 
 	var storedResponse []byte
-	if err := db.QueryRow(`SELECT data FROM bodies WHERE request_row_id=(SELECT id FROM requests WHERE request_id=?) AND which='response'`, requestID).Scan(&storedResponse); err != nil {
+	if err := db.QueryRow(
+		`SELECT data FROM bodies WHERE request_row_id=(SELECT id FROM requests WHERE request_id=?) AND which='response'`,
+		requestID,
+	).Scan(
+		&storedResponse,
+	); err != nil {
 		t.Fatalf("scan response body: %v", err)
 	}
+
 	if len(storedResponse) != len(upstreamBody) {
-		t.Fatalf("stored response length = %d want %d (full body, not the old 16 KiB cap)", len(storedResponse), len(upstreamBody))
+		t.Fatalf(
+			"stored response length = %d want %d (full body, not the old 16 KiB cap)",
+			len(storedResponse),
+			len(upstreamBody),
+		)
 	}
+
 	if !bytes.Contains(storedResponse, upstreamBody[:128]) {
 		t.Fatalf("stored response missing upstream payload prefix")
 	}
 
 	var storedRequest []byte
-	if err := db.QueryRow(`SELECT data FROM bodies WHERE request_row_id=(SELECT id FROM requests WHERE request_id=?) AND which='request'`, requestID).Scan(&storedRequest); err != nil {
+	if err := db.QueryRow(
+		`SELECT data FROM bodies WHERE request_row_id=(SELECT id FROM requests WHERE request_id=?) AND which='request'`,
+		requestID,
+	).Scan(
+		&storedRequest,
+	); err != nil {
 		t.Fatalf("scan request body: %v", err)
 	}
+
 	// The proxy decodes the gzip content-encoding before storing, so the
 	// sentinel prompt text is present in cleartext in the stored request body.
 	if !bytes.Contains(storedRequest, []byte(sentinel)) {
@@ -326,13 +408,16 @@ func TestHandleConnectInterceptsCursorTLSAndCapturesRawFiles(t *testing.T) {
 func TestProviderTLSKeepaliveRequestsStopAtDrainBoundary(t *testing.T) {
 	const providerHost = "chatgpt.com"
 	gate := newHeldUpstreamGate()
-	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == heldUpstreamPath {
-			gate.hold()
-		}
-		w.Header().Set("content-type", "application/json")
-		_, _ = fmt.Fprintf(w, `{"path":%q}`, r.URL.Path)
-	}))
+	upstream := httptest.NewTLSServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == heldUpstreamPath {
+				gate.hold()
+			}
+
+			w.Header().Set("content-type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"path":%q}`, r.URL.Path)
+		}),
+	)
 	defer upstream.Close()
 	// Released before upstream.Close because defers unwind last-registered
 	// first: a handler still parked in the gate would block Close forever if
@@ -349,35 +434,49 @@ func TestProviderTLSKeepaliveRequestsStopAtDrainBoundary(t *testing.T) {
 		t.Fatalf("dial proxy: %v", err)
 	}
 	defer client.Close()
-	if _, err := fmt.Fprintf(client, "CONNECT %s:443 HTTP/1.1\r\nHost: %s:443\r\n\r\n", providerHost, providerHost); err != nil {
+	if _, err := fmt.Fprintf(
+		client,
+		"CONNECT %s:443 HTTP/1.1\r\nHost: %s:443\r\n\r\n",
+		providerHost,
+		providerHost,
+	); err != nil {
 		t.Fatalf("write CONNECT: %v", err)
 	}
+
 	br := bufio.NewReader(client)
 	statusLine, err := br.ReadString('\n')
 	if err != nil {
 		t.Fatalf("read CONNECT status: %v", err)
 	}
+
 	if !strings.HasPrefix(statusLine, "HTTP/1.1 200") {
 		t.Fatalf("CONNECT status = %q", strings.TrimSpace(statusLine))
 	}
+
 	for {
 		line, err := br.ReadString('\n')
 		if err != nil {
 			t.Fatalf("read CONNECT header: %v", err)
 		}
+
 		if line == "\r\n" {
 			break
 		}
 	}
-	tlsClient := tls.Client(&bufferedConn{Conn: client, reader: br}, &tls.Config{
-		ServerName: providerHost,
-		RootCAs:    caPool,
-		NextProtos: []string{"http/1.1"},
-		MinVersion: tls.VersionTLS12,
-	})
+
+	tlsClient := tls.Client(
+		&bufferedConn{Conn: client, reader: br},
+		&tls.Config{
+			ServerName: providerHost,
+			RootCAs:    caPool,
+			NextProtos: []string{"http/1.1"},
+			MinVersion: tls.VersionTLS12,
+		},
+	)
 	if err := tlsClient.Handshake(); err != nil {
 		t.Fatalf("client TLS handshake: %v", err)
 	}
+
 	defer tlsClient.Close()
 	tlsReader := bufio.NewReader(tlsClient)
 
@@ -406,7 +505,11 @@ func TestProviderTLSKeepaliveRequestsStopAtDrainBoundary(t *testing.T) {
 	// livetrack/drain_test.go.
 	drainDone := make(chan struct{})
 	go func() {
-		proxy.group.Quiesce(drainCtx, "test.reload", livetrack.Budget{Cap: drainBudgetCap, IdleGrace: 0})
+		proxy.group.Quiesce(
+			drainCtx,
+			"test.reload",
+			livetrack.Budget{Cap: drainBudgetCap, IdleGrace: 0},
+		)
 		close(drainDone)
 	}()
 	waitForTunnelState(t, proxy.proxy, livetrack.StateDraining, 2*time.Second)
@@ -417,6 +520,7 @@ func TestProviderTLSKeepaliveRequestsStopAtDrainBoundary(t *testing.T) {
 	if inFlight.err != nil {
 		t.Fatalf("in-flight request across the drain boundary: %v", inFlight.err)
 	}
+
 	if !bytes.Contains(inFlight.body, []byte(heldUpstreamPath)) {
 		t.Fatalf("in-flight response missing path marker: %q", inFlight.body)
 	}
@@ -441,10 +545,12 @@ func TestProviderTLSKeepaliveRequestsStopAtDrainBoundary(t *testing.T) {
 // with an arbitrary provider host rather than any specific hostname.
 func TestProviderTLSAcceptsH2OnlyALPNOffer(t *testing.T) {
 	const providerHost = "chatgpt.com"
-	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("content-type", "application/json")
-		_, _ = fmt.Fprintf(w, `{"path":%q}`, r.URL.Path)
-	}))
+	upstream := httptest.NewTLSServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("content-type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"path":%q}`, r.URL.Path)
+		}),
+	)
 	defer upstream.Close()
 
 	proxy := startCursorMITMTestProxy(t, t.TempDir(), providerHost, upstream, nil)
@@ -457,36 +563,50 @@ func TestProviderTLSAcceptsH2OnlyALPNOffer(t *testing.T) {
 		t.Fatalf("dial proxy: %v", err)
 	}
 	defer client.Close()
-	if _, err := fmt.Fprintf(client, "CONNECT %s:443 HTTP/1.1\r\nHost: %s:443\r\n\r\n", providerHost, providerHost); err != nil {
+	if _, err := fmt.Fprintf(
+		client,
+		"CONNECT %s:443 HTTP/1.1\r\nHost: %s:443\r\n\r\n",
+		providerHost,
+		providerHost,
+	); err != nil {
 		t.Fatalf("write CONNECT: %v", err)
 	}
+
 	br := bufio.NewReader(client)
 	statusLine, err := br.ReadString('\n')
 	if err != nil {
 		t.Fatalf("read CONNECT status: %v", err)
 	}
+
 	if !strings.HasPrefix(statusLine, "HTTP/1.1 200") {
 		t.Fatalf("CONNECT status = %q", strings.TrimSpace(statusLine))
 	}
+
 	for {
 		line, err := br.ReadString('\n')
 		if err != nil {
 			t.Fatalf("read CONNECT header: %v", err)
 		}
+
 		if line == "\r\n" {
 			break
 		}
 	}
-	tlsClient := tls.Client(&bufferedConn{Conn: client, reader: br}, &tls.Config{
-		ServerName: providerHost,
-		RootCAs:    caPool,
-		NextProtos: []string{"h2"},
-		MinVersion: tls.VersionTLS12,
-	})
+
+	tlsClient := tls.Client(
+		&bufferedConn{Conn: client, reader: br},
+		&tls.Config{
+			ServerName: providerHost,
+			RootCAs:    caPool,
+			NextProtos: []string{"h2"},
+			MinVersion: tls.VersionTLS12,
+		},
+	)
 	defer tlsClient.Close()
 	if err := tlsClient.Handshake(); err != nil {
 		t.Fatalf("client TLS handshake with h2-only ALPN offer failed: %v", err)
 	}
+
 	if got := tlsClient.ConnectionState().NegotiatedProtocol; got != http2.NextProtoTLS {
 		t.Fatalf("negotiated protocol = %q want %q", got, http2.NextProtoTLS)
 	}
@@ -494,10 +614,12 @@ func TestProviderTLSAcceptsH2OnlyALPNOffer(t *testing.T) {
 
 func TestProviderTLSIdleKeepaliveTunnelClosesDuringDrain(t *testing.T) {
 	const providerHost = "chatgpt.com"
-	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("content-type", "application/json")
-		_, _ = fmt.Fprintf(w, `{"path":%q}`, r.URL.Path)
-	}))
+	upstream := httptest.NewTLSServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("content-type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"path":%q}`, r.URL.Path)
+		}),
+	)
 	defer upstream.Close()
 
 	proxy := startCursorMITMTestProxy(t, t.TempDir(), providerHost, upstream, nil)
@@ -510,35 +632,49 @@ func TestProviderTLSIdleKeepaliveTunnelClosesDuringDrain(t *testing.T) {
 		t.Fatalf("dial proxy: %v", err)
 	}
 	defer client.Close()
-	if _, err := fmt.Fprintf(client, "CONNECT %s:443 HTTP/1.1\r\nHost: %s:443\r\n\r\n", providerHost, providerHost); err != nil {
+	if _, err := fmt.Fprintf(
+		client,
+		"CONNECT %s:443 HTTP/1.1\r\nHost: %s:443\r\n\r\n",
+		providerHost,
+		providerHost,
+	); err != nil {
 		t.Fatalf("write CONNECT: %v", err)
 	}
+
 	br := bufio.NewReader(client)
 	statusLine, err := br.ReadString('\n')
 	if err != nil {
 		t.Fatalf("read CONNECT status: %v", err)
 	}
+
 	if !strings.HasPrefix(statusLine, "HTTP/1.1 200") {
 		t.Fatalf("CONNECT status = %q", strings.TrimSpace(statusLine))
 	}
+
 	for {
 		line, err := br.ReadString('\n')
 		if err != nil {
 			t.Fatalf("read CONNECT header: %v", err)
 		}
+
 		if line == "\r\n" {
 			break
 		}
 	}
-	tlsClient := tls.Client(&bufferedConn{Conn: client, reader: br}, &tls.Config{
-		ServerName: providerHost,
-		RootCAs:    caPool,
-		NextProtos: []string{"http/1.1"},
-		MinVersion: tls.VersionTLS12,
-	})
+
+	tlsClient := tls.Client(
+		&bufferedConn{Conn: client, reader: br},
+		&tls.Config{
+			ServerName: providerHost,
+			RootCAs:    caPool,
+			NextProtos: []string{"http/1.1"},
+			MinVersion: tls.VersionTLS12,
+		},
+	)
 	if err := tlsClient.Handshake(); err != nil {
 		t.Fatalf("client TLS handshake: %v", err)
 	}
+
 	defer tlsClient.Close()
 	tlsReader := bufio.NewReader(tlsClient)
 
@@ -559,7 +695,11 @@ func TestProviderTLSIdleKeepaliveTunnelClosesDuringDrain(t *testing.T) {
 	// reachable through it.
 	drainDone := make(chan struct{})
 	go func() {
-		proxy.group.Quiesce(drainCtx, "test.reload", livetrack.Budget{Cap: drainBudgetCap, IdleGrace: 50 * time.Millisecond})
+		proxy.group.Quiesce(
+			drainCtx,
+			"test.reload",
+			livetrack.Budget{Cap: drainBudgetCap, IdleGrace: 50 * time.Millisecond},
+		)
 		close(drainDone)
 	}()
 
@@ -576,28 +716,36 @@ func TestProviderTLSIdleKeepaliveTunnelClosesDuringDrain(t *testing.T) {
 func TestHandleConnectInterceptsProviderTLSWebsocket(t *testing.T) {
 	const providerHost = "chatgpt.com"
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
-	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			t.Errorf("upstream upgrade: %v", err)
-			return
-		}
-		defer conn.Close()
-		messageType, payload, err := conn.ReadMessage()
-		if err != nil {
-			t.Errorf("upstream read: %v", err)
-			return
-		}
-		if messageType != websocket.TextMessage {
-			t.Errorf("message type = %d, want text", messageType)
-		}
-		if string(payload) != `{"type":"response.create"}` {
-			t.Errorf("payload = %s", payload)
-		}
-		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.completed"}`)); err != nil {
-			t.Errorf("upstream write: %v", err)
-		}
-	}))
+	upstream := httptest.NewTLSServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Errorf("upstream upgrade: %v", err)
+				return
+			}
+			defer conn.Close()
+			messageType, payload, err := conn.ReadMessage()
+			if err != nil {
+				t.Errorf("upstream read: %v", err)
+				return
+			}
+
+			if messageType != websocket.TextMessage {
+				t.Errorf("message type = %d, want text", messageType)
+			}
+
+			if string(payload) != `{"type":"response.create"}` {
+				t.Errorf("payload = %s", payload)
+			}
+
+			if err := conn.WriteMessage(
+				websocket.TextMessage,
+				[]byte(`{"type":"response.completed"}`),
+			); err != nil {
+				t.Errorf("upstream write: %v", err)
+			}
+		}),
+	)
 	defer upstream.Close()
 
 	captureDir := t.TempDir()
@@ -605,7 +753,10 @@ func TestHandleConnectInterceptsProviderTLSWebsocket(t *testing.T) {
 	defer proxy.shutdown()
 	logger := slog.New(newMITMCaptureTestHandler(t, captureDir))
 	proxy.proxy.log = logger
-	proxy.proxy.requestLog = logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil)
+	proxy.proxy.requestLog = logevent.NewEmitter(
+		slogger.WithConcern(logger, slogger.ConcernProviderMITMWire),
+		nil,
+	)
 
 	caPool := x509.NewCertPool()
 	caPool.AddCert(proxy.proxy.ca.cert)
@@ -623,25 +774,37 @@ func TestHandleConnectInterceptsProviderTLSWebsocket(t *testing.T) {
 	if resp != nil && resp.Body != nil {
 		defer resp.Body.Close()
 	}
+
 	if err != nil {
 		t.Fatalf("dial websocket through CONNECT: %v", err)
 	}
+
 	defer conn.Close()
 
-	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create"}`)); err != nil {
+	if err := conn.WriteMessage(
+		websocket.TextMessage,
+		[]byte(`{"type":"response.create"}`),
+	); err != nil {
 		t.Fatalf("write websocket message: %v", err)
 	}
+
 	messageType, payload, err := conn.ReadMessage()
 	if err != nil {
 		t.Fatalf("read websocket message: %v", err)
 	}
+
 	if messageType != websocket.TextMessage {
 		t.Fatalf("message type = %d, want text", messageType)
 	}
+
 	if string(payload) != `{"type":"response.completed"}` {
 		t.Fatalf("payload = %s", payload)
 	}
-	if err := conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "")); err != nil {
+
+	if err := conn.WriteMessage(
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+	); err != nil {
 		t.Fatalf("write websocket close: %v", err)
 	}
 
@@ -650,6 +813,7 @@ func TestHandleConnectInterceptsProviderTLSWebsocket(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	var lines []string
 	foundCapture := false
+
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(capturePath); err == nil {
 			lines = strings.Split(string(readFile(t, capturePath)), "\n")
@@ -658,21 +822,26 @@ func TestHandleConnectInterceptsProviderTLSWebsocket(t *testing.T) {
 				break
 			}
 		}
+
 		time.Sleep(20 * time.Millisecond)
 	}
+
 	if !foundCapture {
 		t.Fatalf("websocket capture records were not written: %v", lines)
 	}
+
 	_ = conn.Close()
 	waitForExactTunnelCount(t, proxy.proxy, 0, 2*time.Second)
 }
 
 func TestHandleConnectInterceptsCursorTLSAndSkipsRawFilesWhenDisabled(t *testing.T) {
 	const cursorHost = "api2.cursor.sh"
-	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("content-type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true}`))
-	}))
+	upstream := httptest.NewTLSServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("content-type", "application/json")
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		}),
+	)
 	defer upstream.Close()
 
 	captureDir := t.TempDir()
@@ -687,21 +856,41 @@ func TestHandleConnectInterceptsCursorTLSAndSkipsRawFilesWhenDisabled(t *testing
 		tlsClientConfig: &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"http/1.1"}},
 		store:           nil,
 		client:          "test",
-		requestLog:      logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
-		Tunnels:         newTestTunnelRegistry(livetrack.NewGroup(livetrack.GroupOptions{Log: nil})),
-		mu:              sync.RWMutex{},
-		cfg:             config.MITMConfig{CaptureDir: captureDir},
-		base:            "",
-		server:          nil,
+		requestLog: logevent.NewEmitter(
+			slogger.WithConcern(logger, slogger.ConcernProviderMITMWire),
+			nil,
+		),
+		Tunnels: newTestTunnelRegistry(
+			livetrack.NewGroup(livetrack.GroupOptions{Log: nil}),
+		),
+		mu:     sync.RWMutex{},
+		cfg:    config.MITMConfig{CaptureDir: captureDir},
+		base:   "",
+		server: nil,
 	}
 
 	requestBody := []byte(`{"probe":"summary"}`)
-	req := httptest.NewRequest(http.MethodPost, "https://"+cursorHost+"/aiserver.v1.AnalyticsService/Batch", bytes.NewReader(requestBody))
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"https://"+cursorHost+"/aiserver.v1.AnalyticsService/Batch",
+		bytes.NewReader(requestBody),
+	)
 	req.Header.Set("content-type", "application/json")
 	var output bytes.Buffer
 	writer := bufio.NewWriter(&output)
 	sink := &bufioProviderResponseSink{proxy: proxy, bufw: writer}
-	if err := proxy.handleProviderInterceptedRequest(context.Background(), nil, nil, sink, req, cursorHost+":443", cursorHost, testCursorProvider{}, nil, nil); err != nil {
+	if err := proxy.handleProviderInterceptedRequest(
+		context.Background(),
+		nil,
+		nil,
+		sink,
+		req,
+		cursorHost+":443",
+		cursorHost,
+		testCursorProvider{},
+		nil,
+		nil,
+	); err != nil {
 		t.Fatalf("handle cursor request: %v", err)
 	}
 
@@ -710,11 +899,19 @@ func TestHandleConnectInterceptsCursorTLSAndSkipsRawFilesWhenDisabled(t *testing
 	record := firstCaptureRecordWithLeg(t, records, logevent.LegMITMCaptureIndex)
 	mitmFields := mitmFieldsFromCaptureRecord(t, record)
 	if mitmFields["raw_request_path"] != nil || mitmFields["raw_response_path"] != nil {
-		t.Fatalf("raw paths = %#v %#v, want absent", mitmFields["raw_request_path"], mitmFields["raw_response_path"])
+		t.Fatalf(
+			"raw paths = %#v %#v, want absent",
+			mitmFields["raw_request_path"],
+			mitmFields["raw_response_path"],
+		)
 	}
-	if _, err := os.Stat(filepath.Join(captureDir, "concerns", "unknown", "raw")); !os.IsNotExist(err) {
+
+	if _, err := os.Stat(filepath.Join(captureDir, "concerns", "unknown", "raw")); !os.IsNotExist(
+		err,
+	) {
 		t.Fatalf("raw dir stat err=%v want not exist", err)
 	}
+
 	if !strings.Contains(output.String(), "HTTP/1.1 200 OK") {
 		t.Fatalf("response missing status: %q", output.String())
 	}
@@ -734,25 +931,31 @@ func startEchoServer(t *testing.T) *echoServer {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
+
 	server := &echoServer{listener: listener, addr: listener.Addr().String()}
 	server.wg.Add(1)
 	go server.serve()
+
 	return server
 }
 
 func (s *echoServer) serve() {
 	defer s.wg.Done()
+
 	for {
 		conn, err := s.listener.Accept()
 		if err != nil {
 			return
 		}
+
 		go func(c net.Conn) {
 			defer c.Close()
 			line, _ := bufio.NewReader(c).ReadString('\n')
 			line = strings.TrimRight(line, "\r\n")
 			_, _ = c.Write([]byte(reverse(line)))
-		}(conn)
+		}(
+			conn,
+		)
 	}
 }
 
@@ -781,6 +984,7 @@ func (t *testProxy) shutdown() {
 		// themselves before calling shutdown stay correct.
 		t.group.Quiesce(ctx, "test.shutdown", livetrack.Budget{Cap: 5 * time.Second, IdleGrace: 0})
 	}
+
 	if t.proxy != nil {
 		_ = t.proxy.ShutdownQUIC(ctx)
 		_ = t.proxy.CloseQUICTransport()
@@ -789,25 +993,31 @@ func (t *testProxy) shutdown() {
 
 func waitForExactTunnelCount(t *testing.T, proxy *Proxy, want int, timeout time.Duration) {
 	t.Helper()
+
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if proxy.Tunnels.Count() == want {
 			return
 		}
+
 		time.Sleep(5 * time.Millisecond)
 	}
+
 	t.Fatalf("Tunnels.Count: got %d, want %d after %s", proxy.Tunnels.Count(), want, timeout)
 }
 
 func waitForTunnelState(t *testing.T, proxy *Proxy, want livetrack.State, timeout time.Duration) {
 	t.Helper()
+
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if proxy.Tunnels.State() == want {
 			return
 		}
+
 		time.Sleep(5 * time.Millisecond)
 	}
+
 	t.Fatalf("Tunnels.State: got %s, want %s after %s", proxy.Tunnels.State(), want, timeout)
 }
 
@@ -849,6 +1059,7 @@ func (g *heldUpstreamGate) hold() {
 	case g.entered <- struct{}{}:
 	default:
 	}
+
 	<-g.release
 }
 
@@ -867,46 +1078,87 @@ type providerTLSResponse struct {
 	err  error
 }
 
-func requestProviderTLS(conn net.Conn, reader *bufio.Reader, host string, path string) providerTLSResponse {
+func requestProviderTLS(
+	conn net.Conn,
+	reader *bufio.Reader,
+	host string,
+	path string,
+) providerTLSResponse {
 	req, err := http.NewRequest(http.MethodGet, "https://"+host+path, nil)
 	if err != nil {
 		return providerTLSResponse{body: nil, err: fmt.Errorf("build request %s: %w", path, err)}
 	}
+
 	if err := req.Write(conn); err != nil {
-		return providerTLSResponse{body: nil, err: fmt.Errorf("write provider TLS request %s: %w", path, err)}
+		return providerTLSResponse{
+			body: nil,
+			err:  fmt.Errorf("write provider TLS request %s: %w", path, err),
+		}
 	}
+
 	resp, err := http.ReadResponse(reader, req)
 	if err != nil {
-		return providerTLSResponse{body: nil, err: fmt.Errorf("read provider TLS response %s: %w", path, err)}
+		return providerTLSResponse{
+			body: nil,
+			err:  fmt.Errorf("read provider TLS response %s: %w", path, err),
+		}
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return providerTLSResponse{body: nil, err: fmt.Errorf("read provider TLS response body %s: %w", path, err)}
+		return providerTLSResponse{
+			body: nil,
+			err:  fmt.Errorf("read provider TLS response body %s: %w", path, err),
+		}
 	}
+
 	if resp.StatusCode != http.StatusOK {
-		return providerTLSResponse{body: body, err: fmt.Errorf("status for %s = %d want %d; body=%q", path, resp.StatusCode, http.StatusOK, body)}
+		return providerTLSResponse{
+			body: body,
+			err: fmt.Errorf(
+				"status for %s = %d want %d; body=%q",
+				path,
+				resp.StatusCode,
+				http.StatusOK,
+				body,
+			),
+		}
 	}
+
 	return providerTLSResponse{body: body, err: nil}
 }
 
-func assertProviderTLSRequest(t *testing.T, conn net.Conn, reader *bufio.Reader, host string, path string) {
+func assertProviderTLSRequest(
+	t *testing.T,
+	conn net.Conn,
+	reader *bufio.Reader,
+	host string,
+	path string,
+) {
 	t.Helper()
 	result := requestProviderTLS(conn, reader, host, path)
 	if result.err != nil {
 		t.Fatalf("provider TLS exchange: %v", result.err)
 	}
+
 	if !bytes.Contains(result.body, []byte(path)) {
 		t.Fatalf("response for %s missing path marker: %q", path, result.body)
 	}
 }
 
-func assertProviderTLSRequestRejected(t *testing.T, conn net.Conn, reader *bufio.Reader, host string, path string) {
+func assertProviderTLSRequestRejected(
+	t *testing.T,
+	conn net.Conn,
+	reader *bufio.Reader,
+	host string,
+	path string,
+) {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodGet, "https://"+host+path, nil)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
+
 	// The deadline is a hang guard rather than the mechanism under test: the
 	// drain closes the tunnel, so the read fails as soon as the peer's FIN
 	// lands. A timeout means the tunnel stayed open and simply served nothing,
@@ -917,30 +1169,43 @@ func assertProviderTLSRequestRejected(t *testing.T, conn net.Conn, reader *bufio
 	if err := req.Write(conn); err != nil {
 		return
 	}
+
 	resp, err := http.ReadResponse(reader, req)
 	if err == nil {
 		defer resp.Body.Close()
-		t.Fatalf("expected provider TLS request %s to fail during drain, got status %d", path, resp.StatusCode)
+		t.Fatalf(
+			"expected provider TLS request %s to fail during drain, got status %d",
+			path,
+			resp.StatusCode,
+		)
 	}
+
 	if errors.Is(err, os.ErrDeadlineExceeded) {
-		t.Fatalf("provider TLS request %s was neither served nor refused: the read timed out with the tunnel still open", path)
+		t.Fatalf(
+			"provider TLS request %s was neither served nor refused: the read timed out with the tunnel still open",
+			path,
+		)
 	}
 }
 
 func newTestTunnelRegistry(group *livetrack.Group) *livetrack.Registry[TunnelMeta] {
-	return livetrack.Attach[TunnelMeta](group, livetrack.MemberSpec{
-		Phase:         livetrack.PhaseIngress,
-		QuietRelevant: true,
-		CancelNoWait:  false,
-	}, livetrack.Options[TunnelMeta]{
-		Component:     "mitm",
-		Concern:       "providers.mitm.lifecycle",
-		Log:           slog.New(slog.NewTextHandler(io.Discard, nil)),
-		PollEvery:     5 * time.Millisecond,
-		CloserGrace:   200 * time.Millisecond,
-		ParallelClose: false,
-		Now:           nil,
-	})
+	return livetrack.Attach[TunnelMeta](
+		group,
+		livetrack.MemberSpec{
+			Phase:         livetrack.PhaseIngress,
+			QuietRelevant: true,
+			CancelNoWait:  false,
+		},
+		livetrack.Options[TunnelMeta]{
+			Component:     "mitm",
+			Concern:       "providers.mitm.lifecycle",
+			Log:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+			PollEvery:     5 * time.Millisecond,
+			CloserGrace:   200 * time.Millisecond,
+			ParallelClose: false,
+			Now:           nil,
+		},
+	)
 }
 
 func startTestProxy(t *testing.T) *testProxy {
@@ -949,6 +1214,7 @@ func startTestProxy(t *testing.T) *testProxy {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
+
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	group := livetrack.NewGroup(livetrack.GroupOptions{Log: nil})
 	p := &Proxy{
@@ -969,10 +1235,17 @@ func startTestProxy(t *testing.T) *testProxy {
 	server := &http.Server{Handler: http.HandlerFunc(p.handle)}
 	p.server = server
 	go func() { _ = server.Serve(newSniffListener(context.Background(), listener, p)) }()
+
 	return &testProxy{server: server, proxy: p, group: group, addr: listener.Addr().String()}
 }
 
-func startCursorMITMTestProxy(t *testing.T, captureDir string, cursorHost string, upstream *httptest.Server, store *capture.Store) *testProxy {
+func startCursorMITMTestProxy(
+	t *testing.T,
+	captureDir string,
+	cursorHost string,
+	upstream *httptest.Server,
+	store *capture.Store,
+) *testProxy {
 	t.Helper()
 	RegisterProviderFirst(testCursorProvider{host: cursorHost})
 	t.Cleanup(func() {
@@ -982,6 +1255,7 @@ func startCursorMITMTestProxy(t *testing.T, captureDir string, cursorHost string
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
+
 	upstreamAddr := strings.TrimPrefix(upstream.URL, "https://")
 	caDir := t.TempDir()
 	ca, err := loadOrCreateCertAuthority(
@@ -992,6 +1266,7 @@ func startCursorMITMTestProxy(t *testing.T, captureDir string, cursorHost string
 	if err != nil {
 		t.Fatalf("load ca: %v", err)
 	}
+
 	// MITM wire legs land in the per-concern providers/mitm/wire.jsonl file;
 	// full request/response bodies are persisted to the shared SQLite capture
 	// store. The proxy no longer owns a separate raw-file writer.
@@ -1007,15 +1282,19 @@ func startCursorMITMTestProxy(t *testing.T, captureDir string, cursorHost string
 		store:           store,
 		client:          "test",
 		Tunnels:         newTestTunnelRegistry(group),
-		requestLog:      logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
-		mu:              sync.RWMutex{},
-		cfg:             config.MITMConfig{CaptureDir: captureDir},
-		base:            "http://" + listener.Addr().String(),
-		server:          nil,
+		requestLog: logevent.NewEmitter(
+			slogger.WithConcern(logger, slogger.ConcernProviderMITMWire),
+			nil,
+		),
+		mu:     sync.RWMutex{},
+		cfg:    config.MITMConfig{CaptureDir: captureDir},
+		base:   "http://" + listener.Addr().String(),
+		server: nil,
 	}
 	server := &http.Server{Handler: http.HandlerFunc(p.handle)}
 	p.server = server
 	go func() { _ = server.Serve(newSniffListener(context.Background(), listener, p)) }()
+
 	return &testProxy{server: server, proxy: p, group: group, addr: listener.Addr().String()}
 }
 
@@ -1028,6 +1307,7 @@ func (p testCursorProvider) ID() ProviderID {
 	if p.id != ProviderIDUnknown {
 		return p.id
 	}
+
 	return ProviderIDCursor
 }
 
@@ -1053,6 +1333,7 @@ func (p testCursorProvider) ExtractIdentity(headers http.Header) IdentityContrib
 		OriginalRequestID: headers.Get("x-original-request-id"),
 		SessionID:         headers.Get("x-session-id"),
 	}
+
 	return IdentityContribution{
 		PreferredRequestID:         headers.Get("x-request-id"),
 		PreferredUpstreamRequestID: headers.Get("x-original-request-id"),
@@ -1085,12 +1366,17 @@ func (f testCursorFacet) SinkHints() logevent.SinkHints {
 	}
 }
 
-func mappedDialContext(from string, to string) func(context.Context, string, string) (net.Conn, error) {
+func mappedDialContext(
+	from string,
+	to string,
+) func(context.Context, string, string) (net.Conn, error) {
 	dialer := &net.Dialer{Timeout: 30 * time.Second}
+
 	return func(ctx context.Context, network string, address string) (net.Conn, error) {
 		if address == from {
 			address = to
 		}
+
 		return dialer.DialContext(ctx, network, address)
 	}
 }
@@ -1109,6 +1395,7 @@ func cursorBidiAppendPayload(requestID string, seqno uint64, payload []byte) []b
 	out = appendProtoString(out, 1, requestID)
 	out = appendProtoVarint(out, 2, seqno)
 	out = appendProtoBytes(out, 3, payload)
+
 	return out
 }
 
@@ -1116,14 +1403,17 @@ func readCaptureJSONL(t *testing.T, path string) []map[string]any {
 	t.Helper()
 	raw := readFile(t, path)
 	lines := bytes.Split(bytes.TrimSpace(raw), []byte("\n"))
+
 	records := make([]map[string]any, 0, len(lines))
 	for _, line := range lines {
 		var record map[string]any
 		if err := json.Unmarshal(line, &record); err != nil {
 			t.Fatalf("unmarshal capture record: %v\n%s", err, line)
 		}
+
 		records = append(records, record)
 	}
+
 	return records
 }
 
@@ -1133,6 +1423,7 @@ func readFile(t *testing.T, path string) []byte {
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}
+
 	return raw
 }
 
@@ -1144,28 +1435,35 @@ func readFile(t *testing.T, path string) []byte {
 func waitForCaptureRecordWithLeg(t *testing.T, path string, leg logevent.Leg) []map[string]any {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
+
 	for {
 		if raw, err := os.ReadFile(path); err == nil {
 			records := make([]map[string]any, 0)
+
 			for _, line := range bytes.Split(bytes.TrimSpace(raw), []byte("\n")) {
 				if len(line) == 0 {
 					continue
 				}
+
 				var record map[string]any
 				if err := json.Unmarshal(line, &record); err != nil {
 					continue
 				}
+
 				records = append(records, record)
 			}
+
 			for _, record := range records {
 				if record["leg"] == string(leg) {
 					return records
 				}
 			}
 		}
+
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for capture record with leg %s at %s", leg, path)
 		}
+
 		time.Sleep(10 * time.Millisecond)
 	}
 }
@@ -1180,22 +1478,31 @@ func waitForCaptureRecordWithLeg(t *testing.T, path string, leg logevent.Leg) []
 // the intercepted-TLS path emits every leg, including the capture-index
 // leg, and only then calls into the store. Waiting on the row itself is
 // the one signal that the record cannot still be in flight.
-func waitForCaptureCommit(t *testing.T, dbPath string, what string, probe func(*sql.DB) (bool, error)) {
+func waitForCaptureCommit(
+	t *testing.T,
+	dbPath string,
+	what string,
+	probe func(*sql.DB) (bool, error),
+) {
 	t.Helper()
 	db, err := sql.Open("sqlite3", "file:"+dbPath+"?mode=ro&_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("open capture reader: %v", err)
 	}
+
 	defer func() { _ = db.Close() }()
 	deadline := time.Now().Add(10 * time.Second)
+
 	for {
 		found, probeErr := probe(db)
 		if found {
 			return
 		}
+
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for %s in %s: %v", what, dbPath, probeErr)
 		}
+
 		time.Sleep(5 * time.Millisecond)
 	}
 }
@@ -1204,13 +1511,24 @@ func waitForCaptureCommit(t *testing.T, dbPath string, what string, probe func(*
 // the request row carrying requestID.
 func waitForStoredRequestRow(t *testing.T, dbPath string, requestID string) {
 	t.Helper()
-	waitForCaptureCommit(t, dbPath, "capture row for request "+requestID, func(db *sql.DB) (bool, error) {
-		var count int
-		if err := db.QueryRow(`SELECT count(*) FROM requests WHERE request_id=?`, requestID).Scan(&count); err != nil {
-			return false, err
-		}
-		return count > 0, nil
-	})
+	waitForCaptureCommit(
+		t,
+		dbPath,
+		"capture row for request "+requestID,
+		func(db *sql.DB) (bool, error) {
+			var count int
+			if err := db.QueryRow(
+				`SELECT count(*) FROM requests WHERE request_id=?`,
+				requestID,
+			).Scan(
+				&count,
+			); err != nil {
+				return false, err
+			}
+
+			return count > 0, nil
+		},
+	)
 }
 
 func reverse(s string) string {
@@ -1218,6 +1536,7 @@ func reverse(s string) string {
 	for i, j := 0, len(b)-1; i < j; i, j = i+1, j-1 {
 		b[i], b[j] = b[j], b[i]
 	}
+
 	return string(b)
 }
 
@@ -1241,6 +1560,7 @@ func newManualClock(start time.Time) *manualClock {
 func (c *manualClock) Now() time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	return c.now
 }
 
@@ -1256,16 +1576,24 @@ func (c *manualClock) Advance(step time.Duration) {
 // idle reaches zero it stays there, and a poll goroutine that loses the
 // CPU for an arbitrary stretch still observes it. The deadline can only
 // expire if the Touch never happened at all.
-func waitForSessionTouch(t *testing.T, sess *livetrack.Session[TunnelMeta], clock *manualClock, direction string) {
+func waitForSessionTouch(
+	t *testing.T,
+	sess *livetrack.Session[TunnelMeta],
+	clock *manualClock,
+	direction string,
+) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
+
 	for {
 		if sess.IdleSince(clock.Now()) == 0 {
 			return
 		}
+
 		if time.Now().After(deadline) {
 			t.Fatalf("%s touch never observed: idle=%v", direction, sess.IdleSince(clock.Now()))
 		}
+
 		time.Sleep(time.Millisecond)
 	}
 }
@@ -1287,30 +1615,40 @@ func waitForSessionTouch(t *testing.T, sess *livetrack.Session[TunnelMeta], cloc
 func TestSpliceConnectionsTouchesSessionOnWrite(t *testing.T) {
 	t.Parallel()
 	clock := newManualClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
-	registry := livetrack.Attach[TunnelMeta](livetrack.NewGroup(livetrack.GroupOptions{Log: nil}), livetrack.MemberSpec{
-		Phase:         livetrack.PhaseIngress,
-		QuietRelevant: true,
-		CancelNoWait:  false,
-	}, livetrack.Options[TunnelMeta]{
-		Component:     "test",
-		Concern:       "test.splice.touch",
-		Log:           slog.New(slog.NewTextHandler(io.Discard, nil)),
-		PollEvery:     5 * time.Millisecond,
-		CloserGrace:   100 * time.Millisecond,
-		ParallelClose: false,
-		Now:           clock.Now,
-	})
+	registry := livetrack.Attach[TunnelMeta](
+		livetrack.NewGroup(livetrack.GroupOptions{Log: nil}),
+		livetrack.MemberSpec{
+			Phase:         livetrack.PhaseIngress,
+			QuietRelevant: true,
+			CancelNoWait:  false,
+		},
+		livetrack.Options[TunnelMeta]{
+			Component:     "test",
+			Concern:       "test.splice.touch",
+			Log:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+			PollEvery:     5 * time.Millisecond,
+			CloserGrace:   100 * time.Millisecond,
+			ParallelClose: false,
+			Now:           clock.Now,
+		},
+	)
 	clientLocal, clientRemote := net.Pipe()
 	upstreamLocal, upstreamRemote := net.Pipe()
-	sess, err := registry.Register(context.Background(), "splice.test", TunnelMeta{
-		ConnectHost:   "test.host",
-		UpstreamAddr:  "test.host:443",
-		CaptureFile:   "",
-		KeepaliveSeen: false,
-	}, newTunnelCloser(&connCloser{conn: clientLocal}, &connCloser{conn: upstreamLocal}))
+	sess, err := registry.Register(
+		context.Background(),
+		"splice.test",
+		TunnelMeta{
+			ConnectHost:   "test.host",
+			UpstreamAddr:  "test.host:443",
+			CaptureFile:   "",
+			KeepaliveSeen: false,
+		},
+		newTunnelCloser(&connCloser{conn: clientLocal}, &connCloser{conn: upstreamLocal}),
+	)
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
+
 	// Register stamped the session's activity at the current clock value, so
 	// advancing the clock with no byte flow is what makes it look idle. That
 	// is the same measurement the drain idle-grace fast-path takes.
@@ -1336,6 +1674,7 @@ func TestSpliceConnectionsTouchesSessionOnWrite(t *testing.T) {
 	if _, err := upstreamRemote.Read(readBuf); err != nil {
 		t.Fatalf("upstream read after client write: %v", err)
 	}
+
 	waitForSessionTouch(t, sess, clock, "client->upstream")
 
 	// Now drive a byte the other direction and confirm Touch fires
@@ -1345,12 +1684,14 @@ func TestSpliceConnectionsTouchesSessionOnWrite(t *testing.T) {
 	if mid := sess.IdleSince(clock.Now()); mid != spliceIdleStep {
 		t.Fatalf("idle during silence: got %v, want %v", mid, spliceIdleStep)
 	}
+
 	go func() {
 		_, _ = upstreamRemote.Write([]byte("u"))
 	}()
 	if _, err := clientRemote.Read(readBuf); err != nil {
 		t.Fatalf("client read after upstream write: %v", err)
 	}
+
 	waitForSessionTouch(t, sess, clock, "upstream->client")
 
 	// Close both ends so spliceConnections returns. clientRemote

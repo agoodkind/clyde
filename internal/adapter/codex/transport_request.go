@@ -44,6 +44,7 @@ func (m *ClientMetadata) TurnMetadataValue() string {
 	if m == nil {
 		return ""
 	}
+
 	return m.TurnMetadata
 }
 
@@ -55,6 +56,7 @@ func (m *ClientMetadata) ToMap() map[string]string {
 	if m == nil || m.IsEmpty() {
 		return nil
 	}
+
 	out := map[string]string{}
 	putIfPresent := func(key, value string) {
 		if strings.TrimSpace(value) != "" {
@@ -72,6 +74,7 @@ func (m *ClientMetadata) ToMap() map[string]string {
 	if len(out) == 0 {
 		return nil
 	}
+
 	return out
 }
 

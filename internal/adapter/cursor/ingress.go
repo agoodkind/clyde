@@ -33,7 +33,9 @@ func NewIngress() *Ingress {
 // (metadata key fallbacks, tool-presence classification, request-path
 // derivation) is contained here so callers above the boundary see
 // only primitive-typed fields.
-func (i *Ingress) Translate(req ingresscontract.ChatRequestPrimitive) ingresscontract.IngressContext {
+func (i *Ingress) Translate(
+	req ingresscontract.ChatRequestPrimitive,
+) ingresscontract.IngressContext {
 	cursorReq := TranslateRequest(req.Body)
 	return ingressContextFromRequest(cursorReq)
 }
@@ -42,10 +44,15 @@ func (i *Ingress) Translate(req ingresscontract.ChatRequestPrimitive) ingresscon
 // translated request as primitives. It delegates to the per-daemon
 // ChatIdentityResolver, then folds the resulting ChatIdentity into
 // ingresscontract.ChatIdentityPrimitive.
-func (i *Ingress) ResolveIdentity(corr correlation.Context, ic ingresscontract.IngressContext, req ingresscontract.ChatRequestPrimitive) ingresscontract.ChatIdentityPrimitive {
+func (i *Ingress) ResolveIdentity(
+	corr correlation.Context,
+	ic ingresscontract.IngressContext,
+	req ingresscontract.ChatRequestPrimitive,
+) ingresscontract.ChatIdentityPrimitive {
 	cursorReq := TranslateRequest(req.Body)
 	overlayCursorRequestFromContext(&cursorReq, ic)
 	identity := i.resolver.Resolve(corr, cursorReq, req.Body)
+
 	return chatIdentityPrimitive(identity)
 }
 
@@ -54,18 +61,25 @@ func (i *Ingress) ResolveIdentity(corr correlation.Context, ic ingresscontract.I
 // cursor_raw_model, cursor_normalized_model, cursor_raw_tool_names,
 // cursor_mode, cursor_can_spawn_agent, cursor_can_switch_mode, plus the
 // optional id attrs) is preserved so on-disk log consumers are unchanged.
-func (i *Ingress) LogAttrs(ic ingresscontract.IngressContext, rawModel string, toolNames []string) []slog.Attr {
+func (i *Ingress) LogAttrs(
+	ic ingresscontract.IngressContext,
+	rawModel string,
+	toolNames []string,
+) []slog.Attr {
 	normalizedModel := ic.NormalizedModel
 	if normalizedModel == "" {
 		normalizedModel = NormalizeModelAlias(rawModel)
 	}
+
 	mode := ic.Mode
 	if mode == "" {
 		mode = string(modeFromTools(ic.RawToolNames))
 	}
+
 	if len(toolNames) == 0 {
 		toolNames = ic.RawToolNames
 	}
+
 	canSpawnAgent := ic.HasSubagentTool
 	canSwitchMode := ic.CanSwitchMode
 
@@ -81,13 +95,17 @@ func (i *Ingress) LogAttrs(ic ingresscontract.IngressContext, rawModel string, t
 	if ic.ConversationID != "" {
 		attrs = append(attrs, slog.String("cursor_conversation_id", ic.ConversationID))
 	}
+
 	if ic.RequestID != "" {
 		attrs = append(attrs, slog.String("cursor_request_id", ic.RequestID))
 	}
+
 	if ic.GenerationID != "" {
 		attrs = append(attrs, slog.String("cursor_generation_id", ic.GenerationID))
 	}
+
 	attrs = append(attrs, slog.Bool("cursor_generation_id_present", ic.GenerationID != ""))
+
 	return attrs
 }
 
@@ -107,6 +125,7 @@ func modeFromTools(toolNames []string) Mode {
 	if hasRawToolName(toolNames, "CreatePlan") {
 		return ModePlan
 	}
+
 	return ModeAgent
 }
 
@@ -143,24 +162,31 @@ func overlayCursorRequestFromContext(req *Request, ic ingresscontract.IngressCon
 	if ic.User != "" {
 		req.User = ic.User
 	}
+
 	if ic.RequestID != "" {
 		req.RequestID = ic.RequestID
 	}
+
 	if ic.ConversationID != "" {
 		req.ConversationID = ic.ConversationID
 	}
+
 	if ic.GenerationID != "" {
 		req.GenerationID = ic.GenerationID
 	}
+
 	if ic.WorkspacePath != "" {
 		req.WorkspacePath = ic.WorkspacePath
 	}
+
 	if ic.NormalizedModel != "" {
 		req.NormalizedModel = ic.NormalizedModel
 	}
+
 	if ic.PathKind != "" {
 		req.PathKind = RequestPathKind(ic.PathKind)
 	}
+
 	if ic.Mode != "" {
 		req.Mode = Mode(ic.Mode)
 	}
@@ -188,7 +214,9 @@ func cloneStringsSlice(values []string) []string {
 	if len(values) == 0 {
 		return nil
 	}
+
 	out := make([]string, len(values))
 	copy(out, values)
+
 	return out
 }

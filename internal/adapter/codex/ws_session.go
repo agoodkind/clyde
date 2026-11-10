@@ -66,15 +66,20 @@ type WebsocketSessionCache struct {
 // reg is the per-daemon livetrack registry for Codex websocket sessions.
 // When reg is nil the cache falls back to the legacy behavior and
 // CloseAll is the only shutdown mechanism.
-func NewWebsocketSessionCache(log *slog.Logger, idleTTL time.Duration, reg *livetrack.Registry[WsSessionMeta]) *WebsocketSessionCache {
+func NewWebsocketSessionCache(
+	log *slog.Logger,
+	idleTTL time.Duration,
+	reg *livetrack.Registry[WsSessionMeta],
+) *WebsocketSessionCache {
 	return &WebsocketSessionCache{
 		entries:      map[string]*WebsocketSession{},
 		liveSessions: map[string]*livetrack.Session[WsSessionMeta]{},
 		log:          log,
 		idleTTL:      idleTTL,
 		now:          time.Now,
-		wsRegistry:   reg, mu: sync.
-				Mutex{},
+		wsRegistry:   reg,
+		mu: sync.
+			Mutex{},
 	}
 }
 
@@ -82,17 +87,22 @@ func NewWebsocketSessionCache(log *slog.Logger, idleTTL time.Duration, reg *live
 // entry is missing, expired, or closed, returns (nil, false). Stale
 // entries are closed before returning false. ctx is used for livetrack
 // registry release events.
-func (c *WebsocketSessionCache) Take(ctx context.Context, conversationID string) (*WebsocketSession, bool) {
+func (c *WebsocketSessionCache) Take(
+	ctx context.Context,
+	conversationID string,
+) (*WebsocketSession, bool) {
 	conv := strings.TrimSpace(conversationID)
 	if conv == "" {
 		return nil, false
 	}
+
 	c.mu.Lock()
 	entry, ok := c.entries[conv]
 	if !ok {
 		c.mu.Unlock()
 		return nil, false
 	}
+
 	delete(c.entries, conv)
 	// Leave the livetrack session entry in place; the websocket conn
 	// is still open while the caller holds the session. The entry is
@@ -103,11 +113,14 @@ func (c *WebsocketSessionCache) Take(ctx context.Context, conversationID string)
 		c.releaseRegistryEntry(ctx, conv, "already_closed_on_take")
 		return nil, false
 	}
+
 	if c.idleTTL > 0 && c.now().Sub(entry.LastUsed) > c.idleTTL {
 		c.invalidateEntry(entry, "idle_timeout")
 		c.releaseRegistryEntry(ctx, conv, "idle_timeout")
+
 		return nil, false
 	}
+
 	return entry, true
 }
 
@@ -119,15 +132,18 @@ func (c *WebsocketSessionCache) Put(ctx context.Context, s *WebsocketSession) {
 	if s == nil {
 		return
 	}
+
 	conv := strings.TrimSpace(s.ConversationID)
 	if conv == "" {
 		c.invalidateEntry(s, "missing_conversation_id")
 		return
 	}
+
 	if s.Closed {
 		c.invalidateEntry(s, "already_closed_on_put")
 		return
 	}
+
 	s.LastUsed = c.now()
 	c.mu.Lock()
 	existing, hasExisting := c.entries[conv]
@@ -137,6 +153,7 @@ func (c *WebsocketSessionCache) Put(ctx context.Context, s *WebsocketSession) {
 		c.releaseRegistryEntry(ctx, conv, "displaced_by_put")
 		c.mu.Lock()
 	}
+
 	c.entries[conv] = s
 	// Register with the livetrack registry when this is a fresh Put
 	// (not an update of an already-registered session). The registry
@@ -158,15 +175,18 @@ func (c *WebsocketSessionCache) Invalidate(ctx context.Context, conversationID, 
 	if conv == "" {
 		return
 	}
+
 	c.mu.Lock()
 	entry, ok := c.entries[conv]
 	if ok {
 		delete(c.entries, conv)
 	}
+
 	c.mu.Unlock()
 	if !ok {
 		return
 	}
+
 	c.invalidateEntry(entry, reason)
 	c.releaseRegistryEntry(ctx, conv, reason)
 }
@@ -183,12 +203,15 @@ func (c *WebsocketSessionCache) CloseAll(ctx context.Context, reason string) {
 		c.entries = map[string]*WebsocketSession{}
 		c.liveSessions = map[string]*livetrack.Session[WsSessionMeta]{}
 		c.mu.Unlock()
+
 		return
 	}
+
 	c.mu.Lock()
 	entries := c.entries
 	c.entries = map[string]*WebsocketSession{}
 	c.mu.Unlock()
+
 	for _, entry := range entries {
 		c.invalidateEntry(entry, reason)
 	}
@@ -199,6 +222,7 @@ func (c *WebsocketSessionCache) CloseAll(ctx context.Context, reason string) {
 func (c *WebsocketSessionCache) Size() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	return len(c.entries)
 }
 
@@ -210,6 +234,7 @@ func (c *WebsocketSessionCache) registerEntry(ctx context.Context, s *WebsocketS
 	if c.wsRegistry == nil {
 		return
 	}
+
 	conv := strings.TrimSpace(s.ConversationID)
 	liveSess, err := c.wsRegistry.Register(
 		ctx,
@@ -224,14 +249,25 @@ func (c *WebsocketSessionCache) registerEntry(ctx context.Context, s *WebsocketS
 	if err != nil {
 		// Registry is draining; log and continue without registration.
 		if c.log != nil {
-			c.log.WarnContext(ctx, "adapter.codex.ws_session.register_rejected", "concern", "adapter.providers.codex.request", "component", "adapter",
-				"subcomponent", "codex",
-				"conversation_id", conv,
-				"err", err,
+			c.log.WarnContext(
+				ctx,
+				"adapter.codex.ws_session.register_rejected",
+				"concern",
+				"adapter.providers.codex.request",
+				"component",
+				"adapter",
+				"subcomponent",
+				"codex",
+				"conversation_id",
+				conv,
+				"err",
+				err,
 			)
 		}
+
 		return
 	}
+
 	c.mu.Lock()
 	c.liveSessions[conv] = liveSess
 	c.mu.Unlock()
@@ -243,15 +279,18 @@ func (c *WebsocketSessionCache) releaseRegistryEntry(ctx context.Context, conv, 
 	if c.wsRegistry == nil {
 		return
 	}
+
 	c.mu.Lock()
 	liveSess, ok := c.liveSessions[conv]
 	if ok {
 		delete(c.liveSessions, conv)
 	}
+
 	c.mu.Unlock()
 	if !ok {
 		return
 	}
+
 	c.wsRegistry.Release(ctx, liveSess, reason)
 }
 
@@ -259,19 +298,32 @@ func (c *WebsocketSessionCache) invalidateEntry(entry *WebsocketSession, reason 
 	if entry == nil {
 		return
 	}
+
 	entry.Closed = true
 	entry.InvalidationReason = reason
 	if entry.Conn != nil {
 		_ = entry.Conn.Close()
 	}
+
 	if c.log != nil {
-		c.log.Info("adapter.codex.ws_session.invalidated", "concern", "adapter.providers.codex.request", "component", "adapter",
-			"subcomponent", "codex",
-			"conversation_id", entry.ConversationID,
-			"reason", reason,
-			"frame_count", entry.FrameCount,
-			"last_response_id", entry.LastResponseID,
-			"age_ms", c.now().Sub(entry.OpenedAt).Milliseconds(),
+		c.log.Info(
+			"adapter.codex.ws_session.invalidated",
+			"concern",
+			"adapter.providers.codex.request",
+			"component",
+			"adapter",
+			"subcomponent",
+			"codex",
+			"conversation_id",
+			entry.ConversationID,
+			"reason",
+			reason,
+			"frame_count",
+			entry.FrameCount,
+			"last_response_id",
+			entry.LastResponseID,
+			"age_ms",
+			c.now().Sub(entry.OpenedAt).Milliseconds(),
 		)
 	}
 }

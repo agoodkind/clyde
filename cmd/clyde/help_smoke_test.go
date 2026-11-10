@@ -14,7 +14,9 @@ func TestRootListsAllTopLevelCommands(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("root help: %v", err)
 	}
+
 	out := stdout.String()
+
 	for _, name := range []string{"conversation", "daemon", "logs", "mitm", "mcp"} {
 		if !strings.Contains(out, name) {
 			t.Errorf("root help missing %q:\n%s", name, out)
@@ -31,12 +33,15 @@ func TestGroupNameListsSubcommands(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("conversation help: %v", err)
 	}
+
 	out := stdout.String()
+
 	for _, name := range []string{"export", "info", "search"} {
 		if !strings.Contains(out, name) {
 			t.Errorf("conversation help missing subcommand %q:\n%s", name, out)
 		}
 	}
+
 	for _, want := range []string{
 		"inspect static conversation info",
 		"clyde conversation search zed:1a2b3c --around 42",
@@ -58,15 +63,26 @@ func TestSearchLeafHelpListsFlags(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("conversation search help: %v", err)
 	}
+
 	out := stdout.String()
-	for _, name := range []string{"search [CONVERSATION_ID]", "--query", "--around", "--window", "--provider", "--offset"} {
+
+	for _, name := range []string{
+		"search [CONVERSATION_ID]",
+		"--query",
+		"--around",
+		"--window",
+		"--provider",
+		"--offset",
+	} {
 		if !strings.Contains(out, name) {
 			t.Errorf("conversation search help missing flag %q:\n%s", name, out)
 		}
 	}
+
 	if strings.Contains(out, "--conversation") {
 		t.Errorf("conversation search help still exposes --conversation:\n%s", out)
 	}
+
 	for _, want := range []string{
 		"pass CONVERSATION_ID plus --query",
 		"clyde conversation search claude:1a2b3c --query \"auth timeout\"",
@@ -87,7 +103,9 @@ func TestLeafHelpShowsArgumentsExamplesAndEnum(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("export help: %v", err)
 	}
+
 	out := stdout.String()
+
 	for _, want := range []string{
 		"Arguments:",
 		"CONVERSATION_ID",
@@ -110,6 +128,7 @@ func TestOperationalLeafHelpShowsExample(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("mitm status help: %v", err)
 	}
+
 	if out := stdout.String(); !strings.Contains(out, "clyde mitm status") {
 		t.Errorf("mitm status help missing example:\n%s", out)
 	}

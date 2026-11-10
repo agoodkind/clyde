@@ -20,6 +20,7 @@ func TestJSONInjectsMetadataIntoObjectPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("JSON() error = %v", err)
 	}
+
 	want := "{\"_meta\":{\"request_id\":\"req-456\",\"trace_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"span_id\":\"bbbbbbbbbbbbbbbb\"},\"status\":\"ok\"}\n"
 	if string(got) != want {
 		t.Fatalf("JSON() = %q, want %q", got, want)
@@ -38,6 +39,7 @@ func TestJSONWrapsScalarPayloadInResponseEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("JSON() error = %v", err)
 	}
+
 	want := "{\"_meta\":{\"trace_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"span_id\":\"bbbbbbbbbbbbbbbb\"},\"result\":\"ok\"}\n"
 	if string(got) != want {
 		t.Fatalf("JSON() = %q, want %q", got, want)

@@ -7,7 +7,8 @@ import (
 )
 
 func TestSummarizeChatBody(t *testing.T) {
-	raw := []byte(`{
+	raw := []byte(
+		`{
 		"model": "clyde-haiku-4-5",
 		"stream": true,
 		"messages": [
@@ -25,7 +26,8 @@ func TestSummarizeChatBody(t *testing.T) {
 		],
 		"functions": [{"name":"fn-a","description":"legacy", "parameters":{"c":3}}],
 		"tool_choice": "auto"
-	}`)
+	}`,
+	)
 
 	summary, err := SummarizeChatBody(raw)
 	if err != nil {
@@ -35,54 +37,71 @@ func TestSummarizeChatBody(t *testing.T) {
 	if summary.Model != "clyde-haiku-4-5" {
 		t.Fatalf("Model = %q", summary.Model)
 	}
+
 	if summary.Stream != true {
 		t.Fatalf("Stream = %v", summary.Stream)
 	}
+
 	if summary.MessageCount != 7 {
 		t.Fatalf("MessageCount = %d", summary.MessageCount)
 	}
+
 	if len(summary.Messages) != 6 {
 		t.Fatalf("len(Messages) = %d", len(summary.Messages))
 	}
+
 	if summary.Messages[0].Role != "system" {
 		t.Fatalf("first sampled role = %q", summary.Messages[0].Role)
 	}
+
 	if summary.Messages[0].ContentChars != 2048 {
 		t.Fatalf("first message ContentChars = %d", summary.Messages[0].ContentChars)
 	}
+
 	if summary.Messages[2].HasToolCalls != true {
 		t.Fatalf("expected tool call sample message")
 	}
+
 	if summary.Messages[2].ToolCallCount != 1 {
 		t.Fatalf("ToolCallCount = %d", summary.Messages[2].ToolCallCount)
 	}
+
 	if summary.Messages[2].ToolCallID != "tool-call-1" {
 		t.Fatalf("ToolCallID = %q", summary.Messages[2].ToolCallID)
 	}
+
 	if got := summary.Messages[2].ToolCallIDs; len(got) != 1 || got[0] != "tool-call-1" {
 		t.Fatalf("ToolCallIDs = %v", got)
 	}
+
 	if got := summary.Messages[2].ToolCallNames; len(got) != 1 || got[0] != "weather" {
 		t.Fatalf("ToolCallNames = %v", got)
 	}
+
 	if got := strings.Join(summary.Messages[2].ToolCallArgKeys, ","); got != "city,path" {
 		t.Fatalf("ToolCallArgKeys = %q", got)
 	}
+
 	if got := summary.Messages[2].ToolCallPaths; len(got) != 1 || got[0] != "/tmp/weather.json" {
 		t.Fatalf("ToolCallPaths = %v", got)
 	}
+
 	if summary.Messages[2].ToolCallArgChars == 0 {
 		t.Fatalf("ToolCallArgChars = %d", summary.Messages[2].ToolCallArgChars)
 	}
+
 	if summary.ToolCount != 3 {
 		t.Fatalf("ToolCount = %d", summary.ToolCount)
 	}
+
 	if len(summary.Tools) != 3 {
 		t.Fatalf("len(Tools) = %d", len(summary.Tools))
 	}
+
 	if summary.Tools[0].Name != "tool-a" || summary.Tools[0].ParamsChars == 0 {
 		t.Fatalf("first tool summary = %+v", summary.Tools[0])
 	}
+
 	if string(summary.ToolChoice) != "\"auto\"" {
 		t.Fatalf("ToolChoice = %q", summary.ToolChoice)
 	}
@@ -91,6 +110,7 @@ func TestSummarizeChatBody(t *testing.T) {
 	if err := json.Unmarshal(summary.ToolChoice, &toolChoice); err != nil {
 		t.Fatalf("tool choice: %v", err)
 	}
+
 	if toolChoice != "auto" {
 		t.Fatalf("tool_choice = %q", toolChoice)
 	}

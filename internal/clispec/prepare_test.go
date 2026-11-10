@@ -18,6 +18,7 @@ func requirePrepared[I Input, P Prepared](t *testing.T, name string, op Operatio
 	if op.Prepare == nil {
 		t.Errorf("%s: Prepare is nil; input could not be rejected before the help boundary", name)
 	}
+
 	if op.Run == nil && op.runResult == nil {
 		t.Errorf("%s: Run and runResult are both nil", name)
 	}
@@ -55,6 +56,7 @@ func TestExportPrepareRejectsBadSelection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("export Prepare rejected a valid selection: %v", err)
 	}
+
 	if !payload.Options.Content.Has(conv.ContentKindChat) {
 		t.Errorf("prepared payload missing the chat kind")
 	}
@@ -70,6 +72,7 @@ func TestSearchPrepareRejectsBadProvider(t *testing.T) {
 	if _, err := op.Prepare(in); err == nil {
 		t.Error("search Prepare should reject an unsupported provider")
 	}
+
 	if _, err := op.Prepare(op.New()); err != nil {
 		t.Errorf("search Prepare rejected valid input: %v", err)
 	}
@@ -111,6 +114,7 @@ func TestExportMCPHandlerRejectsEmptyOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
+
 	text := textOf(t, result)
 	if !strings.Contains(text, "no content kinds selected") {
 		t.Errorf("expected the no-content-kinds error in tool text, got: %q", text)

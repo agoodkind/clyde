@@ -35,6 +35,7 @@ func ParseResponseFormat(raw json.RawMessage) JSONResponseSpec {
 	if len(raw) == 0 {
 		return JSONResponseSpec{Mode: "", SchemaName: "", Schema: nil}
 	}
+
 	var rf struct {
 		Type       string `json:"type"`
 		JSONSchema *struct {
@@ -45,6 +46,7 @@ func ParseResponseFormat(raw json.RawMessage) JSONResponseSpec {
 	if err := json.Unmarshal(raw, &rf); err != nil {
 		return JSONResponseSpec{Mode: "", SchemaName: "", Schema: nil}
 	}
+
 	switch responseFormatType(rf.Type) {
 	case responseFormatJSONObject:
 		return JSONResponseSpec{Mode: "json_object", SchemaName: "", Schema: nil}
@@ -52,19 +54,22 @@ func ParseResponseFormat(raw json.RawMessage) JSONResponseSpec {
 		if rf.JSONSchema == nil {
 			return JSONResponseSpec{Mode: "json_schema", SchemaName: "", Schema: nil}
 		}
+
 		return JSONResponseSpec{
 			Mode:       "json_schema",
 			SchemaName: rf.JSONSchema.Name,
 			Schema:     rf.JSONSchema.Schema,
 		}
 	}
+
 	return JSONResponseSpec{
 		Mode: "",
 
 		// SystemPrompt returns text to inject into claude's system prompt so
 		// the model emits raw JSON. The retryHint flag adds extra emphasis
 		// for the second attempt after a failed parse.
-		SchemaName: "", Schema: nil,
+		SchemaName: "",
+		Schema:     nil,
 	}
 }
 
@@ -73,10 +78,12 @@ func (s JSONResponseSpec) SystemPrompt(retryHint bool) string {
 	if s.Mode == "" {
 		return ""
 	}
+
 	var b strings.Builder
 	if retryHint {
 		b.WriteString("Your previous response failed JSON.parse. ")
 	}
+
 	b.WriteString("You must respond with ONLY raw JSON. ")
 	b.WriteString("No prose. No markdown code fences. No commentary before or after. ")
 	b.WriteString("The first character of your reply must be `{` or `[`. ")
@@ -90,6 +97,7 @@ func (s JSONResponseSpec) SystemPrompt(retryHint bool) string {
 			b.WriteString(")\n")
 		}
 	}
+
 	return b.String()
 }
 
@@ -104,6 +112,7 @@ func CoerceJSON(text string) string {
 	if s == "" {
 		return s
 	}
+
 	// Strip a single ```json ... ``` or ``` ... ``` fence.
 	if strings.HasPrefix(s, "```") {
 		s = strings.TrimPrefix(s, "```json")
@@ -112,16 +121,20 @@ func CoerceJSON(text string) string {
 		if i := strings.LastIndex(s, "```"); i >= 0 {
 			s = s[:i]
 		}
+
 		s = strings.TrimSpace(s)
 	}
+
 	// Trim any text before the first JSON delimiter.
 	if i := indexOfFirstJSONDelim(s); i > 0 {
 		s = s[i:]
 	}
+
 	// Trim any trailing text after the matching closing delimiter.
 	if end := indexOfLastJSONDelim(s); end >= 0 && end+1 < len(s) {
 		s = s[:end+1]
 	}
+
 	return s
 }
 
@@ -131,16 +144,19 @@ func indexOfFirstJSONDelim(s string) int {
 			return i
 		}
 	}
+
 	return -1
 }
 
 func indexOfLastJSONDelim(s string) int {
 	last := -1
+
 	for i, r := range s {
 		if r == '}' || r == ']' {
 			last = i
 		}
 	}
+
 	return last
 }
 
@@ -149,6 +165,8 @@ func LooksLikeJSON(text string) bool {
 	if text == "" {
 		return false
 	}
+
 	var v json.RawMessage
+
 	return json.Unmarshal([]byte(text), &v) == nil
 }

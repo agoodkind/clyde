@@ -25,6 +25,7 @@ func TestStartSelfUpdateSchedulerUsesSupervisorApplyModeAndDeployHandoff(t *test
 			if overrides.Log == nil {
 				t.Fatal("Options override Log = nil, want supervisor logger")
 			}
+
 			return selfupdate.Options{
 				Config: selfupdate.Config{
 					Repo:              "agoodkind/clyde",
@@ -51,9 +52,11 @@ func TestStartSelfUpdateSchedulerUsesSupervisorApplyModeAndDeployHandoff(t *test
 	if !hooks.Enabled() {
 		t.Fatal("scheduler Enabled returned false, want true")
 	}
+
 	if hooks.Mode() != selfupdate.ModeApply {
 		t.Fatalf("scheduler Mode = %q, want %q", hooks.Mode(), selfupdate.ModeApply)
 	}
+
 	if hooks.Options().Config.Binary != "clyde" {
 		t.Fatalf("scheduler binary = %q, want clyde", hooks.Options().Config.Binary)
 	}

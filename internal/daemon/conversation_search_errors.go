@@ -31,6 +31,7 @@ func (e conversationSearchSourceError) Error() string {
 	if e.backend != "" {
 		return "search backend " + string(e.backend) + ": " + e.message()
 	}
+
 	return e.message()
 }
 
@@ -57,6 +58,7 @@ func (e conversationSearchSourceError) grpcCode() codes.Code {
 	if e.rpcCode == codes.OK {
 		return codes.Internal
 	}
+
 	return e.rpcCode
 }
 
@@ -83,6 +85,7 @@ func refusedConversationSearchSourceError(cause error) conversationSearchSourceE
 	if rpcCode == codes.Unknown || rpcCode == codes.OK {
 		rpcCode = codes.InvalidArgument
 	}
+
 	return conversationSearchSourceError{
 		code:    conversationSearchSourceRefused,
 		rpcCode: rpcCode,
@@ -112,6 +115,7 @@ func sourceRPCCode(err error) codes.Code {
 	if !errors.As(err, &statusErr) {
 		return codes.Unknown
 	}
+
 	return statusErr.GRPCStatus().Code()
 }
 

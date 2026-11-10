@@ -78,6 +78,7 @@ func UnwrapUserEnvelope(text string) (string, time.Time) {
 			remaining = remaining[:match[0]] + remaining[match[1]:]
 		}
 	}
+
 	// A query marker without its partner means the envelope is not the shape
 	// this understands, so the text is left alone rather than half-unwrapped.
 	// Deleting one marker from text whose other half is missing would edit
@@ -101,8 +102,10 @@ func UnwrapUserEnvelope(text string) (string, time.Time) {
 		if bodyEnd < bodyStart {
 			bodyEnd = bodyStart
 		}
+
 		remaining = remaining[:open[0]] + remaining[bodyStart:bodyEnd] + remaining[closed[1]:]
 	}
+
 	// What is left is the user's, so it is returned as it stands. The patterns
 	// above consume the envelope's own newlines, and trimming further would
 	// take the leading indentation off a pasted code block: the composer store
@@ -122,16 +125,19 @@ func parseUserEnvelopeTimestamp(value string) time.Time {
 	if trimmed == "" {
 		return time.Time{}
 	}
+
 	zone := time.UTC
 	if match := userEnvelopeZoneRe.FindStringSubmatch(trimmed); match != nil {
 		zone = userEnvelopeZone(match[1], match[2], match[3])
 		trimmed = strings.TrimSpace(trimmed[:len(trimmed)-len(match[0])])
 	}
+
 	for _, layout := range userEnvelopeWallLayouts {
 		if parsed, err := time.ParseInLocation(layout, trimmed, zone); err == nil {
 			return parsed
 		}
 	}
+
 	return time.Time{}
 }
 
@@ -147,9 +153,11 @@ func userEnvelopeZone(sign, hours, minutes string) *time.Location {
 	if minutes != "" {
 		offsetMinutes, _ = strconv.Atoi(minutes)
 	}
+
 	seconds := offsetHours*3600 + offsetMinutes*60
 	if sign == "-" {
 		seconds = -seconds
 	}
+
 	return time.FixedZone("UTC"+sign+hours, seconds)
 }

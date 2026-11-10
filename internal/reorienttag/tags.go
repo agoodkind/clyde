@@ -39,6 +39,7 @@ func WrapInjection(transcript, instructions string) string {
 	if instructions == "" {
 		return builder.String()
 	}
+
 	builder.WriteByte('\n')
 	builder.WriteString(CompactionInstructionsOpen)
 	builder.WriteByte('\n')
@@ -46,5 +47,6 @@ func WrapInjection(transcript, instructions string) string {
 	builder.WriteByte('\n')
 	builder.WriteString(CompactionInstructionsClose)
 	builder.WriteByte('\n')
+
 	return builder.String()
 }

@@ -10,18 +10,23 @@ func (idx *Index) visibleRecords() []Record {
 	if len(idx.retained) == 0 {
 		return idx.visibleFrom(idx.records)
 	}
+
 	served := make([]Record, 0, len(idx.records)+len(idx.retained))
 	served = append(served, idx.records...)
+
 	scanned := make(map[string]bool, len(idx.records))
 	for _, record := range idx.records {
 		scanned[record.ID] = true
 	}
+
 	for _, record := range idx.retained {
 		if !scanned[record.ID] {
 			served = append(served, record)
 		}
 	}
+
 	sortRecords(served)
+
 	return idx.visibleFrom(served)
 }
 
@@ -34,16 +39,20 @@ func (idx *Index) visibleFrom(records []Record) []Record {
 	if idx.includeSubagents {
 		return cloneRecords(records)
 	}
+
 	out := make([]Record, 0, len(records))
 	for _, record := range records {
 		if record.IsSubagent() {
 			continue
 		}
+
 		out = append(out, record)
 	}
+
 	if len(out) == 0 {
 		return nil
 	}
+
 	return out
 }
 
@@ -52,8 +61,10 @@ func (idx *Index) ListWithStamps(ctx context.Context) ([]StampedRecord, error) {
 	if err := idx.loadOnce(); err != nil {
 		return nil, err
 	}
+
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
+
 	return cloneStampedRecords(idx.visibleScannedRecords(), idx.prevStamps), nil
 }
 
@@ -65,6 +76,7 @@ func (idx *Index) RecordByID(id string) (Record, bool) {
 	if id == "" {
 		return emptyRecord(), false
 	}
+
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	// A hidden record is skipped rather than returned as a miss, so a subagent
@@ -74,12 +86,15 @@ func (idx *Index) RecordByID(id string) (Record, bool) {
 			if record.ID != id {
 				continue
 			}
+
 			if record.IsSubagent() && !idx.includeSubagents {
 				continue
 			}
+
 			return record, true
 		}
 	}
+
 	return emptyRecord(), false
 }
 
@@ -87,5 +102,6 @@ func (idx *Index) recordsSnapshot() []Record {
 	idx.mu.Lock()
 	records := idx.visibleRecords()
 	idx.mu.Unlock()
+
 	return records
 }

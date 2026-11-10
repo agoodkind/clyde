@@ -43,6 +43,7 @@ func (p livePlainRouteProvider) ClassifyPlain(path string) mitm.PlainRouteClaim 
 	if strings.HasPrefix(path, "/v1/") {
 		return mitm.PlainRouteClaim{Claimed: true, Provider: "claude", UpstreamURL: p.upstream}
 	}
+
 	return mitm.PlainRouteClaim{Claimed: false, Provider: "", UpstreamURL: ""}
 }
 
@@ -77,42 +78,61 @@ func TestLiveMITMProxyRewritesMessagesSSEWithoutExchangeRecording(t *testing.T) 
 	})
 
 	databasePath := filepath.Join(t.TempDir(), "capture.db")
-	store, err := capture.Open(context.Background(), capture.Config{DBPath: databasePath, RecordingDisabled: true}, nil)
+	store, err := capture.Open(
+		context.Background(),
+		capture.Config{DBPath: databasePath, RecordingDisabled: true},
+		nil,
+	)
 	if err != nil {
 		t.Fatalf("open capture store: %v", err)
 	}
+
 	t.Cleanup(func() { _ = store.Close(context.Background(), "test cleanup") })
 	var logs bytes.Buffer
-	proxy, baseURL := startLiveMITMProxy(t, store, slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	proxy, baseURL := startLiveMITMProxy(
+		t,
+		store,
+		slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	)
 	proxy.SetRequestResponseHooks([]mitm.RequestResponseHook{
 		sentinelinject.New(keyword, ""),
 	})
 
-	req, err := http.NewRequest(http.MethodPost, baseURL+"/v1/messages", strings.NewReader(requestBody))
+	req, err := http.NewRequest(
+		http.MethodPost,
+		baseURL+"/v1/messages",
+		strings.NewReader(requestBody),
+	)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
+
 	req.Header.Set("content-type", "application/json")
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("POST through MITM: %v", err)
 	}
+
 	defer func() { _ = resp.Body.Close() }()
 	gotBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read response: %v", err)
 	}
+
 	text := string(gotBody)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d body=%s", resp.StatusCode, text)
 	}
+
 	if strings.Contains(text, `"text":"hello"`) {
 		t.Fatalf("upstream model text leaked through MITM: %s", text)
 	}
+
 	if !strings.Contains(text, "live-forced-reply") {
 		t.Fatalf("rewritten SSE missing forced suffix: %s", text)
 	}
+
 	assertExchangeRecordingEmpty(t, proxy, store, databasePath)
 	assertProxyByteCounts(t, &logs, len(requestBody), len(gotBody))
 }
@@ -153,34 +173,46 @@ func TestLiveMITMProxyDualSentinelRewritesRequestAndResponse(t *testing.T) {
 		sentinelinject.New(responseSentinel, actualUserSentinel),
 	})
 
-	req, err := http.NewRequest(http.MethodPost, baseURL+"/v1/messages", strings.NewReader(requestBody))
+	req, err := http.NewRequest(
+		http.MethodPost,
+		baseURL+"/v1/messages",
+		strings.NewReader(requestBody),
+	)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
+
 	req.Header.Set("content-type", "application/json")
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("POST through MITM: %v", err)
 	}
+
 	defer func() { _ = resp.Body.Close() }()
 	gotBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read response: %v", err)
 	}
+
 	text := string(gotBody)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d body=%s", resp.StatusCode, text)
 	}
+
 	if !strings.Contains(gotUpstreamBody, upstreamUser) {
 		t.Fatalf("upstream body missing rewritten user text: %s", gotUpstreamBody)
 	}
-	if strings.Contains(gotUpstreamBody, responseSentinel) || strings.Contains(gotUpstreamBody, actualUserSentinel) {
+
+	if strings.Contains(gotUpstreamBody, responseSentinel) ||
+		strings.Contains(gotUpstreamBody, actualUserSentinel) {
 		t.Fatalf("upstream body still contains sentinel markers: %s", gotUpstreamBody)
 	}
+
 	if strings.Contains(text, "real upstream reply") {
 		t.Fatalf("upstream model text leaked through MITM: %s", text)
 	}
+
 	if !strings.Contains(text, forcedResponse) {
 		t.Fatalf("rewritten SSE missing forced response: %s", text)
 	}
@@ -192,18 +224,24 @@ func startLiveUpstreamWithCapture(t *testing.T, sseBody string, captured *string
 	if err != nil {
 		t.Fatalf("listen upstream: %v", err)
 	}
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/messages", func(w http.ResponseWriter, r *http.Request) {
-		body, readErr := io.ReadAll(r.Body)
-		if readErr != nil {
-			t.Errorf("read upstream request body: %v", readErr)
-		}
-		if captured != nil {
-			*captured = string(body)
-		}
-		w.Header().Set("content-type", "text/event-stream")
-		_, _ = io.WriteString(w, sseBody)
-	})
+	mux.HandleFunc(
+		"/v1/messages",
+		func(w http.ResponseWriter, r *http.Request) {
+			body, readErr := io.ReadAll(r.Body)
+			if readErr != nil {
+				t.Errorf("read upstream request body: %v", readErr)
+			}
+
+			if captured != nil {
+				*captured = string(body)
+			}
+
+			w.Header().Set("content-type", "text/event-stream")
+			_, _ = io.WriteString(w, sseBody)
+		},
+	)
 	server := &http.Server{Handler: mux, ReadHeaderTimeout: 2 * time.Second}
 	go func() { _ = server.Serve(ln) }()
 	t.Cleanup(func() {
@@ -211,6 +249,7 @@ func startLiveUpstreamWithCapture(t *testing.T, sseBody string, captured *string
 		defer cancel()
 		_ = server.Shutdown(ctx)
 	})
+
 	return "http://" + ln.Addr().String()
 }
 
@@ -220,11 +259,15 @@ func startLiveUpstream(t *testing.T, sseBody string) string {
 	if err != nil {
 		t.Fatalf("listen upstream: %v", err)
 	}
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/messages", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("content-type", "text/event-stream")
-		_, _ = io.WriteString(w, sseBody)
-	})
+	mux.HandleFunc(
+		"/v1/messages",
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("content-type", "text/event-stream")
+			_, _ = io.WriteString(w, sseBody)
+		},
+	)
 	server := &http.Server{Handler: mux, ReadHeaderTimeout: 2 * time.Second}
 	go func() { _ = server.Serve(ln) }()
 	t.Cleanup(func() {
@@ -232,23 +275,31 @@ func startLiveUpstream(t *testing.T, sseBody string) string {
 		defer cancel()
 		_ = server.Shutdown(ctx)
 	})
+
 	return "http://" + ln.Addr().String()
 }
 
-func startLiveMITMProxy(t *testing.T, store *capture.Store, logger *slog.Logger) (*mitm.Proxy, string) {
+func startLiveMITMProxy(
+	t *testing.T,
+	store *capture.Store,
+	logger *slog.Logger,
+) (*mitm.Proxy, string) {
 	t.Helper()
 	root := t.TempDir()
 	caDir := filepath.Join(root, "ca")
+
 	captureDir := filepath.Join(root, "mitm")
 	for _, dir := range []string{caDir, captureDir} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatalf("mkdir %s: %v", dir, err)
 		}
 	}
+
 	ln, err := net.Listen("tcp", "[::1]:0")
 	if err != nil {
 		t.Fatalf("listen mitm: %v", err)
 	}
+
 	group := livetrack.NewGroup(livetrack.GroupOptions{Log: nil})
 	proxy, err := mitm.NewProxy(
 		config.MITMConfig{
@@ -270,6 +321,7 @@ func startLiveMITMProxy(t *testing.T, store *capture.Store, logger *slog.Logger)
 		_ = ln.Close()
 		t.Fatalf("NewProxy: %v", err)
 	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() { errCh <- proxy.Serve(ctx) }()
@@ -283,39 +335,61 @@ func startLiveMITMProxy(t *testing.T, store *capture.Store, logger *slog.Logger)
 		case <-time.After(2 * time.Second):
 		}
 	})
+
 	return proxy, "http://" + ln.Addr().String()
 }
 
 //go:embed testdata/exchange_counts.sql
 var exchangeCountsSQL string
 
-func assertExchangeRecordingEmpty(t *testing.T, proxy *mitm.Proxy, store *capture.Store, databasePath string) {
+func assertExchangeRecordingEmpty(
+	t *testing.T,
+	proxy *mitm.Proxy,
+	store *capture.Store,
+	databasePath string,
+) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := proxy.ShutdownHTTP(ctx); err != nil {
 		t.Fatalf("finish proxy requests: %v", err)
 	}
+
 	if err := store.Close(context.Background(), "verify disabled recording"); err != nil {
 		t.Fatalf("close capture store: %v", err)
 	}
+
 	database, err := sql.Open("sqlite3", "file:"+databasePath+"?mode=ro")
 	if err != nil {
 		t.Fatalf("open capture verifier: %v", err)
 	}
+
 	t.Cleanup(func() { _ = database.Close() })
 	var requests, bodies, decodedBodies, toolEvents int
-	if err := database.QueryRow(exchangeCountsSQL).Scan(&requests, &bodies, &decodedBodies, &toolEvents); err != nil {
+	if err := database.QueryRow(exchangeCountsSQL).Scan(
+		&requests,
+		&bodies,
+		&decodedBodies,
+		&toolEvents,
+	); err != nil {
 		t.Fatalf("count exchange records: %v", err)
 	}
+
 	if requests != 0 || bodies != 0 || decodedBodies != 0 || toolEvents != 0 {
-		t.Fatalf("disabled recording stored requests=%d bodies=%d decoded_bodies=%d tool_events=%d", requests, bodies, decodedBodies, toolEvents)
+		t.Fatalf(
+			"disabled recording stored requests=%d bodies=%d decoded_bodies=%d tool_events=%d",
+			requests,
+			bodies,
+			decodedBodies,
+			toolEvents,
+		)
 	}
 }
 
 func assertProxyByteCounts(t *testing.T, logs io.Reader, requestBytes, responseBytes int) {
 	t.Helper()
 	decoder := json.NewDecoder(logs)
+
 	for {
 		var event struct {
 			Leg      logevent.Leg `json:"leg"`
@@ -326,16 +400,27 @@ func assertProxyByteCounts(t *testing.T, logs io.Reader, requestBytes, responseB
 		if errors.Is(decodeErr, io.EOF) {
 			break
 		}
+
 		if decodeErr != nil {
 			t.Fatalf("read proxy operational log: %v", decodeErr)
 		}
+
 		if event.Leg != logevent.LegMITMComplete {
 			continue
 		}
+
 		if event.BytesIn != requestBytes || event.BytesOut != responseBytes {
-			t.Fatalf("logged request bytes=%d response bytes=%d, want request bytes=%d response bytes=%d", event.BytesIn, event.BytesOut, requestBytes, responseBytes)
+			t.Fatalf(
+				"logged request bytes=%d response bytes=%d, want request bytes=%d response bytes=%d",
+				event.BytesIn,
+				event.BytesOut,
+				requestBytes,
+				responseBytes,
+			)
 		}
+
 		return
 	}
+
 	t.Fatal("proxy did not log completed request byte counts")
 }

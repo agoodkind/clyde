@@ -24,22 +24,27 @@ var cursorContextTags = []string{
 func stripLeadingContextBlocks(text string) (string, bool) {
 	rest := strings.TrimLeft(text, contextBlockSpace)
 	stripped := false
+
 	for {
 		name, found := leadingContextTag(rest)
 		if !found {
 			break
 		}
+
 		closing := "</" + name + ">"
 		end := strings.Index(rest, closing)
 		if end < 0 {
 			return text, false
 		}
+
 		rest = strings.TrimLeft(rest[end+len(closing):], contextBlockSpace)
 		stripped = true
 	}
+
 	if !stripped || strings.TrimSpace(rest) == "" {
 		return text, false
 	}
+
 	return rest, true
 }
 
@@ -50,5 +55,6 @@ func leadingContextTag(text string) (string, bool) {
 			return name, true
 		}
 	}
+
 	return "", false
 }

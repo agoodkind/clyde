@@ -86,7 +86,13 @@ func NewStreamTranslator(ctx context.Context, reqID, modelAlias string) *StreamT
 		lastOutputTokens:   0,
 		visibleText:        strings.Builder{},
 		thinkingTextSeen:   false,
-		renderer:           adapterrender.NewEventRendererWithContext(ctx, reqID, modelAlias, "anthropic", slog.Default()),
+		renderer: adapterrender.NewEventRendererWithContext(
+			ctx,
+			reqID,
+			modelAlias,
+			"anthropic",
+			slog.Default(),
+		),
 	}
 }
 
@@ -163,52 +169,81 @@ func resolveStreamEventName(eventName string, dataJSON []byte) string {
 	if evName != "" {
 		return evName
 	}
+
 	var probe struct {
 		Type string `json:"type"`
 	}
 	if err := json.Unmarshal(dataJSON, &probe); err == nil && probe.Type != "" {
 		return probe.Type
 	}
+
 	return evName
 }
 
 // handleMessageStart records the upstream's reported input-token count.
-func (t *StreamTranslator) handleMessageStart(dataJSON []byte) ([]Event, bool, string, *OpenAIUsage, error) {
+func (t *StreamTranslator) handleMessageStart(
+	dataJSON []byte,
+) ([]Event, bool, string, *OpenAIUsage, error) {
 	var ev struct {
 		Message struct {
 			Usage *AnthSSEUsage `json:"usage"`
 		} `json:"message"`
 	}
 	if err := json.Unmarshal(dataJSON, &ev); err != nil {
-		slog.Warn("adapter.anthropic.stream.message_start_unmarshal_failed", "concern", "adapter.providers.anthropic.request", "err", err)
+		slog.Warn(
+			"adapter.anthropic.stream.message_start_unmarshal_failed",
+			"concern",
+			"adapter.providers.anthropic.request",
+			"err",
+			err,
+		)
+
 		return nil, false, "", nil, fmt.Errorf("unmarshal anthropic message_start event: %w", err)
 	}
+
 	if ev.Message.Usage != nil {
 		t.pendingInputTokens = ev.Message.Usage.InputTokens
 	}
+
 	return nil, false, "", nil, nil
 }
 
 // handleContentBlockStart dispatches to the per-block-type opener.
-func (t *StreamTranslator) handleContentBlockStart(dataJSON []byte) ([]Event, bool, string, *OpenAIUsage, error) {
+func (t *StreamTranslator) handleContentBlockStart(
+	dataJSON []byte,
+) ([]Event, bool, string, *OpenAIUsage, error) {
 	var ev struct {
 		Index        int             `json:"index"`
 		ContentBlock json.RawMessage `json:"content_block"`
 	}
 	if err := json.Unmarshal(dataJSON, &ev); err != nil {
-		slog.Warn("adapter.anthropic.stream.content_block_start_unmarshal_failed", "concern", "adapter.providers.anthropic.request", "err", err)
-		return nil, false, "", nil, fmt.Errorf("unmarshal anthropic content_block_start event: %w", err)
+		slog.Warn(
+			"adapter.anthropic.stream.content_block_start_unmarshal_failed",
+			"concern",
+			"adapter.providers.anthropic.request",
+			"err",
+			err,
+		)
+
+		return nil, false, "", nil, fmt.Errorf(
+			"unmarshal anthropic content_block_start event: %w",
+			err,
+		)
 	}
+
 	if len(ev.ContentBlock) == 0 {
 		return nil, false, "", nil, nil
 	}
+
 	block, ok, err := UnmarshalContentBlock(ev.ContentBlock)
 	if err != nil {
 		return nil, false, "", nil, err
 	}
+
 	if !ok {
 		return nil, false, "", nil, nil
 	}
+
 	switch b := block.(type) {
 	case TextBlock:
 		t.currentBlockType = "text"
@@ -218,6 +253,7 @@ func (t *StreamTranslator) handleContentBlockStart(dataJSON []byte) ([]Event, bo
 	case ThinkingBlock:
 		t.currentBlockType = "thinking"
 		t.thinkingTextSeen = false
+
 		return []Event{reasoningSignaledEvent("")}, false, "", nil, nil
 	case RedactedThinkingBlock:
 		// Anthropic emits the entire opaque payload on the start event
@@ -227,6 +263,7 @@ func (t *StreamTranslator) handleContentBlockStart(dataJSON []byte) ([]Event, bo
 		// data blob on the event. The translator emits
 		// EventReasoningFinished on content_block_stop below.
 		t.currentBlockType = "redacted_thinking"
+
 		return []Event{
 			reasoningSignaledEvent("redacted"),
 			redactedThinkingDeltaEvent("[redacted]", b.Data),
@@ -244,30 +281,49 @@ func (t *StreamTranslator) openToolUseBlock(blockIdx int, block ToolUseBlock) []
 	idx := t.toolCallIndex
 	t.toolCallIndex++
 	t.toolCallByBlockIdx[blockIdx] = idx
-	return []Event{toolCallDeltaEvent([]OpenAIToolCall{{
-		Index: idx,
-		ID:    block.ID,
-		Type:  "function",
-		Function: OpenAIToolCallFunction{
-			Name:      block.Name,
-			Arguments: "",
-		},
-	}})}
+
+	return []Event{
+		toolCallDeltaEvent([]OpenAIToolCall{
+			{
+				Index: idx,
+				ID:    block.ID,
+				Type:  "function",
+				Function: OpenAIToolCallFunction{
+					Name:      block.Name,
+					Arguments: "",
+				},
+			},
+		}),
+	}
 }
 
 // handleContentBlockDelta dispatches the per-delta-type translation.
-func (t *StreamTranslator) handleContentBlockDelta(dataJSON []byte) ([]Event, bool, string, *OpenAIUsage, error) {
+func (t *StreamTranslator) handleContentBlockDelta(
+	dataJSON []byte,
+) ([]Event, bool, string, *OpenAIUsage, error) {
 	var ev struct {
 		Index int           `json:"index"`
 		Delta *AnthSSEDelta `json:"delta"`
 	}
 	if err := json.Unmarshal(dataJSON, &ev); err != nil {
-		slog.Warn("adapter.anthropic.stream.content_block_delta_unmarshal_failed", "concern", "adapter.providers.anthropic.request", "err", err)
-		return nil, false, "", nil, fmt.Errorf("unmarshal anthropic content_block_delta event: %w", err)
+		slog.Warn(
+			"adapter.anthropic.stream.content_block_delta_unmarshal_failed",
+			"concern",
+			"adapter.providers.anthropic.request",
+			"err",
+			err,
+		)
+
+		return nil, false, "", nil, fmt.Errorf(
+			"unmarshal anthropic content_block_delta event: %w",
+			err,
+		)
 	}
+
 	if ev.Delta == nil {
 		return nil, false, "", nil, nil
 	}
+
 	switch anthropicBackendSSEDelta(ev.Delta.Type) {
 	case anthropicBackendSSEDeltaText:
 		t.visibleText.WriteString(ev.Delta.Text)
@@ -278,6 +334,7 @@ func (t *StreamTranslator) handleContentBlockDelta(dataJSON []byte) ([]Event, bo
 		if ev.Delta.Thinking != "" {
 			t.thinkingTextSeen = true
 		}
+
 		return []Event{reasoningTextDeltaEvent(ev.Delta.Thinking)}, false, "", nil, nil
 	case anthropicBackendSSEDeltaSignature:
 		// A thinking block that reaches its signature_delta without ever
@@ -299,6 +356,7 @@ func (t *StreamTranslator) handleContentBlockDelta(dataJSON []byte) ([]Event, bo
 			t.thinkingTextSeen = true
 			return []Event{reasoningTextDeltaEvent(hiddenThinkingPlaceholder)}, false, "", nil, nil
 		}
+
 		return []Event{reasoningSignatureDeltaEvent(ev.Delta.Signature)}, false, "", nil, nil
 	default:
 		return nil, false, "", nil, nil
@@ -307,11 +365,15 @@ func (t *StreamTranslator) handleContentBlockDelta(dataJSON []byte) ([]Event, bo
 
 // toolArgumentsDelta emits a tool_call argument fragment, dropping empty
 // partial_json payloads that Cursor's SSE parser would treat as a finalize.
-func (t *StreamTranslator) toolArgumentsDelta(blockIdx int, partialJSON string) ([]Event, bool, string, *OpenAIUsage, error) {
+func (t *StreamTranslator) toolArgumentsDelta(
+	blockIdx int,
+	partialJSON string,
+) ([]Event, bool, string, *OpenAIUsage, error) {
 	tcIdx, ok := t.toolCallByBlockIdx[blockIdx]
 	if !ok {
 		return nil, false, "", nil, fmt.Errorf("unknown tool block index %d", blockIdx)
 	}
+
 	// Empty partial_json carries no information. Forwarding it
 	// produces a tool_call delta whose Function field is the
 	// zero value, which json:"function,omitzero" drops, leaving
@@ -322,13 +384,20 @@ func (t *StreamTranslator) toolArgumentsDelta(blockIdx int, partialJSON string) 
 	if partialJSON == "" {
 		return nil, false, "", nil, nil
 	}
-	return []Event{toolCallDeltaEvent([]OpenAIToolCall{{
-		Index: tcIdx,
-		Type:  "function",
-		Function: OpenAIToolCallFunction{
-			Arguments: partialJSON, Name: "",
-		}, ID: "",
-	}})}, false, "", nil, nil
+
+	return []Event{
+		toolCallDeltaEvent([]OpenAIToolCall{
+			{
+				Index: tcIdx,
+				Type:  "function",
+				Function: OpenAIToolCallFunction{
+					Arguments: partialJSON,
+					Name:      "",
+				},
+				ID: "",
+			},
+		}),
+	}, false, "", nil, nil
 }
 
 // handleContentBlockStop closes the active block and, for thinking blocks,
@@ -344,6 +413,7 @@ func (t *StreamTranslator) handleContentBlockStop() ([]Event, bool, string, *Ope
 		t.currentBlockType = ""
 		return []Event{reasoningFinishedEvent("")}, false, "", nil, nil
 	}
+
 	if t.currentBlockType == "redacted_thinking" {
 		t.currentBlockType = ""
 		// The data blob was already captured on the delta event in
@@ -352,12 +422,16 @@ func (t *StreamTranslator) handleContentBlockStop() ([]Event, bool, string, *Ope
 		// synthetic envelope.
 		return []Event{reasoningFinishedEvent("redacted")}, false, "", nil, nil
 	}
+
 	t.currentBlockType = ""
+
 	return nil, false, "", nil, nil
 }
 
 // handleMessageDelta records the upstream's stop reason and output-token count.
-func (t *StreamTranslator) handleMessageDelta(dataJSON []byte) ([]Event, bool, string, *OpenAIUsage, error) {
+func (t *StreamTranslator) handleMessageDelta(
+	dataJSON []byte,
+) ([]Event, bool, string, *OpenAIUsage, error) {
 	var ev struct {
 		Delta struct {
 			StopReason   string `json:"stop_reason"`
@@ -366,15 +440,25 @@ func (t *StreamTranslator) handleMessageDelta(dataJSON []byte) ([]Event, bool, s
 		Usage *AnthSSEUsage `json:"usage"`
 	}
 	if err := json.Unmarshal(dataJSON, &ev); err != nil {
-		slog.Warn("adapter.anthropic.stream.message_delta_unmarshal_failed", "concern", "adapter.providers.anthropic.request", "err", err)
+		slog.Warn(
+			"adapter.anthropic.stream.message_delta_unmarshal_failed",
+			"concern",
+			"adapter.providers.anthropic.request",
+			"err",
+			err,
+		)
+
 		return nil, false, "", nil, fmt.Errorf("unmarshal anthropic message_delta event: %w", err)
 	}
+
 	if ev.Delta.StopReason != "" {
 		t.lastStopReason = ev.Delta.StopReason
 	}
+
 	if ev.Usage != nil {
 		t.lastOutputTokens = ev.Usage.OutputTokens
 	}
+
 	return nil, false, "", nil, nil
 }
 
@@ -382,32 +466,51 @@ func (t *StreamTranslator) handleMessageDelta(dataJSON []byte) ([]Event, bool, s
 func (t *StreamTranslator) handleMessageStop() ([]Event, bool, string, *OpenAIUsage, error) {
 	reason := finishreason.FromAnthropicStream(t.lastStopReason)
 	u := &OpenAIUsage{
-		PromptTokens:     t.pendingInputTokens,
-		CompletionTokens: t.lastOutputTokens,
-		TotalTokens:      t.pendingInputTokens + t.lastOutputTokens, PromptTokensDetails: nil, CompletionTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0,
+		PromptTokens:            t.pendingInputTokens,
+		CompletionTokens:        t.lastOutputTokens,
+		TotalTokens:             t.pendingInputTokens + t.lastOutputTokens,
+		PromptTokensDetails:     nil,
+		CompletionTokensDetails: nil,
+		InputTokens:             0,
+		OutputTokens:            0,
+		CacheReadTokens:         0,
+		CacheWriteTokens:        0,
+		MaxTokens:               0,
 	}
 	var extra []Event
 	if t.lastStopReason == "refusal" && t.visibleText.Len() > 0 {
 		extra = append(extra, assistantRefusalDeltaEvent(t.visibleText.String()))
 	}
+
 	return extra, true, reason, u, nil
 }
 
 // handleStreamError surfaces an upstream error event as a Go error.
-func (t *StreamTranslator) handleStreamError(dataJSON []byte) ([]Event, bool, string, *OpenAIUsage, error) {
+func (t *StreamTranslator) handleStreamError(
+	dataJSON []byte,
+) ([]Event, bool, string, *OpenAIUsage, error) {
 	var ev struct {
 		Error struct {
 			Message string `json:"message"`
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(dataJSON, &ev); err != nil {
-		slog.Warn("adapter.anthropic.stream.error_event_unmarshal_failed", "concern", "adapter.providers.anthropic.request", "err", err)
+		slog.Warn(
+			"adapter.anthropic.stream.error_event_unmarshal_failed",
+			"concern",
+			"adapter.providers.anthropic.request",
+			"err",
+			err,
+		)
+
 		return nil, false, "", nil, fmt.Errorf("unmarshal anthropic error event: %w", err)
 	}
+
 	msg := strings.TrimSpace(ev.Error.Message)
 	if msg == "" {
 		msg = "anthropic stream error"
 	}
+
 	return nil, false, "", nil, fmt.Errorf("%s", msg)
 }
 

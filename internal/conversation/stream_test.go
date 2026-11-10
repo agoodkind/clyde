@@ -38,6 +38,7 @@ func (p *countingStreamParser) Stream(string, LoadOptions) iter.Seq2[transcript.
 			if i+1 > p.maxPulls {
 				p.maxPulls = i + 1
 			}
+
 			p.mu.Unlock()
 			msg := transcript.Message{
 				UUID:      strconv.Itoa(i),
@@ -100,6 +101,7 @@ func TestContextWindowByIndexStopsAtWindowEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("context window: %v", err)
 	}
+
 	if text == "" {
 		t.Fatalf("context window text was empty")
 	}
@@ -110,9 +112,18 @@ func TestContextWindowByIndexStopsAtWindowEnd(t *testing.T) {
 
 	wantEnd := center + after + 1
 	if pulled != wantEnd {
-		t.Fatalf("pulled %d messages, want exactly %d (window end); the read must stop before EOF", pulled, wantEnd)
+		t.Fatalf(
+			"pulled %d messages, want exactly %d (window end); the read must stop before EOF",
+			pulled,
+			wantEnd,
+		)
 	}
+
 	if pulled >= parser.total {
-		t.Fatalf("pulled %d messages, the window read consumed the whole conversation of %d", pulled, parser.total)
+		t.Fatalf(
+			"pulled %d messages, the window read consumed the whole conversation of %d",
+			pulled,
+			parser.total,
+		)
 	}
 }

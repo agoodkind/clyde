@@ -82,24 +82,28 @@ func TestProviderExecuteAuthErrorSurfaces(t *testing.T) {
 func TestProviderExecuteHonorsWebsocketDisabled(t *testing.T) {
 	var sawHTTP atomic.Bool
 	var sawWebsocket atomic.Bool
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/backend-api/wham/usage":
-			_, _ = w.Write([]byte(`{}`))
-		case "/backend-api/codex/responses":
-			if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
-				sawWebsocket.Store(true)
-				w.WriteHeader(http.StatusBadRequest)
-				return
+	server := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/backend-api/wham/usage":
+				_, _ = w.Write([]byte(`{}`))
+			case "/backend-api/codex/responses":
+				if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+					sawWebsocket.Store(true)
+					w.WriteHeader(http.StatusBadRequest)
+
+					return
+				}
+
+				sawHTTP.Store(true)
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = w.Write([]byte(codexHTTPSSEBodyForTest(t)))
+			default:
+				t.Errorf("unexpected path: %s", r.URL.Path)
+				w.WriteHeader(http.StatusNotFound)
 			}
-			sawHTTP.Store(true)
-			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = w.Write([]byte(codexHTTPSSEBodyForTest(t)))
-		default:
-			t.Errorf("unexpected path: %s", r.URL.Path)
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
+		}),
+	)
 	defer server.Close()
 
 	deps := adapterprovider.Deps{
@@ -110,26 +114,38 @@ func TestProviderExecuteHonorsWebsocketDisabled(t *testing.T) {
 	deps.Config.Codex.WebsocketEnabled = false
 	provider := NewProvider(deps, ProviderOptions{})
 	writer := &capturingWriter{}
-	_, err := provider.Execute(context.Background(), adapterresolver.ResolvedRequest{
-		Model: "gpt-future",
-		OpenAI: adapteropenai.ChatRequest{Messages: []adapteropenai.ChatMessage{{
-			Role:    "user",
-			Content: json.RawMessage(`"hello"`),
-		}}},
-	}, writer)
+	_, err := provider.Execute(
+		context.Background(),
+		adapterresolver.ResolvedRequest{
+			Model: "gpt-future",
+			OpenAI: adapteropenai.ChatRequest{
+				Messages: []adapteropenai.ChatMessage{
+					{
+						Role:    "user",
+						Content: json.RawMessage(`"hello"`),
+					},
+				},
+			},
+		},
+		writer,
+	)
 	if err != nil {
 		t.Fatalf("Execute() err = %v", err)
 	}
+
 	if !sawHTTP.Load() || sawWebsocket.Load() {
 		t.Fatalf("transport calls: HTTP=%v websocket=%v", sawHTTP.Load(), sawWebsocket.Load())
 	}
 }
 
 func TestProbeUsageWarningsReturnsNormalizedWindows(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/backend-api/wham/usage":
-			_, _ = w.Write([]byte(`{
+	server := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/backend-api/wham/usage":
+				_, _ = w.Write(
+					[]byte(
+						`{
 				"rate_limit": {
 					"secondary_window": {
 						"used_percent": 93,
@@ -137,27 +153,41 @@ func TestProbeUsageWarningsReturnsNormalizedWindows(t *testing.T) {
 						"reset_at": 1735855200
 					}
 				}
-			}`))
-		case "/backend-api/codex/responses":
-			upgrader := websocket.Upgrader{}
-			conn, err := upgrader.Upgrade(w, r, nil)
-			if err != nil {
-				t.Fatalf("upgrade: %v", err)
+			}`,
+					),
+				)
+			case "/backend-api/codex/responses":
+				upgrader := websocket.Upgrader{}
+				conn, err := upgrader.Upgrade(w, r, nil)
+				if err != nil {
+					t.Fatalf("upgrade: %v", err)
+				}
+
+				defer func() { _ = conn.Close() }()
+				if _, _, err := conn.ReadMessage(); err != nil {
+					t.Fatalf("read request: %v", err)
+				}
+
+				if err := conn.WriteMessage(
+					1,
+					[]byte(`{"type":"response.output_text.delta","delta":"answer"}`),
+				); err != nil {
+					t.Fatalf("write delta: %v", err)
+				}
+
+				if err := conn.WriteMessage(
+					1,
+					[]byte(
+						`{"type":"response.completed","response":{"id":"resp-1","status":"completed","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+					),
+				); err != nil {
+					t.Fatalf("write complete: %v", err)
+				}
+			default:
+				t.Fatalf("unexpected path: %s", r.URL.Path)
 			}
-			defer func() { _ = conn.Close() }()
-			if _, _, err := conn.ReadMessage(); err != nil {
-				t.Fatalf("read request: %v", err)
-			}
-			if err := conn.WriteMessage(1, []byte(`{"type":"response.output_text.delta","delta":"answer"}`)); err != nil {
-				t.Fatalf("write delta: %v", err)
-			}
-			if err := conn.WriteMessage(1, []byte(`{"type":"response.completed","response":{"id":"resp-1","status":"completed","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`)); err != nil {
-				t.Fatalf("write complete: %v", err)
-			}
-		default:
-			t.Fatalf("unexpected path: %s", r.URL.Path)
-		}
-	}))
+		}),
+	)
 	defer server.Close()
 
 	deps := adapterprovider.Deps{
@@ -169,48 +199,64 @@ func TestProbeUsageWarningsReturnsNormalizedWindows(t *testing.T) {
 	deps.Config.Codex.WebsocketEnabled = true
 	p := NewProvider(deps, ProviderOptions{AccountID: "acct-123"})
 	w := &capturingWriter{}
-	result, err := p.Execute(context.Background(), adapterresolver.ResolvedRequest{
-		Model:  "gpt-5.4",
-		Effort: adapterresolver.EffortMedium,
-		OpenAI: adapteropenai.ChatRequest{
-			Messages: []adapteropenai.ChatMessage{{
-				Role:    "user",
-				Content: json.RawMessage(`"hello"`),
-			}},
+	result, err := p.Execute(
+		context.Background(),
+		adapterresolver.ResolvedRequest{
+			Model:  "gpt-5.4",
+			Effort: adapterresolver.EffortMedium,
+			OpenAI: adapteropenai.ChatRequest{
+				Messages: []adapteropenai.ChatMessage{
+					{
+						Role:    "user",
+						Content: json.RawMessage(`"hello"`),
+					},
+				},
+			},
 		},
-	}, w)
+		w,
+	)
 	if err != nil {
 		t.Fatalf("Execute() err = %v", err)
 	}
+
 	if len(w.events) != 2 {
 		t.Fatalf("events len=%d want 2", len(w.events))
 	}
+
 	if td, ok := w.events[0].(adapterrender.TextDelta); !ok || td.Text != "answer" {
 		t.Fatalf("assistant event=%+v", w.events[0])
 	}
+
 	if _, ok := w.events[1].(adapterrender.ReasoningFinished); !ok {
 		t.Fatalf("final event type=%T want ReasoningFinished", w.events[1])
 	}
+
 	if len(result.UsageNoticeWindows) != 1 {
 		t.Fatalf("usage notice windows len=%d want 1", len(result.UsageNoticeWindows))
 	}
+
 	window := result.UsageNoticeWindows[0]
 	if window.Provider != "codex" || window.WindowKey != "weekly" {
 		t.Fatalf("window=%+v", window)
 	}
+
 	if window.UsedPercent != 93 {
 		t.Fatalf("used percent=%v", window.UsedPercent)
 	}
+
 	if result.ReasoningSummary != "" {
 		t.Fatalf("reasoning summary=%q", result.ReasoningSummary)
 	}
 }
 
 func TestProviderExecuteSkipsUsageWarningWhenConfiguredThresholdNotMet(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/backend-api/wham/usage":
-			_, _ = w.Write([]byte(`{
+	server := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/backend-api/wham/usage":
+				_, _ = w.Write(
+					[]byte(
+						`{
 				"rate_limit": {
 					"secondary_window": {
 						"used_percent": 80,
@@ -218,27 +264,41 @@ func TestProviderExecuteSkipsUsageWarningWhenConfiguredThresholdNotMet(t *testin
 						"reset_at": 1735689600
 					}
 				}
-			}`))
-		case "/backend-api/codex/responses":
-			upgrader := websocket.Upgrader{}
-			conn, err := upgrader.Upgrade(w, r, nil)
-			if err != nil {
-				t.Fatalf("upgrade: %v", err)
+			}`,
+					),
+				)
+			case "/backend-api/codex/responses":
+				upgrader := websocket.Upgrader{}
+				conn, err := upgrader.Upgrade(w, r, nil)
+				if err != nil {
+					t.Fatalf("upgrade: %v", err)
+				}
+
+				defer func() { _ = conn.Close() }()
+				if _, _, err := conn.ReadMessage(); err != nil {
+					t.Fatalf("read request: %v", err)
+				}
+
+				if err := conn.WriteMessage(
+					1,
+					[]byte(`{"type":"response.output_text.delta","delta":"answer"}`),
+				); err != nil {
+					t.Fatalf("write delta: %v", err)
+				}
+
+				if err := conn.WriteMessage(
+					1,
+					[]byte(
+						`{"type":"response.completed","response":{"id":"resp-1","status":"completed","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+					),
+				); err != nil {
+					t.Fatalf("write complete: %v", err)
+				}
+			default:
+				t.Fatalf("unexpected path: %s", r.URL.Path)
 			}
-			defer func() { _ = conn.Close() }()
-			if _, _, err := conn.ReadMessage(); err != nil {
-				t.Fatalf("read request: %v", err)
-			}
-			if err := conn.WriteMessage(1, []byte(`{"type":"response.output_text.delta","delta":"answer"}`)); err != nil {
-				t.Fatalf("write delta: %v", err)
-			}
-			if err := conn.WriteMessage(1, []byte(`{"type":"response.completed","response":{"id":"resp-1","status":"completed","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`)); err != nil {
-				t.Fatalf("write complete: %v", err)
-			}
-		default:
-			t.Fatalf("unexpected path: %s", r.URL.Path)
-		}
-	}))
+		}),
+	)
 	defer server.Close()
 
 	deps := adapterprovider.Deps{
@@ -251,38 +311,51 @@ func TestProviderExecuteSkipsUsageWarningWhenConfiguredThresholdNotMet(t *testin
 	deps.Config.Codex.WebsocketEnabled = true
 	p := NewProvider(deps, ProviderOptions{AccountID: "acct-123"})
 	w := &capturingWriter{}
-	result, err := p.Execute(context.Background(), adapterresolver.ResolvedRequest{
-		Model:  "gpt-5.4",
-		Effort: adapterresolver.EffortMedium,
-		OpenAI: adapteropenai.ChatRequest{
-			Messages: []adapteropenai.ChatMessage{{
-				Role:    "user",
-				Content: json.RawMessage(`"hello"`),
-			}},
+	result, err := p.Execute(
+		context.Background(),
+		adapterresolver.ResolvedRequest{
+			Model:  "gpt-5.4",
+			Effort: adapterresolver.EffortMedium,
+			OpenAI: adapteropenai.ChatRequest{
+				Messages: []adapteropenai.ChatMessage{
+					{
+						Role:    "user",
+						Content: json.RawMessage(`"hello"`),
+					},
+				},
+			},
 		},
-	}, w)
+		w,
+	)
 	if err != nil {
 		t.Fatalf("Execute() err = %v", err)
 	}
+
 	if len(w.events) != 2 {
 		t.Fatalf("events len=%d want 2", len(w.events))
 	}
+
 	if td, ok := w.events[0].(adapterrender.TextDelta); !ok || td.Text != "answer" {
 		t.Fatalf("assistant event=%+v", w.events[0])
 	}
+
 	if _, ok := w.events[1].(adapterrender.ReasoningFinished); !ok {
 		t.Fatalf("final event type=%T want ReasoningFinished", w.events[1])
 	}
+
 	if result.ReasoningSummary != "" {
 		t.Fatalf("reasoning summary=%q", result.ReasoningSummary)
 	}
 }
 
 func TestProviderExecuteSkipsUsageWarningWhenFinishReasonIsNotStop(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/backend-api/wham/usage":
-			_, _ = w.Write([]byte(`{
+	server := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/backend-api/wham/usage":
+				_, _ = w.Write(
+					[]byte(
+						`{
 				"rate_limit": {
 					"secondary_window": {
 						"used_percent": 93,
@@ -290,28 +363,37 @@ func TestProviderExecuteSkipsUsageWarningWhenFinishReasonIsNotStop(t *testing.T)
 						"reset_at": 1735855200
 					}
 				}
-			}`))
-		case "/backend-api/codex/responses":
-			upgrader := websocket.Upgrader{}
-			conn, err := upgrader.Upgrade(w, r, nil)
-			if err != nil {
-				t.Fatalf("upgrade: %v", err)
+			}`,
+					),
+				)
+			case "/backend-api/codex/responses":
+				upgrader := websocket.Upgrader{}
+				conn, err := upgrader.Upgrade(w, r, nil)
+				if err != nil {
+					t.Fatalf("upgrade: %v", err)
+				}
+
+				defer func() { _ = conn.Close() }()
+				if _, _, err := conn.ReadMessage(); err != nil {
+					t.Fatalf("read request: %v", err)
+				}
+
+				if err := conn.WriteMessage(
+					1,
+					[]byte(`{"type":"response.output_text.delta","delta":"partial"}`),
+				); err != nil {
+					t.Fatalf("write delta: %v", err)
+				}
+
+				payload := `{"type":"response.completed","response":{"id":"resp-1","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`
+				if err := conn.WriteMessage(1, []byte(payload)); err != nil {
+					t.Fatalf("write complete: %v", err)
+				}
+			default:
+				t.Fatalf("unexpected path: %s", r.URL.Path)
 			}
-			defer func() { _ = conn.Close() }()
-			if _, _, err := conn.ReadMessage(); err != nil {
-				t.Fatalf("read request: %v", err)
-			}
-			if err := conn.WriteMessage(1, []byte(`{"type":"response.output_text.delta","delta":"partial"}`)); err != nil {
-				t.Fatalf("write delta: %v", err)
-			}
-			payload := `{"type":"response.completed","response":{"id":"resp-1","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`
-			if err := conn.WriteMessage(1, []byte(payload)); err != nil {
-				t.Fatalf("write complete: %v", err)
-			}
-		default:
-			t.Fatalf("unexpected path: %s", r.URL.Path)
-		}
-	}))
+		}),
+	)
 	defer server.Close()
 
 	deps := adapterprovider.Deps{
@@ -323,28 +405,38 @@ func TestProviderExecuteSkipsUsageWarningWhenFinishReasonIsNotStop(t *testing.T)
 	deps.Config.Codex.WebsocketEnabled = true
 	p := NewProvider(deps, ProviderOptions{AccountID: "acct-123"})
 	w := &capturingWriter{}
-	result, err := p.Execute(context.Background(), adapterresolver.ResolvedRequest{
-		Model:  "gpt-5.4",
-		Effort: adapterresolver.EffortMedium,
-		OpenAI: adapteropenai.ChatRequest{
-			Messages: []adapteropenai.ChatMessage{{
-				Role:    "user",
-				Content: json.RawMessage(`"hello"`),
-			}},
+	result, err := p.Execute(
+		context.Background(),
+		adapterresolver.ResolvedRequest{
+			Model:  "gpt-5.4",
+			Effort: adapterresolver.EffortMedium,
+			OpenAI: adapteropenai.ChatRequest{
+				Messages: []adapteropenai.ChatMessage{
+					{
+						Role:    "user",
+						Content: json.RawMessage(`"hello"`),
+					},
+				},
+			},
 		},
-	}, w)
+		w,
+	)
 	if err != nil {
 		t.Fatalf("Execute() err = %v", err)
 	}
+
 	if result.FinishReason != "length" {
 		t.Fatalf("finish reason=%q", result.FinishReason)
 	}
+
 	if len(w.events) != 2 {
 		t.Fatalf("events len=%d want 2", len(w.events))
 	}
+
 	if td, ok := w.events[0].(adapterrender.TextDelta); !ok || td.Text != "partial" {
 		t.Fatalf("assistant event=%+v", w.events[0])
 	}
+
 	if _, ok := w.events[1].(adapterrender.ReasoningFinished); !ok {
 		t.Fatalf("final event type=%T want ReasoningFinished", w.events[1])
 	}
@@ -354,6 +446,7 @@ func TestCodexBaseURLDefaults(t *testing.T) {
 	if got := codexBaseURL(""); got != "https://chatgpt.com/backend-api/codex/responses" {
 		t.Errorf("codexBaseURL(\"\") = %q, want default", got)
 	}
+
 	custom := "https://example.com/codex"
 	if got := codexBaseURL(custom); got != custom {
 		t.Errorf("codexBaseURL custom = %q, want %q", got, custom)
@@ -421,6 +514,7 @@ func TestBuildRequestConsumesResolvedRequestCodexFields(t *testing.T) {
 	if out.Model != "gpt-5.3-codex" {
 		t.Errorf("Model = %q, want gpt-5.3-codex", out.Model)
 	}
+
 	if !strings.HasPrefix(out.Instructions, "model base instructions") {
 		t.Errorf("Instructions = %q, want model base instructions prefix", out.Instructions)
 	}

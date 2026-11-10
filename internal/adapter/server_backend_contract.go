@@ -17,7 +17,12 @@ import (
 // place before control passes to a backend package. Returns an *adapterError
 // for unsupported overrides; callers should route the error through the
 // adapter boundary (return it from an adapterHandler).
-func (s *Server) applyBackendOverride(r *http.Request, req ChatRequest, resolved *adapterresolver.ResolvedRequest, reqID string) error {
+func (s *Server) applyBackendOverride(
+	r *http.Request,
+	req ChatRequest,
+	resolved *adapterresolver.ResolvedRequest,
+	reqID string,
+) error {
 	override := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Clyde-Backend")))
 	if override == "" {
 		return nil
@@ -29,8 +34,10 @@ func (s *Server) applyBackendOverride(r *http.Request, req ChatRequest, resolved
 	case BackendClaude, BackendAnthropic, BackendPassthroughOverride, BackendCodex:
 		resolved.Provider = overrideBackend
 	default:
-		return newAdapterError(adapterErrorUnsupportedBackend,
-			"X-Clyde-Backend must be one of: anthropic, passthrough_override, codex")
+		return newAdapterError(
+			adapterErrorUnsupportedBackend,
+			"X-Clyde-Backend must be one of: anthropic, passthrough_override, codex",
+		)
 	}
 
 	attrs := []slog.Attr{
@@ -40,7 +47,13 @@ func (s *Server) applyBackendOverride(r *http.Request, req ChatRequest, resolved
 		slog.String("to", override),
 	}
 	attrs = append(attrs, correlation.AttrsFromContext(r.Context())...)
-	s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.backend.overridden", append([]slog.Attr{slog.String("concern", "adapter.chat.dispatch")}, attrs...)...)
+	s.log.LogAttrs(
+		r.Context(),
+		slog.LevelInfo,
+		"adapter.backend.overridden",
+		append([]slog.Attr{slog.String("concern", "adapter.chat.dispatch")}, attrs...)...,
+	)
+
 	return nil
 }
 
@@ -66,7 +79,12 @@ func (s *Server) dispatchResolvedChat(
 		slog.Bool("stream", req.Stream),
 	}
 	attrs = append(attrs, correlation.AttrsFromContext(r.Context())...)
-	s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.backend.dispatching", append([]slog.Attr{slog.String("concern", "adapter.chat.dispatch")}, attrs...)...)
+	s.log.LogAttrs(
+		r.Context(),
+		slog.LevelInfo,
+		"adapter.backend.dispatching",
+		append([]slog.Attr{slog.String("concern", "adapter.chat.dispatch")}, attrs...)...,
+	)
 
 	// Passthrough is a raw HTTP forward, not an Execute(EventWriter)
 	// provider: forwardPassthroughOverride generates its own request ID,
@@ -114,15 +132,20 @@ func (s *Server) dispatchResolvedChat(
 	}
 }
 
-func (s *Server) lookupResolvedProvider(resolved *adapterresolver.ResolvedRequest, alias string) (adapterprovider.Provider, *adapterError) {
+func (s *Server) lookupResolvedProvider(
+	resolved *adapterresolver.ResolvedRequest,
+	alias string,
+) (adapterprovider.Provider, *adapterError) {
 	lookupID, known := canonicalProviderID(resolved.Provider)
 	if !known {
 		return nil, unsupportedBackendError(resolved, alias)
 	}
+
 	provider, lookupErr := s.providerRegistry.Lookup(lookupID)
 	if lookupErr != nil || provider == nil {
 		return nil, upstreamUnavailableForProvider(lookupID, resolved, alias)
 	}
+
 	return provider, nil
 }
 
@@ -143,6 +166,7 @@ func canonicalProviderID(id adapterresolver.ProviderID) (adapterresolver.Provide
 		// here so a stray passthrough id cannot reach the provider switch.
 		return id, false
 	}
+
 	return id, false
 }
 
@@ -151,11 +175,17 @@ func canonicalProviderID(id adapterresolver.ProviderID) (adapterresolver.Provide
 // provider mapping or the resolved backend is not a known provider
 // family. The message and code match the arms the previous switch
 // produced.
-func unsupportedBackendError(resolved *adapterresolver.ResolvedRequest, alias string) *adapterError {
-	err := newAdapterError(adapterErrorUnsupportedBackend,
-		"model resolved to unsupported backend "+resolved.Provider.String()+"; configure anthropic, codex, or passthrough_override explicitly")
+func unsupportedBackendError(
+	resolved *adapterresolver.ResolvedRequest,
+	alias string,
+) *adapterError {
+	err := newAdapterError(
+		adapterErrorUnsupportedBackend,
+		"model resolved to unsupported backend "+resolved.Provider.String()+"; configure anthropic, codex, or passthrough_override explicitly",
+	)
 	err.Backend = resolved.Provider.String()
 	err.ModelAlias = alias
+
 	return err
 }
 
@@ -164,7 +194,11 @@ func unsupportedBackendError(resolved *adapterresolver.ResolvedRequest, alias st
 // registered (or registered as nil), meaning the upstream is not enabled
 // in config. The provider-scoped message matches what the previous
 // per-backend arms produced.
-func upstreamUnavailableForProvider(id adapterresolver.ProviderID, resolved *adapterresolver.ResolvedRequest, alias string) *adapterError {
+func upstreamUnavailableForProvider(
+	id adapterresolver.ProviderID,
+	resolved *adapterresolver.ResolvedRequest,
+	alias string,
+) *adapterError {
 	message := "backend " + id.String() + " is not enabled"
 	provider := id.String()
 	switch id {
@@ -176,9 +210,11 @@ func upstreamUnavailableForProvider(id adapterresolver.ProviderID, resolved *ada
 		provider = "codex"
 	case BackendClaude, BackendPassthroughOverride:
 	}
+
 	err := newAdapterError(adapterErrorUpstreamUnavailable, message)
 	err.Provider = provider
 	err.Backend = resolved.Provider.String()
 	err.ModelAlias = alias
+
 	return err
 }

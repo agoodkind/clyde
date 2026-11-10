@@ -4,6 +4,7 @@ import "testing"
 
 func TestFormatHumanBytes(t *testing.T) {
 	t.Parallel()
+
 	cases := []struct {
 		n    int64
 		want string
@@ -18,11 +19,14 @@ func TestFormatHumanBytes(t *testing.T) {
 		{1024 * 1024 * 1024, "1.0 GB"},
 	}
 	for _, tc := range cases {
-		t.Run(tc.want, func(t *testing.T) {
-			t.Parallel()
-			if got := FormatHumanBytes(tc.n); got != tc.want {
-				t.Fatalf("FormatHumanBytes(%d) = %q, want %q", tc.n, got, tc.want)
-			}
-		})
+		t.Run(
+			tc.want,
+			func(t *testing.T) {
+				t.Parallel()
+				if got := FormatHumanBytes(tc.n); got != tc.want {
+					t.Fatalf("FormatHumanBytes(%d) = %q, want %q", tc.n, got, tc.want)
+				}
+			},
+		)
 	}
 }

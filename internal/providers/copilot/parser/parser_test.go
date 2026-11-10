@@ -24,20 +24,26 @@ func TestScanRecordsMapsSchemaVersionOneRootAndSubagent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, ok := New().ScanRecords(t.Context(), conversation.MultiConversationScan{
-		Candidate: conversation.ScanCandidate{
-			Path:  path,
-			Stamp: conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()},
+
+	result, ok := New().ScanRecords(
+		t.Context(),
+		conversation.MultiConversationScan{
+			Candidate: conversation.ScanCandidate{
+				Path:  path,
+				Stamp: conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()},
+			},
+			PriorRecords: nil,
+			StartOffset:  0,
 		},
-		PriorRecords: nil,
-		StartOffset:  0,
-	})
+	)
 	if !ok {
 		t.Fatal("ScanRecords returned false")
 	}
+
 	if len(result.Records) != 2 {
 		t.Fatalf("records = %d, want root and subagent", len(result.Records))
 	}
+
 	if want := int64(strings.LastIndex(body, `{"id":"partial"`)); result.CompleteOffset != want {
 		t.Fatalf("complete offset = %d, want %d", result.CompleteOffset, want)
 	}
@@ -47,12 +53,15 @@ func TestScanRecordsMapsSchemaVersionOneRootAndSubagent(t *testing.T) {
 	if root.ID != "copilot:session-1" || root.Title != "root request" {
 		t.Fatalf("root record = %+v", root)
 	}
+
 	if root.WorkspaceRoot != "/repo" || root.Model != "root-model" {
 		t.Fatalf("root workspace/model = %q/%q", root.WorkspaceRoot, root.Model)
 	}
+
 	if want := parseTime("2026-08-07T10:00:00Z"); !root.CreatedAt.Equal(want) {
 		t.Fatalf("root created = %v, want schema start time %v", root.CreatedAt, want)
 	}
+
 	if root.Lineage == nil || root.Lineage.ParentNativeID != "parent-session" ||
 		root.Origin != conversation.OriginSubagent {
 		t.Fatalf("detached root lineage = %+v, origin = %q", root.Lineage, root.Origin)
@@ -62,9 +71,11 @@ func TestScanRecordsMapsSchemaVersionOneRootAndSubagent(t *testing.T) {
 	if child.ID != "copilot:session-1:agent:agent-1" || child.Title != "Researcher" {
 		t.Fatalf("subagent record = %+v", child)
 	}
+
 	if child.Model != "subagent-model" {
 		t.Fatalf("subagent model = %q, want subagent-model", child.Model)
 	}
+
 	if child.Lineage == nil || child.Lineage.ParentNativeID != rootSessionID ||
 		child.Lineage.ParentMessageUUID != "call-agent" {
 		t.Fatalf("subagent lineage = %+v", child.Lineage)
@@ -78,12 +89,14 @@ func TestDiscoverReturnsOneCandidatePerArtifact(t *testing.T) {
 	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+
 	writeFile(t, filepath.Join(sessionDir, "events.jsonl"), schemaFixture(false))
 
 	candidates, err := New().Discover(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if len(candidates) != 1 || candidates[0].Selector != "" {
 		t.Fatalf("candidates = %+v, want one physical artifact", candidates)
 	}
@@ -92,16 +105,25 @@ func TestDiscoverReturnsOneCandidatePerArtifact(t *testing.T) {
 func TestScanRecordStopsAfterRootMetadata(t *testing.T) {
 	events := []event{
 		{
-			ID: "1", Timestamp: "2026-08-07T10:00:00Z", Type: eventSessionStart,
-			Data: json.RawMessage(`{"version":1,"sessionId":"session-1","startTime":"2026-08-07T10:00:00Z","selectedModel":"root-model","context":{"cwd":"/repo"}}`),
+			ID:        "1",
+			Timestamp: "2026-08-07T10:00:00Z",
+			Type:      eventSessionStart,
+			Data: json.RawMessage(
+				`{"version":1,"sessionId":"session-1","startTime":"2026-08-07T10:00:00Z","selectedModel":"root-model","context":{"cwd":"/repo"}}`,
+			),
 		},
 		{
-			ID: "2", Timestamp: "2026-08-07T10:00:01Z", Type: eventUserMessage,
-			Data: json.RawMessage(`{"content":"root request"}`),
+			ID:        "2",
+			Timestamp: "2026-08-07T10:00:01Z",
+			Type:      eventUserMessage,
+			Data:      json.RawMessage(`{"content":"root request"}`),
 		},
 		{
-			ID: "3", Timestamp: "2026-08-07T10:00:02Z", AgentID: "agent-1", Type: eventSubagentStarted,
-			Data: json.RawMessage(`{"agentDisplayName":"must not be read"}`),
+			ID:        "3",
+			Timestamp: "2026-08-07T10:00:02Z",
+			AgentID:   "agent-1",
+			Type:      eventSubagentStarted,
+			Data:      json.RawMessage(`{"agentDisplayName":"must not be read"}`),
 		},
 	}
 	visited := 0
@@ -112,6 +134,7 @@ func TestScanRecordStopsAfterRootMetadata(t *testing.T) {
 				return nil
 			}
 		}
+
 		return nil
 	}
 	record, ok := scanRootRecord(
@@ -121,6 +144,7 @@ func TestScanRecordStopsAfterRootMetadata(t *testing.T) {
 	if !ok || record.ID != "copilot:session-1" || record.Title != "root request" {
 		t.Fatalf("scanRootRecord = (%+v, %v)", record, ok)
 	}
+
 	if visited != 2 {
 		t.Fatalf("visited = %d, want 2", visited)
 	}
@@ -128,18 +152,28 @@ func TestScanRecordStopsAfterRootMetadata(t *testing.T) {
 
 func TestScanRecordStopsAtMetadataLineLimitWithoutUserMessage(t *testing.T) {
 	var body strings.Builder
-	body.WriteString(`{"id":"1","timestamp":"2026-08-07T10:00:00Z","type":"session.start","data":{"version":1,"sessionId":"session-1","startTime":"2026-08-07T10:00:00Z"}}` + "\n")
+	body.WriteString(
+		`{"id":"1","timestamp":"2026-08-07T10:00:00Z","type":"session.start","data":{"version":1,"sessionId":"session-1","startTime":"2026-08-07T10:00:00Z"}}` + "\n",
+	)
+
 	for i := 1; i < 128; i++ {
 		body.WriteString("not-json\n")
 	}
-	body.WriteString(`{"id":"129","timestamp":"2026-08-07T10:00:02Z","type":"user.message","data":{"content":"must not be read"}}` + "\n")
+
+	body.WriteString(
+		`{"id":"129","timestamp":"2026-08-07T10:00:02Z","type":"user.message","data":{"content":"must not be read"}}` + "\n",
+	)
 	path := filepath.Join(t.TempDir(), "events.jsonl")
 	writeFile(t, path, body.String())
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, ok := New().ScanRecord(path, conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()})
+
+	record, ok := New().ScanRecord(
+		path,
+		conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()},
+	)
 	if !ok || record.Title != rootSessionID || !record.TitleUncertain {
 		t.Fatalf("ScanRecord = (%+v, %v), want provisional root", record, ok)
 	}
@@ -152,11 +186,18 @@ func TestScanRecordsRequiresSchemaVersionOne(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, ok := New().ScanRecords(t.Context(), conversation.MultiConversationScan{
-		Candidate:    conversation.ScanCandidate{Path: path, Stamp: conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()}},
-		PriorRecords: nil,
-		StartOffset:  0,
-	})
+
+	result, ok := New().ScanRecords(
+		t.Context(),
+		conversation.MultiConversationScan{
+			Candidate: conversation.ScanCandidate{
+				Path:  path,
+				Stamp: conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()},
+			},
+			PriorRecords: nil,
+			StartOffset:  0,
+		},
+	)
 	if ok || len(result.Records) != 0 {
 		t.Fatalf("ScanRecords = (%+v, %v), want unsupported schema rejected", result, ok)
 	}
@@ -166,16 +207,22 @@ func TestStreamSelectedMapsSchemaEventsAndOptions(t *testing.T) {
 	path, _ := writeSchemaFixture(t, false)
 	parser := New()
 
-	root, err := conversation.CollectMessages(parser.StreamSelected(path, "", conversation.LoadOptions{}))
+	root, err := conversation.CollectMessages(
+		parser.StreamSelected(path, "", conversation.LoadOptions{}),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := messageTexts(root); strings.Contains(got, "skill context") || strings.Contains(got, "system prompt") {
+
+	if got := messageTexts(root); strings.Contains(got, "skill context") ||
+		strings.Contains(got, "system prompt") {
 		t.Fatalf("default root messages exposed gated content: %q", got)
 	}
+
 	if !strings.Contains(messageTexts(root), "after malformed") {
 		t.Fatalf("stream stopped after malformed complete record: %q", messageTexts(root))
 	}
+
 	if strings.Contains(messageTexts(root), "partial") {
 		t.Fatalf("stream decoded incomplete trailing record: %q", messageTexts(root))
 	}
@@ -183,6 +230,7 @@ func TestStreamSelectedMapsSchemaEventsAndOptions(t *testing.T) {
 	var user transcript.Message
 	var assistant transcript.Message
 	var compaction transcript.Message
+
 	for _, message := range root {
 		switch {
 		case message.Role == "user" && message.Text == "root request":
@@ -193,53 +241,73 @@ func TestStreamSelectedMapsSchemaEventsAndOptions(t *testing.T) {
 			compaction = message
 		}
 	}
+
 	if len(user.Attachments) != 1 {
 		t.Fatalf("user attachments = %+v", user.Attachments)
 	}
+
 	attachment := user.Attachments[0]
-	if attachment.Kind != "directory" || attachment.DisplayName != "source" || attachment.Path != "/repo/source" {
+	if attachment.Kind != "directory" || attachment.DisplayName != "source" ||
+		attachment.Path != "/repo/source" {
 		t.Fatalf("directory attachment = %+v", attachment)
 	}
+
 	if len(assistant.Tools) != 2 || assistant.Tools[0].Display != "Inspect files" ||
 		assistant.Tools[1].Display != "Read file" || assistant.Thinking != "readable reasoning" {
 		t.Fatalf("assistant mapping = %+v", assistant)
 	}
+
 	if compaction.Text != "compact summary" || compaction.Compaction.PreTokens != 100 ||
 		compaction.Compaction.PostTokens != 40 || compaction.Compaction.TokensSaved != 60 ||
 		compaction.Compaction.MessagesSummarized != 7 {
 		t.Fatalf("compaction = %+v", compaction)
 	}
 
-	withOutputs, err := conversation.CollectMessages(parser.StreamSelected(path, "", conversation.LoadOptions{IncludeToolOutputs: true}))
+	withOutputs, err := conversation.CollectMessages(
+		parser.StreamSelected(path, "", conversation.LoadOptions{IncludeToolOutputs: true}),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	for _, message := range withOutputs {
 		if len(message.Tools) == 0 {
 			continue
 		}
+
 		if message.Tools[0].Output != "tool output" || message.Tools[0].IsError {
 			t.Fatalf("tool output = %+v", message.Tools[0])
 		}
 	}
 
 	tally := &transcript.HarnessStrips{}
-	all, err := conversation.CollectMessages(parser.StreamSelected(path, "", conversation.LoadOptions{
-		IncludeSystemPrompts: true,
-		IncludeInjected:      true,
-		HarnessTally:         tally,
-	}))
+	all, err := conversation.CollectMessages(
+		parser.StreamSelected(
+			path,
+			"",
+			conversation.LoadOptions{
+				IncludeSystemPrompts: true,
+				IncludeInjected:      true,
+				HarnessTally:         tally,
+			},
+		),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := messageTexts(all); !strings.Contains(got, "skill context") || !strings.Contains(got, "system prompt") {
+
+	if got := messageTexts(all); !strings.Contains(got, "skill context") ||
+		!strings.Contains(got, "system prompt") {
 		t.Fatalf("explicit options omitted gated content: %q", got)
 	}
 
-	child, err := conversation.CollectMessages(parser.StreamSelected(path, agentID, conversation.LoadOptions{}))
+	child, err := conversation.CollectMessages(
+		parser.StreamSelected(path, agentID, conversation.LoadOptions{}),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if got := messageTexts(child); got != "subagent prompt|subagent answer" {
 		t.Fatalf("subagent messages = %q", got)
 	}
@@ -248,13 +316,17 @@ func TestStreamSelectedMapsSchemaEventsAndOptions(t *testing.T) {
 func TestStreamSelectedCountsStrippedSkillInjection(t *testing.T) {
 	path, _ := writeSchemaFixture(t, false)
 	tally := &transcript.HarnessStrips{}
-	messages, err := conversation.CollectMessages(New().StreamSelected(path, "", conversation.LoadOptions{HarnessTally: tally}))
+	messages, err := conversation.CollectMessages(
+		New().StreamSelected(path, "", conversation.LoadOptions{HarnessTally: tally}),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if tally.Injected != 1 {
 		t.Fatalf("injected tally = %d, want 1", tally.Injected)
 	}
+
 	if strings.Contains(messageTexts(messages), "skill context") {
 		t.Fatal("skill injection remained visible")
 	}
@@ -266,11 +338,15 @@ func TestStreamSelectedReadsRecordLargerThanSixteenMiB(t *testing.T) {
 	body := `{"id":"1","timestamp":"2026-08-07T10:00:00Z","type":"user.message","data":{"content":"` + large + `"}}` + "\n" +
 		`{"id":"2","timestamp":"2026-08-07T10:00:01Z","type":"user.message","data":{"content":"after large"}}` + "\n"
 	writeFile(t, path, body)
-	messages, err := conversation.CollectMessages(New().StreamSelected(path, "", conversation.LoadOptions{}))
+	messages, err := conversation.CollectMessages(
+		New().StreamSelected(path, "", conversation.LoadOptions{}),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(messages) != 2 || messages[1].Text != "after large" || len(messages[0].Text) != len(large) {
+
+	if len(messages) != 2 || messages[1].Text != "after large" ||
+		len(messages[0].Text) != len(large) {
 		t.Fatalf("large-record messages = %d", len(messages))
 	}
 }
@@ -288,17 +364,20 @@ func TestScanRecordsDiscoversSubagentFromAppendedBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := file.WriteString(appended); err != nil {
 		_ = file.Close()
 		t.Fatal(err)
 	}
+
 	if err := file.Close(); err != nil {
 		t.Fatal(err)
 	}
 
 	second := scanPath(t, path, first.Records, first.CompleteOffset)
 	records := recordsBySelector(second.Records)
-	if len(records) != 2 || records["agent-2"].Model != "child-model" || records["agent-2"].Title != "Builder" {
+	if len(records) != 2 || records["agent-2"].Model != "child-model" ||
+		records["agent-2"].Title != "Builder" {
 		t.Fatalf("appended records = %+v", second.Records)
 	}
 }
@@ -316,11 +395,13 @@ func TestScanRecordsReplacesFallbackTitleWithAppendedFirstUser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	appended := `{"id":"2","timestamp":"2026-08-07T10:00:01Z","type":"user.message","data":{"content":"actual first request"}}` + "\n"
 	if _, err := file.WriteString(appended); err != nil {
 		_ = file.Close()
 		t.Fatal(err)
 	}
+
 	if err := file.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -338,18 +419,24 @@ func TestScanRecordsKeepsFirstUserTitleEqualToNativeID(t *testing.T) {
 	writeFile(t, path, initial)
 	first := scanPath(t, path, nil, 0)
 	if first.Records[0].Title != rootSessionID || first.Records[0].TitleUncertain {
-		t.Fatalf("first title = %q, uncertain %v", first.Records[0].Title, first.Records[0].TitleUncertain)
+		t.Fatalf(
+			"first title = %q, uncertain %v",
+			first.Records[0].Title,
+			first.Records[0].TitleUncertain,
+		)
 	}
 
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	appended := `{"id":"3","timestamp":"2026-08-07T10:00:02Z","type":"user.message","data":{"content":"second request"}}` + "\n"
 	if _, err := file.WriteString(appended); err != nil {
 		_ = file.Close()
 		t.Fatal(err)
 	}
+
 	if err := file.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -362,11 +449,18 @@ func TestScanRecordsKeepsFirstUserTitleEqualToNativeID(t *testing.T) {
 
 func TestStreamSelectedKeepsAttachmentOnlyUserMessage(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "events.jsonl")
-	writeFile(t, path, `{"id":"1","timestamp":"2026-08-07T10:00:00Z","type":"user.message","data":{"content":"","attachments":[{"type":"file","displayName":"notes","path":"/tmp/notes"}]}}`+"\n")
-	messages, err := conversation.CollectMessages(New().StreamSelected(path, "", conversation.LoadOptions{}))
+	writeFile(
+		t,
+		path,
+		`{"id":"1","timestamp":"2026-08-07T10:00:00Z","type":"user.message","data":{"content":"","attachments":[{"type":"file","displayName":"notes","path":"/tmp/notes"}]}}`+"\n",
+	)
+	messages, err := conversation.CollectMessages(
+		New().StreamSelected(path, "", conversation.LoadOptions{}),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if len(messages) != 1 || len(messages[0].Attachments) != 1 {
 		t.Fatalf("attachment-only messages = %+v", messages)
 	}
@@ -383,18 +477,23 @@ func scanPath(
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, ok := New().ScanRecords(t.Context(), conversation.MultiConversationScan{
-		Candidate: conversation.ScanCandidate{
-			Path:     path,
-			Selector: "",
-			Stamp:    conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()},
+
+	result, ok := New().ScanRecords(
+		t.Context(),
+		conversation.MultiConversationScan{
+			Candidate: conversation.ScanCandidate{
+				Path:     path,
+				Selector: "",
+				Stamp:    conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()},
+			},
+			PriorRecords: prior,
+			StartOffset:  startOffset,
 		},
-		PriorRecords: prior,
-		StartOffset:  startOffset,
-	})
+	)
 	if !ok {
 		t.Fatal("ScanRecords returned false")
 	}
+
 	return result
 }
 
@@ -403,6 +502,7 @@ func writeSchemaFixture(t *testing.T, partial bool) (string, string) {
 	body := schemaFixture(partial)
 	path := filepath.Join(t.TempDir(), "events.jsonl")
 	writeFile(t, path, body)
+
 	return path, body
 }
 
@@ -426,6 +526,7 @@ func schemaFixture(partial bool) string {
 	if partial {
 		body += `{"id":"partial","type":"user.message","data":{"content":"partial"}}`
 	}
+
 	return body
 }
 
@@ -434,6 +535,7 @@ func recordsBySelector(records []conversation.Record) map[string]conversation.Re
 	for _, record := range records {
 		out[record.Selector] = record
 	}
+
 	return out
 }
 
@@ -444,6 +546,7 @@ func messageTexts(messages []transcript.Message) string {
 			texts = append(texts, message.Text)
 		}
 	}
+
 	return strings.Join(texts, "|")
 }
 

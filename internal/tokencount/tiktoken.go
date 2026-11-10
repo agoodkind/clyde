@@ -27,8 +27,10 @@ func o200k() (tokenizer.Codec, error) {
 			errO200k = fmt.Errorf("build o200k tokenizer: %w", err)
 			return
 		}
+
 		o200kCodec = codec
 	})
+
 	return o200kCodec, errO200k
 }
 
@@ -39,9 +41,11 @@ func (t tiktokenCounter) Estimate(text string) int {
 	if err != nil {
 		return t.fallback.Estimate(text)
 	}
+
 	count, err := codec.Count(text)
 	if err != nil {
 		return t.fallback.Estimate(text)
 	}
+
 	return count
 }

@@ -43,13 +43,17 @@ type documentedChatMessageWire struct {
 func MarshalDocumentedChatResponse(resp ChatResponse) ([]byte, error) {
 	choices := make([]documentedChatChoiceWire, 0, len(resp.Choices))
 	for _, choice := range resp.Choices {
-		choices = append(choices, documentedChatChoiceWire{
-			Index:        choice.Index,
-			Message:      documentedChatMessage(choice.Message),
-			Logprobs:     choice.Logprobs,
-			FinishReason: choice.FinishReason,
-		})
+		choices = append(
+			choices,
+			documentedChatChoiceWire{
+				Index:        choice.Index,
+				Message:      documentedChatMessage(choice.Message),
+				Logprobs:     choice.Logprobs,
+				FinishReason: choice.FinishReason,
+			},
+		)
 	}
+
 	encoded, err := json.Marshal(documentedChatResponseWire{
 		ID:                resp.ID,
 		Object:            resp.Object,
@@ -60,9 +64,17 @@ func MarshalDocumentedChatResponse(resp ChatResponse) ([]byte, error) {
 		SystemFingerprint: resp.SystemFingerprint,
 	})
 	if err != nil {
-		slog.Warn("adapter.openai.documented_chat_response_marshal_failed", "concern", "adapter.chat.render", "err", err)
+		slog.Warn(
+			"adapter.openai.documented_chat_response_marshal_failed",
+			"concern",
+			"adapter.chat.render",
+			"err",
+			err,
+		)
+
 		return nil, fmt.Errorf("marshal documented chat response: %w", err)
 	}
+
 	return encoded, nil
 }
 
@@ -72,6 +84,7 @@ func documentedChatMessage(message ChatMessage) documentedChatMessageWire {
 		value := message.Refusal
 		refusal = &value
 	}
+
 	return documentedChatMessageWire{
 		Role:             message.Role,
 		Content:          message.Content,

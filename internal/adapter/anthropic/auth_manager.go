@@ -57,9 +57,11 @@ func (e *AuthCredentialError) Error() string {
 	if e == nil {
 		return ""
 	}
+
 	if len(e.Summary) == 0 {
 		return e.Message
 	}
+
 	return e.Message + ": " + strings.Join(e.Summary, "; ")
 }
 
@@ -71,6 +73,7 @@ func NewAuthManager(oauthCfg config.AdapterOAuth, credentialsDir string) *AuthMa
 			credentialsDir = filepath.Join(home, ".claude")
 		}
 	}
+
 	return &AuthManager{
 		mu:             sync.Mutex{},
 		cached:         nil,
@@ -93,14 +96,17 @@ func (m *AuthManager) Token(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	if tokenExpired(selected.Tokens, m.now().Add(authRefreshSafetyWindow)) {
 		m.cached = nil
 		m.snapshot = emptyAuthCredentialSnapshot()
+
 		return "", &AuthCredentialError{
 			Message: "Claude login access token is expired; run `claude auth login`",
 			Summary: authResultsSummary(selected.Results),
 		}
 	}
+
 	return selected.Tokens.AccessToken, nil
 }
 
@@ -117,12 +123,14 @@ func (m *AuthManager) ForceRefresh(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	if tokenExpired(selected.Tokens, m.now().Add(authRefreshSafetyWindow)) {
 		return "", &AuthCredentialError{
 			Message: "Claude login access token is expired; run `claude auth login`",
 			Summary: authResultsSummary(selected.Results),
 		}
 	}
+
 	return selected.Tokens.AccessToken, nil
 }
 
@@ -130,19 +138,24 @@ func (m *AuthManager) selectedCredential(ctx context.Context) (*selectedAuthCred
 	if m.cached == nil {
 		return m.reselectCredential(ctx)
 	}
+
 	current, err := m.readSelectedCredential(ctx)
 	if err != nil {
 		m.invalidateCache(ctx, err)
 		return nil, err
 	}
+
 	if reason := m.cacheInvalidationReason(current); reason != "" {
 		m.logCacheInvalidated(ctx, reason, current, nil)
 		m.cacheSelectedCredential(current)
+
 		return current, nil
 	}
+
 	if tokenExpired(m.cached, m.now().Add(authRefreshSafetyWindow)) {
 		return current, nil
 	}
+
 	return &selectedAuthCredential{
 		Source:   m.snapshot.Source,
 		Tokens:   m.cached.Clone(),
@@ -156,16 +169,31 @@ func (m *AuthManager) reselectCredential(ctx context.Context) (*selectedAuthCred
 	if err != nil {
 		return nil, err
 	}
+
 	m.cacheSelectedCredential(selected)
-	authLog().InfoContext(ctx, "adapter.claude.auth.credentials_selected", "concern", "adapter.providers.anthropic.oauth", "component", "adapter",
-		"subcomponent", "anthropic_auth",
-		"store_kind", selected.Source,
-		"expires_at_ms", selected.Metadata.ExpiresAt,
-		"fingerprint", selected.Metadata.Fingerprint,
-		"access_token_present", selected.Metadata.AccessTokenPresent,
-		"refresh_token_present", selected.Metadata.RefreshTokenPresent,
-		"store_kind_summaries", authResultsSummary(selected.Results),
+	authLog().InfoContext(
+		ctx,
+		"adapter.claude.auth.credentials_selected",
+		"concern",
+		"adapter.providers.anthropic.oauth",
+		"component",
+		"adapter",
+		"subcomponent",
+		"anthropic_auth",
+		"store_kind",
+		selected.Source,
+		"expires_at_ms",
+		selected.Metadata.ExpiresAt,
+		"fingerprint",
+		selected.Metadata.Fingerprint,
+		"access_token_present",
+		selected.Metadata.AccessTokenPresent,
+		"refresh_token_present",
+		selected.Metadata.RefreshTokenPresent,
+		"store_kind_summaries",
+		authResultsSummary(selected.Results),
 	)
+
 	return selected, nil
 }
 
@@ -179,6 +207,7 @@ func (m *AuthManager) readOptions() oauthcredentials.ReadOptions {
 	if keychainService == "" {
 		keychainService = oauthcredentials.DefaultKeychainService
 	}
+
 	return oauthcredentials.ReadOptions{
 		CredentialsDir:  m.credentialsDir,
 		KeychainService: keychainService,
@@ -191,21 +220,26 @@ func (m *AuthManager) cacheInvalidationReason(current *selectedAuthCredential) s
 	if current == nil || current.Tokens == nil {
 		return "authoritative_store_missing"
 	}
+
 	if m.snapshot.Source != current.Source {
 		return "authoritative_store_source_changed"
 	}
+
 	if m.snapshot.Fingerprint != "" && current.Metadata.Fingerprint != m.snapshot.Fingerprint {
 		return "authoritative_store_fingerprint_changed"
 	}
+
 	if current.Source == oauthcredentials.SourceFile &&
 		m.snapshot.FileMtime != 0 &&
 		current.Metadata.FileMtime != 0 &&
 		current.Metadata.FileMtime != m.snapshot.FileMtime {
 		return "authoritative_store_rewritten"
 	}
+
 	if m.cached.RefreshToken == "" && current.Tokens.RefreshToken != "" {
 		return "cached_token_missing_refresh_token"
 	}
+
 	return ""
 }
 
@@ -213,12 +247,18 @@ func (m *AuthManager) invalidateCache(ctx context.Context, err error) {
 	if m.cached == nil {
 		return
 	}
+
 	m.cached = nil
 	m.snapshot = emptyAuthCredentialSnapshot()
 	m.logCacheInvalidated(ctx, "authoritative_store_unreadable", nil, err)
 }
 
-func (m *AuthManager) logCacheInvalidated(ctx context.Context, reason string, current *selectedAuthCredential, cause error) {
+func (m *AuthManager) logCacheInvalidated(
+	ctx context.Context,
+	reason string,
+	current *selectedAuthCredential,
+	cause error,
+) {
 	storeKind := m.snapshot.Source
 	expiresAt := int64(0)
 	fingerprint := ""
@@ -233,6 +273,7 @@ func (m *AuthManager) logCacheInvalidated(ctx context.Context, reason string, cu
 		refreshTokenPresent = current.Metadata.RefreshTokenPresent
 		results = current.Results
 	}
+
 	attrs := []slog.Attr{
 		slog.String("component", "adapter"),
 		slog.String("subcomponent", "anthropic_auth"),
@@ -249,7 +290,16 @@ func (m *AuthManager) logCacheInvalidated(ctx context.Context, reason string, cu
 	if cause != nil {
 		attrs = append(attrs, slog.String("err", cause.Error()))
 	}
-	authLog().LogAttrs(ctx, slog.LevelInfo, "adapter.claude.auth.cache_invalidated", append([]slog.Attr{slog.String("concern", "adapter.providers.anthropic.oauth")}, attrs...)...)
+
+	authLog().LogAttrs(
+		ctx,
+		slog.LevelInfo,
+		"adapter.claude.auth.cache_invalidated",
+		append(
+			[]slog.Attr{slog.String("concern", "adapter.providers.anthropic.oauth")},
+			attrs...,
+		)...,
+	)
 }
 
 func (m *AuthManager) cacheSelectedCredential(selected *selectedAuthCredential) {
@@ -275,21 +325,25 @@ func emptyAuthCredentialSnapshot() authCredentialSnapshot {
 
 func selectAuthCredential(results []oauthcredentials.ReadResult) (*selectedAuthCredential, error) {
 	var selected *oauthcredentials.ReadResult
+
 	for i := range results {
 		candidate := &results[i]
 		if !authCandidateUsable(candidate) {
 			continue
 		}
+
 		if selected == nil || authCandidateBetter(candidate, selected) {
 			selected = candidate
 		}
 	}
+
 	if selected == nil {
 		return nil, &AuthCredentialError{
 			Message: "no usable Claude login credentials found; run `claude auth login`",
 			Summary: authResultsSummary(results),
 		}
 	}
+
 	return &selectedAuthCredential{
 		Source:   selected.Source,
 		Tokens:   selected.Tokens.Clone(),
@@ -299,19 +353,26 @@ func selectAuthCredential(results []oauthcredentials.ReadResult) (*selectedAuthC
 }
 
 func authCandidateUsable(candidate *oauthcredentials.ReadResult) bool {
-	return candidate != nil && candidate.Err == nil && candidate.Tokens != nil && candidate.Metadata.AccessTokenPresent
+	return candidate != nil && candidate.Err == nil && candidate.Tokens != nil &&
+		candidate.Metadata.AccessTokenPresent
 }
 
-func authCandidateBetter(candidate *oauthcredentials.ReadResult, selected *oauthcredentials.ReadResult) bool {
+func authCandidateBetter(
+	candidate *oauthcredentials.ReadResult,
+	selected *oauthcredentials.ReadResult,
+) bool {
 	if candidate.Metadata.Expired != selected.Metadata.Expired {
 		return !candidate.Metadata.Expired
 	}
+
 	if candidate.Metadata.RefreshTokenPresent != selected.Metadata.RefreshTokenPresent {
 		return candidate.Metadata.RefreshTokenPresent
 	}
+
 	if candidate.Source != selected.Source {
 		return candidate.Source == oauthcredentials.SourceKeychain
 	}
+
 	return candidate.Metadata.ExpiresAt > selected.Metadata.ExpiresAt
 }
 
@@ -322,16 +383,22 @@ func authResultsSummary(results []oauthcredentials.ReadResult) []string {
 		if result.Err != nil {
 			parseError = result.Err.Error()
 		}
-		values = append(values, fmt.Sprintf("%s:present=%t:access=%t:refresh=%t:expired=%t:fingerprint=%s:error=%s",
-			result.Source,
-			result.Present,
-			result.Metadata.AccessTokenPresent,
-			result.Metadata.RefreshTokenPresent,
-			result.Metadata.Expired,
-			result.Metadata.Fingerprint,
-			parseError,
-		))
+
+		values = append(
+			values,
+			fmt.Sprintf(
+				"%s:present=%t:access=%t:refresh=%t:expired=%t:fingerprint=%s:error=%s",
+				result.Source,
+				result.Present,
+				result.Metadata.AccessTokenPresent,
+				result.Metadata.RefreshTokenPresent,
+				result.Metadata.Expired,
+				result.Metadata.Fingerprint,
+				parseError,
+			),
+		)
 	}
+
 	return values
 }
 
@@ -339,9 +406,11 @@ func tokenExpired(tokens *oauthcredentials.Tokens, now time.Time) bool {
 	if tokens == nil || tokens.AccessToken == "" {
 		return true
 	}
+
 	if tokens.ExpiresAt == 0 {
 		return false
 	}
+
 	return !now.Before(time.UnixMilli(tokens.ExpiresAt))
 }
 

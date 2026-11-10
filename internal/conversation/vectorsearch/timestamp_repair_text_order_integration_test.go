@@ -64,25 +64,47 @@ func textOrderEndpoint() http.HandlerFunc {
 
 func textOrderDocument(message int32, role string, date int64, text string) semsearch.SemDoc {
 	return semsearch.SemDoc{
-		ConversationID: textOrderConversationID, ParentConversationID: "", MessageIndex: message, Role: role,
-		TimestampUnix: date, Text: text, Tools: nil, Thinking: "", WorkspaceRoot: "", Archived: false, LoadRules: "",
+		ConversationID:       textOrderConversationID,
+		ParentConversationID: "",
+		MessageIndex:         message,
+		Role:                 role,
+		TimestampUnix:        date,
+		Text:                 text,
+		Tools:                nil,
+		Thinking:             "",
+		WorkspaceRoot:        "",
+		Archived:             false,
+		LoadRules:            "",
 	}
 }
 
 // textOrderSplitText contains 60,000 letters followed by 8 spaces. The writer
 // stores the letters as the first part and drops the part containing only spaces.
-var textOrderSplitText = strings.Repeat("a", textOrderSplitBytes) + strings.Repeat(" ", textOrderSplitSpaces)
+var textOrderSplitText = strings.Repeat("a", textOrderSplitBytes) + strings.Repeat(
+	" ",
+	textOrderSplitSpaces,
+)
 
 // textOrderDocuments returns dated rows before and after the target row.
 func textOrderDocuments(targetDate int64, targetText string) []semsearch.SemDoc {
 	return []semsearch.SemDoc{
 		textOrderDocument(0, textOrderUser, textOrderEarlierDate, textOrderEarlierText),
 		textOrderDocument(textOrderTargetMessage, textOrderAssistant, targetDate, targetText),
-		textOrderDocument(textOrderLaterMessage, textOrderAssistant, textOrderLaterDate, textOrderLaterText),
+		textOrderDocument(
+			textOrderLaterMessage,
+			textOrderAssistant,
+			textOrderLaterDate,
+			textOrderLaterText,
+		),
 	}
 }
 
-func textOrderRowDate(t *testing.T, address string, collectionID string, path string) (int64, bool) {
+func textOrderRowDate(
+	t *testing.T,
+	address string,
+	collectionID string,
+	path string,
+) (int64, bool) {
 	t.Helper()
 	ctx := context.Background()
 	reader, err := milvusclient.New(ctx, &milvusclient.ClientConfig{Address: address})
@@ -90,10 +112,19 @@ func textOrderRowDate(t *testing.T, address string, collectionID string, path st
 		t.Fatalf("milvusclient.New failed: %v.", err)
 	}
 	defer func() { _ = reader.Close(ctx) }()
-	result, err := reader.Query(ctx, milvusclient.NewQueryOption(vectorsearch.CollectionName(collectionID)).
-		WithFilter(fmt.Sprintf("relativePath == %q", path)).
-		WithOutputFields("timestampUnix").
-		WithConsistencyLevel(entity.ClStrong))
+	result, err := reader.Query(
+		ctx,
+		milvusclient.NewQueryOption(vectorsearch.CollectionName(collectionID)).
+			WithFilter(
+				fmt.Sprintf("relativePath == %q", path),
+			).
+			WithOutputFields(
+				"timestampUnix",
+			).
+			WithConsistencyLevel(
+				entity.ClStrong,
+			),
+	)
 	if err != nil {
 		t.Fatalf("Query failed: %v.", err)
 	}
@@ -103,7 +134,8 @@ func textOrderRowDate(t *testing.T, address string, collectionID string, path st
 	column := result.GetColumn("timestampUnix")
 	first, firstDated := textOrderCellDate(t, column, 0)
 	for position := 1; position < result.ResultCount; position++ {
-		if stamp, dated := textOrderCellDate(t, column, position); stamp != first || dated != firstDated {
+		if stamp, dated := textOrderCellDate(t, column, position); stamp != first ||
+			dated != firstDated {
 			t.Fatalf("The rows at %s have different dates %d and %d.", path, first, stamp)
 		}
 	}
@@ -139,7 +171,17 @@ func TestRepairDatesTextRowsWithinStoredOrderAndSkipsBlankRows(t *testing.T) {
 	client := openClient(t, address, vectorsearch.LayoutShared)
 	undated := time.Time{}.Unix()
 	blankWithTool := textOrderDocuments(textOrderMiddleDate, "")
-	blankWithTool[textOrderTargetMessage].Tools = []semsearch.SemToolCall{{Name: textOrderToolName, Display: textOrderCommand, LangHint: "", Output: "", IsError: false, TimestampUnix: nil, TimestampUnknown: false}}
+	blankWithTool[textOrderTargetMessage].Tools = []semsearch.SemToolCall{
+		{
+			Name:             textOrderToolName,
+			Display:          textOrderCommand,
+			LangHint:         "",
+			Output:           "",
+			IsError:          false,
+			TimestampUnix:    nil,
+			TimestampUnknown: false,
+		},
+	}
 	testCases := []struct {
 		name        string
 		stored      []semsearch.SemDoc
@@ -180,9 +222,23 @@ func TestRepairDatesTextRowsWithinStoredOrderAndSkipsBlankRows(t *testing.T) {
 			wantOutcome: vectorsearch.SourceOutcomeMatched,
 		},
 		{
-			name:        "composer bounded date without other stored dates is dated",
-			stored:      []semsearch.SemDoc{textOrderDocument(textOrderTargetMessage, textOrderAssistant, undated, textOrderTargetText)},
-			source:      []semsearch.SemDoc{textOrderDocument(textOrderTargetMessage, textOrderAssistant, textOrderMiddleDate, textOrderTargetText)},
+			name: "composer bounded date without other stored dates is dated",
+			stored: []semsearch.SemDoc{
+				textOrderDocument(
+					textOrderTargetMessage,
+					textOrderAssistant,
+					undated,
+					textOrderTargetText,
+				),
+			},
+			source: []semsearch.SemDoc{
+				textOrderDocument(
+					textOrderTargetMessage,
+					textOrderAssistant,
+					textOrderMiddleDate,
+					textOrderTargetText,
+				),
+			},
 			bounded:     []int64{textOrderMiddleDate},
 			wantDate:    textOrderMiddleDate,
 			wantOutcome: vectorsearch.SourceOutcomeMatched,
@@ -204,49 +260,107 @@ func TestRepairDatesTextRowsWithinStoredOrderAndSkipsBlankRows(t *testing.T) {
 		},
 	}
 	for position, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			ctx := context.Background()
-			collectionID := fmt.Sprintf("text-order-%d", position)
-			manifest := []semsearch.Fingerprint{{ConversationID: textOrderConversationID, Value: "v1"}}
-			if _, err := client.UpsertConversationDocuments(ctx, collectionID, testCase.stored, manifest); err != nil {
-				t.Fatalf("UpsertConversationDocuments failed: %v.", err)
-			}
-			if testCase.blank {
-				if err := vectorsearch.WriteBlankRowForTest(ctx, client, collectionID, textOrderConversationID, textOrderConversationID, textOrderTargetMessage, textOrderAssistant, " ", 0); err != nil {
-					t.Fatalf("WriteBlankRowForTest failed: %v.", err)
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				ctx := context.Background()
+				collectionID := fmt.Sprintf("text-order-%d", position)
+				manifest := []semsearch.Fingerprint{
+					{ConversationID: textOrderConversationID, Value: "v1"},
 				}
-			}
-			if testCase.split {
-				blankPart := strings.Repeat(" ", textOrderSplitSpaces)
-				if err := vectorsearch.WriteTextPartForTest(ctx, client, collectionID, textOrderConversationID, textOrderTargetMessage, 1, textOrderAssistant, blankPart); err != nil {
-					t.Fatalf("WriteTextPartForTest failed: %v.", err)
+				if _, err := client.UpsertConversationDocuments(
+					ctx,
+					collectionID,
+					testCase.stored,
+					manifest,
+				); err != nil {
+					t.Fatalf("UpsertConversationDocuments failed: %v.", err)
 				}
-			}
-			source := vectorsearch.TimestampSourceRepairSource{ConversationID: textOrderConversationID, Documents: testCase.source, ComposerBoundedDates: testCase.bounded}
-			report, err := client.RepairTimestampsFromSource(ctx, collectionID, []vectorsearch.TimestampSourceRepairSource{source}, false)
-			if err != nil {
-				t.Fatalf("RepairTimestampsFromSource failed: %v.", err)
-			}
-			path := fmt.Sprintf("conv/%s/%d", textOrderConversationID, textOrderTargetMessage)
-			if !testCase.split && report.Outcomes[testCase.wantOutcome] != 1 {
-				t.Fatalf("The repair returned outcomes %v; the expected outcome is %s.", report.Outcomes, testCase.wantOutcome)
-			}
-			if testCase.split {
-				if report.Outcomes[vectorsearch.SourceOutcomeEmpty] != 1 || report.Outcomes[testCase.wantOutcome] == 0 || len(report.Outcomes) != 2 {
-					t.Fatalf("The repair returned outcomes %v; the expected outcomes are %s rows and 1 empty content row.", report.Outcomes, testCase.wantOutcome)
+				if testCase.blank {
+					if err := vectorsearch.WriteBlankRowForTest(
+						ctx,
+						client,
+						collectionID,
+						textOrderConversationID,
+						textOrderConversationID,
+						textOrderTargetMessage,
+						textOrderAssistant,
+						" ",
+						0,
+					); err != nil {
+						t.Fatalf("WriteBlankRowForTest failed: %v.", err)
+					}
 				}
-				if stamp, dated := textOrderRowDate(t, address, collectionID, path+"/1"); dated {
-					t.Fatalf("The repair assigned the date %d to the blank part.", stamp)
+				if testCase.split {
+					blankPart := strings.Repeat(" ", textOrderSplitSpaces)
+					if err := vectorsearch.WriteTextPartForTest(
+						ctx,
+						client,
+						collectionID,
+						textOrderConversationID,
+						textOrderTargetMessage,
+						1,
+						textOrderAssistant,
+						blankPart,
+					); err != nil {
+						t.Fatalf("WriteTextPartForTest failed: %v.", err)
+					}
 				}
-				path += "/0"
-			}
-			stamp, dated := textOrderRowDate(t, address, collectionID, path)
-			if testCase.wantDate == 0 && dated {
-				t.Fatalf("The repair assigned the date %d.", stamp)
-			}
-			if testCase.wantDate != 0 && (!dated || stamp != testCase.wantDate) {
-				t.Fatalf("The row has date %d with dated=%t; the expected date is %d.", stamp, dated, testCase.wantDate)
-			}
-		})
+				source := vectorsearch.TimestampSourceRepairSource{
+					ConversationID:       textOrderConversationID,
+					Documents:            testCase.source,
+					ComposerBoundedDates: testCase.bounded,
+				}
+				report, err := client.RepairTimestampsFromSource(
+					ctx,
+					collectionID,
+					[]vectorsearch.TimestampSourceRepairSource{source},
+					false,
+				)
+				if err != nil {
+					t.Fatalf("RepairTimestampsFromSource failed: %v.", err)
+				}
+				path := fmt.Sprintf("conv/%s/%d", textOrderConversationID, textOrderTargetMessage)
+				if !testCase.split && report.Outcomes[testCase.wantOutcome] != 1 {
+					t.Fatalf(
+						"The repair returned outcomes %v; the expected outcome is %s.",
+						report.Outcomes,
+						testCase.wantOutcome,
+					)
+				}
+				if testCase.split {
+					if report.Outcomes[vectorsearch.SourceOutcomeEmpty] != 1 ||
+						report.Outcomes[testCase.wantOutcome] == 0 ||
+						len(report.Outcomes) != 2 {
+						t.Fatalf(
+							"The repair returned outcomes %v; the expected outcomes are %s rows and 1 empty content row.",
+							report.Outcomes,
+							testCase.wantOutcome,
+						)
+					}
+					if stamp, dated := textOrderRowDate(
+						t,
+						address,
+						collectionID,
+						path+"/1",
+					); dated {
+						t.Fatalf("The repair assigned the date %d to the blank part.", stamp)
+					}
+					path += "/0"
+				}
+				stamp, dated := textOrderRowDate(t, address, collectionID, path)
+				if testCase.wantDate == 0 && dated {
+					t.Fatalf("The repair assigned the date %d.", stamp)
+				}
+				if testCase.wantDate != 0 && (!dated || stamp != testCase.wantDate) {
+					t.Fatalf(
+						"The row has date %d with dated=%t; the expected date is %d.",
+						stamp,
+						dated,
+						testCase.wantDate,
+					)
+				}
+			},
+		)
 	}
 }

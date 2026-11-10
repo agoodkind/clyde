@@ -26,19 +26,23 @@ func collectCodexWithSystemPrompts(t *testing.T, includeSystemPrompts bool) []tr
 	if err := os.WriteFile(path, []byte(codexSystemPromptRollout), 0o600); err != nil {
 		t.Fatalf("write rollout fixture: %v", err)
 	}
+
 	opts := conversation.LoadOptions{
 		IncludeSystemPrompts:  includeSystemPrompts,
 		IncludeSystemMessages: false,
 		IncludeToolOutputs:    false,
 	}
 	var messages []transcript.Message
+
 	p := New()
 	for message, err := range p.Stream(path, opts) {
 		if err != nil {
 			t.Fatalf("stream: %v", err)
 		}
+
 		messages = append(messages, message)
 	}
+
 	return messages
 }
 
@@ -47,6 +51,7 @@ func joinCodexText(messages []transcript.Message) string {
 	for _, message := range messages {
 		parts = append(parts, message.Text)
 	}
+
 	return strings.Join(parts, "\n")
 }
 
@@ -63,6 +68,7 @@ func TestCodexSystemPromptsGatedByFlag(t *testing.T) {
 		if !strings.Contains(with, want) {
 			t.Errorf("with system prompts: missing %q in:\n%s", want, with)
 		}
+
 		if strings.Contains(without, want) {
 			t.Errorf("without system prompts: %q leaked into:\n%s", want, without)
 		}

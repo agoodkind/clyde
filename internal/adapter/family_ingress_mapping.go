@@ -28,20 +28,27 @@ func newIngressRegistry() *ingressRegistry {
 // Register stores the contract for a family. Implements
 // ingresscontract.IngressRegistrar so vendor packages can call
 // Register without importing the adapter package.
-func (r *ingressRegistry) Register(family ingresscontract.IngressFamily, contract ingresscontract.IngressContract) {
+func (r *ingressRegistry) Register(
+	family ingresscontract.IngressFamily,
+	contract ingresscontract.IngressContract,
+) {
 	if contract == nil {
 		return
 	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.contracts[family] = contract
 }
 
 // contract returns the registered IngressContract for a family.
-func (r *ingressRegistry) contract(family ingresscontract.IngressFamily) (ingresscontract.IngressContract, bool) {
+func (r *ingressRegistry) contract(
+	family ingresscontract.IngressFamily,
+) (ingresscontract.IngressContract, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	c, ok := r.contracts[family]
+
 	return c, ok
 }
 

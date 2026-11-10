@@ -17,9 +17,11 @@ func gzipString(t *testing.T, s string) []byte {
 	if _, err := writer.Write([]byte(s)); err != nil {
 		t.Fatalf("gzip write: %v", err)
 	}
+
 	if err := writer.Close(); err != nil {
 		t.Fatalf("gzip close: %v", err)
 	}
+
 	return buf.Bytes()
 }
 
@@ -39,16 +41,20 @@ func TestDecodeResponseBodyForHookGzip(t *testing.T) {
 	if !ok {
 		t.Fatal("a gzip body must decode")
 	}
+
 	if resp.Header.Get("Content-Encoding") != "" {
 		t.Fatal("Content-Encoding must be stripped after decoding")
 	}
+
 	if resp.Header.Get("Content-Length") != "" {
 		t.Fatal("Content-Length must be cleared after decoding")
 	}
+
 	got, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read decoded body: %v", err)
 	}
+
 	if string(got) != plain {
 		t.Fatalf("decoded body = %q, want %q", got, plain)
 	}
@@ -66,13 +72,16 @@ func TestDecodeResponseBodyForHookUndecodableEncoding(t *testing.T) {
 	if ok {
 		t.Fatal("an undecodable encoding must report ok=false so the caller skips the transform")
 	}
+
 	if resp.Header.Get("Content-Encoding") != "br" {
 		t.Fatal("Content-Encoding must be preserved when the body is not decoded")
 	}
+
 	got, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read preserved body: %v", err)
 	}
+
 	if !bytes.Equal(got, raw) {
 		t.Fatal("the original body must be preserved when not decoded")
 	}
@@ -92,13 +101,16 @@ func TestDecodeResponseBodyForHookMislabeledGzip(t *testing.T) {
 	if ok {
 		t.Fatal("a body whose bytes are not gzip must be declined")
 	}
+
 	if resp.Header.Get("Content-Encoding") != "gzip" {
 		t.Fatal("Content-Encoding must be preserved when the body is declined")
 	}
+
 	got, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read preserved body: %v", err)
 	}
+
 	if string(got) != raw {
 		t.Fatalf("declined body lost bytes: got %q, want %q", got, raw)
 	}
@@ -116,10 +128,12 @@ func TestDecodeResponseBodyForHookPlain(t *testing.T) {
 	if !ok {
 		t.Fatal("a plain body must be reported as decoded")
 	}
+
 	got, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read body: %v", err)
 	}
+
 	if string(got) != plain {
 		t.Fatalf("body = %q, want %q", got, plain)
 	}
@@ -134,8 +148,10 @@ func (r *errThenEOFReader) Read(p []byte) (int, error) {
 	if r.pos < len(r.data) {
 		n := copy(p, r.data[r.pos:])
 		r.pos += n
+
 		return n, nil
 	}
+
 	return 0, io.ErrUnexpectedEOF
 }
 
@@ -151,13 +167,16 @@ func TestReadAndRewindHookRequestBodyFailsClosedOnReadError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error when the body read fails")
 	}
+
 	if string(got) != "partial-bytes" {
 		t.Fatalf("returned bytes = %q, want the partial read", got)
 	}
+
 	// The reseated body must error on read, not yield the partial bytes.
 	if _, readErr := io.ReadAll(req.Body); readErr == nil {
 		t.Fatal("reseated request body must re-surface the read error, not forward partial bytes")
 	}
+
 	if req.ContentLength != -1 {
 		t.Fatalf("ContentLength = %d, want -1 after a read failure", req.ContentLength)
 	}
@@ -194,13 +213,16 @@ func TestDecodeResponseBodyForHookTruncatedGzipMagic(t *testing.T) {
 	if ok {
 		t.Fatal("a truncated gzip header must be declined")
 	}
+
 	if resp.Header.Get("Content-Encoding") != "gzip" {
 		t.Fatal("Content-Encoding must be preserved when declined")
 	}
+
 	got, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read preserved body: %v", err)
 	}
+
 	if !bytes.Equal(got, raw) {
 		t.Fatalf("declined body lost bytes: got %v, want %v", got, raw)
 	}
@@ -213,9 +235,11 @@ func zlibString(t *testing.T, s string) []byte {
 	if _, err := writer.Write([]byte(s)); err != nil {
 		t.Fatalf("zlib write: %v", err)
 	}
+
 	if err := writer.Close(); err != nil {
 		t.Fatalf("zlib close: %v", err)
 	}
+
 	return buf.Bytes()
 }
 
@@ -230,13 +254,16 @@ func TestDecodeResponseBodyForHookDeflate(t *testing.T) {
 	if !decodeResponseBodyForHook(resp) {
 		t.Fatal("a valid zlib (deflate) body must decode")
 	}
+
 	if resp.Header.Get("Content-Encoding") != "" {
 		t.Fatal("Content-Encoding must be stripped after decoding")
 	}
+
 	got, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read decoded body: %v", err)
 	}
+
 	if string(got) != plain {
 		t.Fatalf("decoded body = %q, want %q", got, plain)
 	}
@@ -256,13 +283,16 @@ func TestDecodeResponseBodyForHookMislabeledDeflate(t *testing.T) {
 	if decodeResponseBodyForHook(resp) {
 		t.Fatal("a body whose bytes are not a valid zlib stream must be declined")
 	}
+
 	if resp.Header.Get("Content-Encoding") != "deflate" {
 		t.Fatal("Content-Encoding must be preserved when the body is declined")
 	}
+
 	got, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read preserved body: %v", err)
 	}
+
 	if string(got) != raw {
 		t.Fatalf("declined body lost bytes: got %q, want %q", got, raw)
 	}

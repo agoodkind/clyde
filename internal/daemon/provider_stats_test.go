@@ -26,9 +26,17 @@ func TestProviderStatsGenerationStartStaysFixedAcrossSnapshots(t *testing.T) {
 	recorder.record(context.Background(), completedEvent("codex", "unpriced", 0, 0, 0, 0))
 	stats, thirdLoadedAt := recorder.snapshot()
 
-	if !firstLoadedAt.Equal(generationStart) || !secondLoadedAt.Equal(generationStart) || !thirdLoadedAt.Equal(generationStart) {
-		t.Fatalf("loaded times = %s, %s, %s; want fixed %s", firstLoadedAt, secondLoadedAt, thirdLoadedAt, generationStart)
+	if !firstLoadedAt.Equal(generationStart) || !secondLoadedAt.Equal(generationStart) ||
+		!thirdLoadedAt.Equal(generationStart) {
+		t.Fatalf(
+			"loaded times = %s, %s, %s; want fixed %s",
+			firstLoadedAt,
+			secondLoadedAt,
+			thirdLoadedAt,
+			generationStart,
+		)
 	}
+
 	if len(stats) != 1 || stats[0].LastSeenUnix != currentTime.Unix() {
 		t.Fatalf("stats = %+v, want LastSeenUnix %d", stats, currentTime.Unix())
 	}
@@ -37,18 +45,40 @@ func TestProviderStatsGenerationStartStaysFixedAcrossSnapshots(t *testing.T) {
 // completedEvent builds a minimal terminal RequestEvent for the
 // read-time aggregation tests. The aggregator prices ModelID plus the
 // token/cache counts; the rest is zero-valued to satisfy exhaustruct.
-func completedEvent(provider, modelID string, tokensIn, tokensOut, cacheRead, cacheCreate int) adapterruntime.RequestEvent {
+func completedEvent(
+	provider string,
+	modelID string,
+	tokensIn int,
+	tokensOut int,
+	cacheRead int,
+	cacheCreate int,
+) adapterruntime.RequestEvent {
 	return adapterruntime.RequestEvent{
-		Stage:               adapterruntime.RequestStageCompleted,
-		Provider:            provider,
-		ModelID:             modelID,
-		TokensIn:            tokensIn,
-		TokensOut:           tokensOut,
-		CacheReadTokens:     cacheRead,
-		CacheCreationTokens: cacheCreate,
-		Backend:             "", RequestID: "", Alias: "", Stream: false, FinishReason: "",
-		DerivedCacheCreationTokens: 0, ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false,
-		DurationMs: 0, Err: "", Correlation: correlation.Context{TraceID: "", SpanID: "", ParentSpanID: "", RequestID: "", IdentityAttributes: nil},
+		Stage:                      adapterruntime.RequestStageCompleted,
+		Provider:                   provider,
+		ModelID:                    modelID,
+		TokensIn:                   tokensIn,
+		TokensOut:                  tokensOut,
+		CacheReadTokens:            cacheRead,
+		CacheCreationTokens:        cacheCreate,
+		Backend:                    "",
+		RequestID:                  "",
+		Alias:                      "",
+		Stream:                     false,
+		FinishReason:               "",
+		DerivedCacheCreationTokens: 0,
+		ToolCallCount:              0,
+		ToolCallNames:              nil,
+		HasSubagentToolCall:        false,
+		DurationMs:                 0,
+		Err:                        "",
+		Correlation: correlation.Context{
+			TraceID:            "",
+			SpanID:             "",
+			ParentSpanID:       "",
+			RequestID:          "",
+			IdentityAttributes: nil,
+		},
 	}
 }
 
@@ -73,12 +103,18 @@ func TestRecordComputesDollarCostFromConfigTable(t *testing.T) {
 	if len(snapshot) != 1 {
 		t.Fatalf("expected one provider stats entry, got %d", len(snapshot))
 	}
+
 	// 1000 * 500 input + 1000 * 2500 output = 3_000_000 microcents.
 	if snapshot[0].EstimatedCostMicrocents != 3_000_000 {
 		t.Fatalf("read-time cost=%d want 3_000_000", snapshot[0].EstimatedCostMicrocents)
 	}
+
 	if snapshot[0].InputTokens != 1_000 || snapshot[0].OutputTokens != 1_000 {
-		t.Fatalf("token aggregation mismatch: in=%d out=%d", snapshot[0].InputTokens, snapshot[0].OutputTokens)
+		t.Fatalf(
+			"token aggregation mismatch: in=%d out=%d",
+			snapshot[0].InputTokens,
+			snapshot[0].OutputTokens,
+		)
 	}
 }
 
@@ -104,9 +140,13 @@ func TestRecordPricesCodexFromTokens(t *testing.T) {
 	if len(snapshot) != 1 {
 		t.Fatalf("expected one provider stats entry, got %d", len(snapshot))
 	}
+
 	// Input 10_000*125 + output 2_000*1000 + cache read 5_000*13 = 3_315_000.
 	if snapshot[0].EstimatedCostMicrocents != 3_315_000 {
-		t.Fatalf("codex read-time cost=%d want 3_315_000 (must be nonzero)", snapshot[0].EstimatedCostMicrocents)
+		t.Fatalf(
+			"codex read-time cost=%d want 3_315_000 (must be nonzero)",
+			snapshot[0].EstimatedCostMicrocents,
+		)
 	}
 }
 
@@ -121,9 +161,11 @@ func TestRecordUnknownModelYieldsZeroCost(t *testing.T) {
 	if len(snapshot) != 1 {
 		t.Fatalf("expected one provider stats entry, got %d", len(snapshot))
 	}
+
 	if snapshot[0].EstimatedCostMicrocents != 0 {
 		t.Fatalf("unknown model must add zero cost, got %d", snapshot[0].EstimatedCostMicrocents)
 	}
+
 	if snapshot[0].InputTokens != 1_000 {
 		t.Fatalf("tokens should still aggregate, got %d", snapshot[0].InputTokens)
 	}
@@ -142,16 +184,19 @@ func TestReplacePricingIsConcurrentWithTerminalCostReads(t *testing.T) {
 	waitGroup.Add(2)
 	go func() {
 		defer waitGroup.Done()
+
 		for i := range eventCount {
 			if i%2 == 0 {
 				recorder.replacePricing(high)
 				continue
 			}
+
 			recorder.replacePricing(low)
 		}
 	}()
 	go func() {
 		defer waitGroup.Done()
+
 		for range eventCount {
 			recorder.record(context.Background(), completedEvent("codex", "gpt-hot", 1, 0, 0, 0))
 		}
@@ -162,9 +207,16 @@ func TestReplacePricingIsConcurrentWithTerminalCostReads(t *testing.T) {
 	if len(snapshot) != 1 || snapshot[0].InputTokens != eventCount {
 		t.Fatalf("concurrent stats = %+v", snapshot)
 	}
+
 	minimumCost := int64(eventCount * 100)
 	maximumCost := int64(eventCount * 400)
-	if snapshot[0].EstimatedCostMicrocents < minimumCost || snapshot[0].EstimatedCostMicrocents > maximumCost {
-		t.Fatalf("concurrent cost = %d, want [%d, %d]", snapshot[0].EstimatedCostMicrocents, minimumCost, maximumCost)
+	if snapshot[0].EstimatedCostMicrocents < minimumCost ||
+		snapshot[0].EstimatedCostMicrocents > maximumCost {
+		t.Fatalf(
+			"concurrent cost = %d, want [%d, %d]",
+			snapshot[0].EstimatedCostMicrocents,
+			minimumCost,
+			maximumCost,
+		)
 	}
 }

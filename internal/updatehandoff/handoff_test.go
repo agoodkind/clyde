@@ -15,6 +15,7 @@ func TestDeployPathExecsDaemonDeploySubprocess(t *testing.T) {
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
+
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 

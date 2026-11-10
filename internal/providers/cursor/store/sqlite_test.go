@@ -16,15 +16,23 @@ func TestOpenReadOnlyDatabaseAllowsReadsAndRejectsWrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenReadOnlyDatabase returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = readonly.Close() })
 
-	value, found, err := ReadKVValue(context.Background(), readonly, KVTableCursorDiskKV, "composerData:composer-a")
+	value, found, err := ReadKVValue(
+		context.Background(),
+		readonly,
+		KVTableCursorDiskKV,
+		"composerData:composer-a",
+	)
 	if err != nil {
 		t.Fatalf("ReadKVValue returned error: %v", err)
 	}
+
 	if !found {
 		t.Fatal("ReadKVValue found = false, want true")
 	}
+
 	if !bytes.Contains(value, []byte(`"composerId":"composer-a"`)) {
 		t.Fatalf("composerData value = %s", value)
 	}
@@ -45,6 +53,7 @@ func TestOpenReadOnlyDatabaseRejectsNilContext(t *testing.T) {
 	if err == nil {
 		t.Fatal("OpenReadOnlyDatabase(nil) returned nil error, want nil-context guard")
 	}
+
 	if readonly != nil {
 		t.Fatalf("OpenReadOnlyDatabase(nil) returned db %v, want nil", readonly)
 	}
@@ -56,9 +65,11 @@ func TestReadOnlyDatabaseDSNOmitsImmutableAndNormalizesWindowsPaths(t *testing.T
 	if strings.Contains(dsn, "immutable=1") {
 		t.Fatalf("readOnlyDatabaseDSN() = %q, want immutable flag omitted", dsn)
 	}
+
 	if strings.Contains(dsn, `%5C`) {
 		t.Fatalf("readOnlyDatabaseDSN() = %q, want backslashes normalized before URI encoding", dsn)
 	}
+
 	if !strings.Contains(dsn, "mode=ro&_busy_timeout=5000") {
 		t.Fatalf("readOnlyDatabaseDSN() = %q, want readonly query", dsn)
 	}
@@ -70,12 +81,14 @@ func TestTableExistsReportsPresentAndMissingTables(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenReadOnlyDatabase returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = readonly.Close() })
 
 	found, err := TableExists(context.Background(), readonly, "cursorDiskKV")
 	if err != nil {
 		t.Fatalf("TableExists returned error: %v", err)
 	}
+
 	if !found {
 		t.Fatal("TableExists(cursorDiskKV) = false, want true")
 	}
@@ -84,6 +97,7 @@ func TestTableExistsReportsPresentAndMissingTables(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TableExists returned error: %v", err)
 	}
+
 	if missing {
 		t.Fatal("TableExists(missing) = true, want false")
 	}
@@ -95,26 +109,41 @@ func TestReadKVValueReadsExactKeysFromKnownTables(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenReadOnlyDatabase returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = readonly.Close() })
 
-	itemValue, found, err := ReadKVValue(context.Background(), readonly, KVTableItemTable, "item-key")
+	itemValue, found, err := ReadKVValue(
+		context.Background(),
+		readonly,
+		KVTableItemTable,
+		"item-key",
+	)
 	if err != nil {
 		t.Fatalf("ReadKVValue returned error: %v", err)
 	}
+
 	if !found {
 		t.Fatal("ReadKVValue item-key found = false, want true")
 	}
+
 	if !bytes.Equal(itemValue, []byte(`{"kind":"item"}`)) {
 		t.Fatalf("item value = %s", itemValue)
 	}
 
-	missingValue, found, err := ReadKVValue(context.Background(), readonly, KVTableCursorDiskKV, "missing")
+	missingValue, found, err := ReadKVValue(
+		context.Background(),
+		readonly,
+		KVTableCursorDiskKV,
+		"missing",
+	)
 	if err != nil {
 		t.Fatalf("ReadKVValue missing returned error: %v", err)
 	}
+
 	if found {
 		t.Fatal("ReadKVValue missing found = true, want false")
 	}
+
 	if missingValue != nil {
 		t.Fatalf("ReadKVValue missing value = %q, want nil", missingValue)
 	}
@@ -126,6 +155,7 @@ func TestReadKVRowsByPrefixEnumeratesOrderedRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenReadOnlyDatabase returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = readonly.Close() })
 
 	rows, err := ReadKVRowsByPrefix(
@@ -137,15 +167,19 @@ func TestReadKVRowsByPrefixEnumeratesOrderedRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadKVRowsByPrefix returned error: %v", err)
 	}
+
 	if len(rows) != 2 {
 		t.Fatalf("rows len = %d, want 2", len(rows))
 	}
+
 	if rows[0].Key != "bubbleId:composer-a:bubble-1" {
 		t.Fatalf("rows[0].Key = %q", rows[0].Key)
 	}
+
 	if rows[1].Key != "bubbleId:composer-a:bubble-2" {
 		t.Fatalf("rows[1].Key = %q", rows[1].Key)
 	}
+
 	if !bytes.Contains(rows[0].Value, []byte(`"_v":3`)) {
 		t.Fatalf("rows[0].Value = %s", rows[0].Value)
 	}
@@ -157,6 +191,7 @@ func TestKVTableNameRejectsUnknownTables(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenReadOnlyDatabase returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = readonly.Close() })
 
 	_, _, err = ReadKVValue(context.Background(), readonly, KVTableName("missing"), "key")
@@ -194,8 +229,10 @@ func createCursorStoreTestDatabase(t *testing.T) string {
 			t.Fatalf("exec %q: %v", statement, err)
 		}
 	}
+
 	if err := writable.Close(); err != nil {
 		t.Fatalf("close writable sqlite database: %v", err)
 	}
+
 	return dbPath
 }

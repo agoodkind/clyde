@@ -11,10 +11,13 @@ func FormatHumanBytes(n int64) string {
 		if n < 0 {
 			n = 0
 		}
+
 		return fmt.Sprintf("%d B", n)
 	}
+
 	units := []string{"KB", "MB", "GB", "TB"}
 	value := float64(n)
+
 	unit := units[0]
 	for _, name := range units {
 		value /= humanByteBase
@@ -23,5 +26,6 @@ func FormatHumanBytes(n int64) string {
 			break
 		}
 	}
+
 	return fmt.Sprintf("%.1f %s", value, unit)
 }

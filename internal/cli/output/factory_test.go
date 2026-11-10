@@ -18,6 +18,7 @@ func newRootWithChild() (*cobra.Command, *cobra.Command) {
 		RunE: func(c *cobra.Command, args []string) error { return nil },
 	}
 	root.AddCommand(child)
+
 	return root, child
 }
 
@@ -29,6 +30,7 @@ func resolveFormat(t *testing.T, cmd *cobra.Command) (Format, error) {
 	if err != nil {
 		t.Fatalf("GetString(%q): %v", FlagName, err)
 	}
+
 	return ParseFormat(raw)
 }
 
@@ -38,10 +40,12 @@ func TestOutputFormatDefaultIsText(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("root.Execute returned err: %v", err)
 	}
+
 	format, err := resolveFormat(t, child)
 	if err != nil {
 		t.Fatalf("resolveFormat returned err: %v", err)
 	}
+
 	if format != FormatText {
 		t.Fatalf("default Format = %q, want %q", format, FormatText)
 	}
@@ -60,10 +64,12 @@ func TestOutputFormatJSONOnEitherSideOfSubcommand(t *testing.T) {
 		if err := root.Execute(); err != nil {
 			t.Fatalf("root.Execute(%v) returned err: %v", args, err)
 		}
+
 		format, err := resolveFormat(t, child)
 		if err != nil {
 			t.Fatalf("resolveFormat(%v) returned err: %v", args, err)
 		}
+
 		if format != FormatJSON {
 			t.Fatalf("Format for %v = %q, want %q", args, format, FormatJSON)
 		}
@@ -76,10 +82,12 @@ func TestOutputFormatUnknownValueIsTypedError(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("root.Execute returned err: %v", err)
 	}
+
 	_, err := resolveFormat(t, child)
 	if err == nil {
 		t.Fatal("resolveFormat with banana returned nil error")
 	}
+
 	var typed *UnknownFormatError
 	if !errors.As(err, &typed) {
 		t.Fatalf("err = %T (%v), want *UnknownFormatError", err, err)

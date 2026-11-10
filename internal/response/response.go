@@ -26,6 +26,7 @@ type Metadata struct {
 // FromContext projects the current gklog correlation context.
 func FromContext(ctx context.Context) Metadata {
 	corr := correlation.FromContext(ctx)
+
 	return Metadata{
 		RequestID:    strings.TrimSpace(corr.RequestID),
 		TraceID:      string(corr.TraceID),
@@ -47,9 +48,20 @@ func (metadata Metadata) Empty() bool {
 // print a text result.
 func WriteResult(ctx context.Context, out io.Writer, body string) error {
 	if _, err := io.WriteString(out, body); err != nil {
-		slog.WarnContext(ctx, "response.write_result_body_failed", "concern", "cli.output", "component", "response", "err", err)
+		slog.WarnContext(
+			ctx,
+			"response.write_result_body_failed",
+			"concern",
+			"cli.output",
+			"component",
+			"response",
+			"err",
+			err,
+		)
+
 		return fmt.Errorf("response: write result body: %w", err)
 	}
+
 	return nil
 }
 
@@ -76,24 +88,40 @@ func JSON(ctx context.Context, payload []byte, style JSONStyle) ([]byte, error) 
 	if len(trimmed) == 0 {
 		return nil, fmt.Errorf("response: empty json payload")
 	}
+
 	if !json.Valid(trimmed) {
 		return nil, fmt.Errorf("response: invalid json payload")
 	}
+
 	meta := FromContext(ctx)
 	objectPayload := make(map[string]json.RawMessage)
 	if err := json.Unmarshal(trimmed, &objectPayload); err == nil {
 		metaBody, metaErr := json.Marshal(meta)
 		if metaErr != nil {
-			slog.WarnContext(ctx, "response.encode_json_meta_failed", "concern", "cli.output", "component", "response", "err", metaErr)
+			slog.WarnContext(
+				ctx,
+				"response.encode_json_meta_failed",
+				"concern",
+				"cli.output",
+				"component",
+				"response",
+				"err",
+				metaErr,
+			)
+
 			return nil, fmt.Errorf("response: encode json metadata: %w", metaErr)
 		}
+
 		objectPayload["_meta"] = metaBody
+
 		return marshalJSONObjectBody(ctx, objectPayload, style)
 	}
+
 	document := JSONDocument{
 		Meta:   meta,
 		Result: append(json.RawMessage(nil), trimmed...),
 	}
+
 	return marshalJSONDocumentBody(ctx, document, style)
 }
 
@@ -103,14 +131,30 @@ func WriteJSON(ctx context.Context, writer io.Writer, payload []byte, style JSON
 	if err != nil {
 		return err
 	}
+
 	if _, err := writer.Write(body); err != nil {
-		slog.WarnContext(ctx, "response.write_json_failed", "concern", "cli.output", "component", "response", "err", err)
+		slog.WarnContext(
+			ctx,
+			"response.write_json_failed",
+			"concern",
+			"cli.output",
+			"component",
+			"response",
+			"err",
+			err,
+		)
+
 		return fmt.Errorf("response: write json: %w", err)
 	}
+
 	return nil
 }
 
-func marshalJSONObjectBody(ctx context.Context, payload map[string]json.RawMessage, style JSONStyle) ([]byte, error) {
+func marshalJSONObjectBody(
+	ctx context.Context,
+	payload map[string]json.RawMessage,
+	style JSONStyle,
+) ([]byte, error) {
 	var body []byte
 	var err error
 	switch style {
@@ -121,14 +165,30 @@ func marshalJSONObjectBody(ctx context.Context, payload map[string]json.RawMessa
 	default:
 		body, err = json.Marshal(payload)
 	}
+
 	if err != nil {
-		slog.WarnContext(ctx, "response.encode_json_failed", "concern", "cli.output", "component", "response", "err", err)
+		slog.WarnContext(
+			ctx,
+			"response.encode_json_failed",
+			"concern",
+			"cli.output",
+			"component",
+			"response",
+			"err",
+			err,
+		)
+
 		return nil, fmt.Errorf("response: encode json envelope: %w", err)
 	}
+
 	return append(body, '\n'), nil
 }
 
-func marshalJSONDocumentBody(ctx context.Context, payload JSONDocument, style JSONStyle) ([]byte, error) {
+func marshalJSONDocumentBody(
+	ctx context.Context,
+	payload JSONDocument,
+	style JSONStyle,
+) ([]byte, error) {
 	var body []byte
 	var err error
 	switch style {
@@ -139,9 +199,21 @@ func marshalJSONDocumentBody(ctx context.Context, payload JSONDocument, style JS
 	default:
 		body, err = json.Marshal(payload)
 	}
+
 	if err != nil {
-		slog.WarnContext(ctx, "response.encode_json_failed", "concern", "cli.output", "component", "response", "err", err)
+		slog.WarnContext(
+			ctx,
+			"response.encode_json_failed",
+			"concern",
+			"cli.output",
+			"component",
+			"response",
+			"err",
+			err,
+		)
+
 		return nil, fmt.Errorf("response: encode json envelope: %w", err)
 	}
+
 	return append(body, '\n'), nil
 }

@@ -8,8 +8,15 @@ import (
 )
 
 func childProcessIDs(ctx context.Context, parentPID int) ([]int, error) {
-	slog.DebugContext(ctx, "daemon.status.worker_children_unsupported", "concern", "process.daemon.lifecycle", "component", "daemon",
-		"parent_pid", parentPID,
+	slog.DebugContext(
+		ctx,
+		"daemon.status.worker_children_unsupported",
+		"concern",
+		"process.daemon.lifecycle",
+		"component",
+		"daemon",
+		"parent_pid",
+		parentPID,
 	)
 	return nil, nil
 }

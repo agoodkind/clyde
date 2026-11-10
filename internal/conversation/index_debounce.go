@@ -10,5 +10,6 @@ func refreshDebounceFor(period time.Duration, limit time.Duration) time.Duration
 	if period >= limit {
 		return limit
 	}
+
 	return period / refreshDebounceDivisor
 }

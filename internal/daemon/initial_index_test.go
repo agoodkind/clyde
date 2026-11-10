@@ -20,7 +20,10 @@ func TestRunInitialConversationIndexBuildsRawIndexWhenIngestionIsDisabled(t *tes
 
 	previousDial := dialInitialSemantic
 	calls := 0
-	dialInitialSemantic = func(context.Context, config.ConversationSemanticConfig) (initialSemanticClient, error) {
+	dialInitialSemantic = func(context.Context, config.ConversationSemanticConfig) (
+		initialSemanticClient,
+		error,
+	) {
 		calls++
 		return nil, fmt.Errorf("should not call semantic when disabled")
 	}
@@ -30,22 +33,28 @@ func TestRunInitialConversationIndexBuildsRawIndexWhenIngestionIsDisabled(t *tes
 	if err := RunInitialConversationIndex(context.Background(), &output, nil); err != nil {
 		t.Fatalf("RunInitialConversationIndex: %v", err)
 	}
+
 	if calls != 0 {
 		t.Fatalf("semantic dial calls = %d, want 0", calls)
 	}
+
 	got := output.String()
 	if !strings.Contains(got, "Initial indexing: complete with 0 conversations") {
 		t.Fatalf("output = %q, missing completion count", got)
 	}
+
 	if !strings.Contains(got, "Initial indexing: discovering raw conversations from claude") {
 		t.Fatalf("output = %q, missing scoped discovery output", got)
 	}
+
 	if !strings.Contains(got, "Initial indexing: finished raw conversation discovery for claude") {
 		t.Fatalf("output = %q, missing scoped discovery completion", got)
 	}
+
 	if !strings.Contains(got, "Initial indexing: raw conversation discovery elapsed ") {
 		t.Fatalf("output = %q, missing heartbeat output", got)
 	}
+
 	if _, err := os.Stat(conversation.CachePath()); err != nil {
 		t.Fatalf("conversation cache not created: %v", err)
 	}
@@ -54,7 +63,10 @@ func TestRunInitialConversationIndexBuildsRawIndexWhenIngestionIsDisabled(t *tes
 func TestRunInitialConversationIndexReportsProgress(t *testing.T) {
 	configureInitialIndexTest(t, true)
 	previousDial := dialInitialSemantic
-	dialInitialSemantic = func(context.Context, config.ConversationSemanticConfig) (initialSemanticClient, error) {
+	dialInitialSemantic = func(context.Context, config.ConversationSemanticConfig) (
+		initialSemanticClient,
+		error,
+	) {
 		return &fakeInitialSemanticClient{
 			fakeConversationSemanticClient: &fakeConversationSemanticClient{},
 		}, nil
@@ -62,11 +74,16 @@ func TestRunInitialConversationIndexReportsProgress(t *testing.T) {
 	t.Cleanup(func() { dialInitialSemantic = previousDial })
 
 	var output bytes.Buffer
-	if err := RunInitialConversationIndex(context.Background(), &output, func(completed int, total int) {
-		_, _ = fmt.Fprintf(&output, "Initial indexing: %d/%d conversations\n", completed, total)
-	}); err != nil {
+	if err := RunInitialConversationIndex(
+		context.Background(),
+		&output,
+		func(completed int, total int) {
+			_, _ = fmt.Fprintf(&output, "Initial indexing: %d/%d conversations\n", completed, total)
+		},
+	); err != nil {
 		t.Fatalf("RunInitialConversationIndex: %v", err)
 	}
+
 	for _, want := range []string{
 		"Initial indexing: starting raw conversation discovery\n",
 		"Initial indexing: 0/",
@@ -93,7 +110,11 @@ func TestInitialIndexRefreshFailureNamesRawDiscovery(t *testing.T) {
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("refresh error = %v, want %v", err, wantErr)
 	}
-	if got := output.String(); !strings.Contains(got, "Initial indexing: raw conversation discovery failed: store unreadable") {
+
+	if got := output.String(); !strings.Contains(
+		got,
+		"Initial indexing: raw conversation discovery failed: store unreadable",
+	) {
 		t.Fatalf("output = %q, missing scoped discovery failure", got)
 	}
 }
@@ -137,6 +158,7 @@ func (output initialIndexHeartbeatOutput) Write(payload []byte) (int, error) {
 	case output <- string(payload):
 	default:
 	}
+
 	return len(payload), nil
 }
 
@@ -152,7 +174,10 @@ func TestRunInitialConversationIndexTriesSemanticOnce(t *testing.T) {
 	configureInitialIndexTest(t, true)
 	var attempts int
 	previousDial := dialInitialSemantic
-	dialInitialSemantic = func(context.Context, config.ConversationSemanticConfig) (initialSemanticClient, error) {
+	dialInitialSemantic = func(context.Context, config.ConversationSemanticConfig) (
+		initialSemanticClient,
+		error,
+	) {
 		attempts++
 		return nil, fmt.Errorf("semantic engine unavailable")
 	}
@@ -162,9 +187,11 @@ func TestRunInitialConversationIndexTriesSemanticOnce(t *testing.T) {
 	if err := RunInitialConversationIndex(context.Background(), &output, nil); err != nil {
 		t.Fatalf("RunInitialConversationIndex: %v", err)
 	}
+
 	if attempts != 1 {
 		t.Fatalf("semantic dial attempts = %d, want 1", attempts)
 	}
+
 	if got := strings.Count(output.String(), "semantic service is unavailable"); got != 1 {
 		t.Fatalf("semantic unavailable messages = %d, want 1: %q", got, output.String())
 	}
@@ -186,11 +213,17 @@ func configureInitialIndexTest(t *testing.T, ingestionEnabled bool) {
 	if err := os.MkdirAll(configDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+
 	body := "[conversation.semantic]\ningestion_enabled = false\nsearch_enabled = false\n"
 	if ingestionEnabled {
 		body = "[conversation.semantic]\ningestion_enabled = true\nsearch_enabled = false\nmilvus_address = \"[::1]:1\"\n"
 	}
-	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(body), 0o600); err != nil {
+
+	if err := os.WriteFile(
+		filepath.Join(configDir, "config.toml"),
+		[]byte(body),
+		0o600,
+	); err != nil {
 		t.Fatal(err)
 	}
 }

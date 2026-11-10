@@ -97,10 +97,12 @@ func (record *Record) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return fmt.Errorf("decode conversation record: %w", err)
 	}
+
 	provider, err := decodeRecordProvider(wire.Provider)
 	if err != nil {
 		return err
 	}
+
 	*record = Record{
 		ID:              wire.ID,
 		Provider:        provider,
@@ -120,6 +122,7 @@ func (record *Record) UnmarshalJSON(data []byte) error {
 		Archived:        wire.Archived,
 		LatestRequestID: wire.LatestRequestID,
 	}
+
 	return nil
 }
 
@@ -132,8 +135,12 @@ func decodeRecordProvider(data json.RawMessage) (Provider, error) {
 	if err := json.Unmarshal(data, &rawLabel); err == nil {
 		provider, ok := providerid.Parse(rawLabel)
 		if !ok {
-			return providerid.ProviderUnspecified, fmt.Errorf("parse conversation provider %q", rawLabel)
+			return providerid.ProviderUnspecified, fmt.Errorf(
+				"parse conversation provider %q",
+				rawLabel,
+			)
 		}
+
 		return provider, nil
 	}
 
@@ -141,10 +148,15 @@ func decodeRecordProvider(data json.RawMessage) (Provider, error) {
 	if err := json.Unmarshal(data, &rawValue); err == nil {
 		provider := providerid.Provider(rawValue)
 		if !provider.Valid() {
-			return providerid.ProviderUnspecified, fmt.Errorf("parse conversation provider enum value %d", rawValue)
+			return providerid.ProviderUnspecified, fmt.Errorf(
+				"parse conversation provider enum value %d",
+				rawValue,
+			)
 		}
+
 		return provider, nil
 	}
+
 	return providerid.ProviderUnspecified, fmt.Errorf("decode conversation provider")
 }
 

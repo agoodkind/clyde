@@ -20,6 +20,7 @@ func MarshalResponsesTextForChatFormat(raw json.RawMessage) (json.RawMessage, er
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil, nil
 	}
+
 	var request struct {
 		Type       string `json:"type"`
 		JSONSchema *struct {
@@ -32,6 +33,7 @@ func MarshalResponsesTextForChatFormat(raw json.RawMessage) (json.RawMessage, er
 	if err := json.Unmarshal(raw, &request); err != nil {
 		return nil, errors.New("invalid response_format")
 	}
+
 	var format json.RawMessage
 	switch chatResponseFormatType(request.Type) {
 	case chatResponseFormatText:
@@ -42,29 +44,46 @@ func MarshalResponsesTextForChatFormat(raw json.RawMessage) (json.RawMessage, er
 		if request.JSONSchema == nil || strings.TrimSpace(request.JSONSchema.Name) == "" {
 			return nil, errors.New("response_format.json_schema requires a name and object schema")
 		}
+
 		schema := strings.TrimSpace(string(request.JSONSchema.Schema))
 		if schema == "" || schema[0] != '{' {
 			return nil, errors.New("response_format.json_schema requires a name and object schema")
 		}
-		encoded, err := json.Marshal(struct {
-			Type        string          `json:"type"`
-			Name        string          `json:"name"`
-			Description string          `json:"description,omitempty"`
-			Schema      json.RawMessage `json:"schema"`
-			Strict      *bool           `json:"strict,omitempty"`
-		}{Type: "json_schema", Name: request.JSONSchema.Name, Description: request.JSONSchema.Description, Schema: request.JSONSchema.Schema, Strict: request.JSONSchema.Strict})
+
+		encoded, err := json.Marshal(
+			struct {
+				Type        string          `json:"type"`
+				Name        string          `json:"name"`
+				Description string          `json:"description,omitempty"`
+				Schema      json.RawMessage `json:"schema"`
+				Strict      *bool           `json:"strict,omitempty"`
+			}{
+				Type:        "json_schema",
+				Name:        request.JSONSchema.Name,
+				Description: request.JSONSchema.Description,
+				Schema:      request.JSONSchema.Schema,
+				Strict:      request.JSONSchema.Strict,
+			},
+		)
 		if err != nil {
 			return nil, errors.New("marshal JSON schema format: " + err.Error())
 		}
+
 		format = encoded
 	default:
 		return nil, errors.New("unsupported response_format.type")
 	}
-	text, err := json.Marshal(struct {
-		Format json.RawMessage `json:"format"`
-	}{Format: format})
+
+	text, err := json.Marshal(
+		struct {
+			Format json.RawMessage `json:"format"`
+		}{
+			Format: format,
+		},
+	)
 	if err != nil {
 		return nil, errors.New("marshal Responses text format: " + err.Error())
 	}
+
 	return text, nil
 }

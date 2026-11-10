@@ -10,6 +10,7 @@ func TestRouteProviderClaimsConductorConnectHosts(t *testing.T) {
 	if !claim.Claimed {
 		t.Fatal("expected api.conductor.build claim")
 	}
+
 	if claim.ProviderID != providerID {
 		t.Fatalf("provider id = %v want %v", claim.ProviderID, providerID)
 	}

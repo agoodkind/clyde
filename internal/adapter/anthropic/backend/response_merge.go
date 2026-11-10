@@ -39,7 +39,9 @@ type JSONCoercion struct {
 // `response_format` pass a JSONCoercion with both Coerce and Validate
 // set; otherwise the merger leaves assistant text untouched.
 func MergeCollectedEvents(
-	reqID, modelAlias, systemFingerprint string,
+	reqID string,
+	modelAlias string,
+	systemFingerprint string,
 	events []adapterrender.Event,
 	usage adapteropenai.Usage,
 	finishReason string,
@@ -56,18 +58,30 @@ func MergeCollectedEvents(
 	}
 
 	msg := adapteropenai.ChatMessage{
-		Role:    "assistant",
-		Content: jsonRawQuoted(outText), Name: "", ToolCalls: nil, ToolCallID: "", Reasoning: "", ReasoningContent: "", Refusal: "", Annotations: nil,
+		Role:             "assistant",
+		Content:          jsonRawQuoted(outText),
+		Name:             "",
+		ToolCalls:        nil,
+		ToolCallID:       "",
+		Reasoning:        "",
+		ReasoningContent: "",
+		Refusal:          "",
+		Annotations:      nil,
 	}
 	if collected.Reasoning != "" {
 		msg.Reasoning = collected.Reasoning
 		msg.ReasoningContent = collected.Reasoning
 	}
+
 	if collected.Refusal != "" {
 		msg.Refusal = collected.Refusal
-	} else if strings.EqualFold(anthropicStopReason, "refusal") && strings.TrimSpace(outText) != "" {
+	} else if strings.EqualFold(
+		anthropicStopReason,
+		"refusal",
+	) && strings.TrimSpace(outText) != "" {
 		msg.Refusal = outText
 	}
+
 	msg.ToolCalls = append(msg.ToolCalls, collected.ToolCalls...)
 
 	return adapteropenai.ChatResponse{
@@ -76,11 +90,14 @@ func MergeCollectedEvents(
 		Created:           clock.Now().Unix(),
 		Model:             modelAlias,
 		SystemFingerprint: systemFingerprint,
-		Choices: []adapteropenai.ChatChoice{{
-			Index:        0,
-			Message:      msg,
-			FinishReason: finishReason, Logprobs: nil,
-		}},
+		Choices: []adapteropenai.ChatChoice{
+			{
+				Index:        0,
+				Message:      msg,
+				FinishReason: finishReason,
+				Logprobs:     nil,
+			},
+		},
 		Usage: &usage,
 	}
 }

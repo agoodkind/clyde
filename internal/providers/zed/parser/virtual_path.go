@@ -26,7 +26,9 @@ func RootHash(rootDir string) string {
 	if rootDir == "" {
 		return ""
 	}
+
 	sum := sha256.Sum256([]byte(rootDir))
+
 	return hex.EncodeToString(sum[:8])
 }
 
@@ -36,14 +38,18 @@ func ParseVirtualPath(raw string) (VirtualPath, error) {
 	if !strings.HasPrefix(raw, virtualPathPrefix) {
 		return VirtualPath{}, fmt.Errorf("invalid zed virtual path %q", raw)
 	}
+
 	trimmed := strings.TrimPrefix(raw, virtualPathPrefix)
 	parts := strings.Split(trimmed, "/")
 	if len(parts) != 3 {
 		return VirtualPath{}, fmt.Errorf("invalid zed virtual path %q", raw)
 	}
-	if parts[0] != strings.TrimSpace(parts[0]) || parts[1] != strings.TrimSpace(parts[1]) || parts[2] != strings.TrimSpace(parts[2]) {
+
+	if parts[0] != strings.TrimSpace(parts[0]) || parts[1] != strings.TrimSpace(parts[1]) ||
+		parts[2] != strings.TrimSpace(parts[2]) {
 		return VirtualPath{}, fmt.Errorf("invalid zed virtual path %q", raw)
 	}
+
 	path := VirtualPath{
 		RootHash:  parts[0],
 		Channel:   parts[1],
@@ -52,15 +58,19 @@ func ParseVirtualPath(raw string) (VirtualPath, error) {
 	if path.RootHash == "" || path.Channel == "" || path.SessionID == "" {
 		return VirtualPath{}, fmt.Errorf("invalid zed virtual path %q", raw)
 	}
+
 	if len(path.RootHash) != rootHashHexLength {
 		return VirtualPath{}, fmt.Errorf("invalid zed virtual path %q", raw)
 	}
+
 	if _, err := hex.DecodeString(path.RootHash); err != nil {
 		return VirtualPath{}, fmt.Errorf("invalid zed virtual path %q", raw)
 	}
+
 	if strings.ContainsAny(path.Channel, "?#") || strings.ContainsAny(path.SessionID, "?#") {
 		return VirtualPath{}, fmt.Errorf("invalid zed virtual path %q", raw)
 	}
+
 	return path, nil
 }
 
@@ -68,12 +78,15 @@ func buildVirtualPathFromRootHash(rootHash, channel, sessionID string) string {
 	if rootHash == "" || channel == "" || sessionID == "" {
 		return ""
 	}
+
 	if strings.Contains(channel, "/") || strings.Contains(sessionID, "/") {
 		return ""
 	}
+
 	path := virtualPathPrefix + rootHash + "/" + channel + "/" + sessionID
 	if _, err := ParseVirtualPath(path); err != nil {
 		return ""
 	}
+
 	return path
 }

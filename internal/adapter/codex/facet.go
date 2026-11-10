@@ -41,36 +41,47 @@ func (f Facet) FacetAttrs() []slog.Attr {
 	if f.Model != "" {
 		attrs = append(attrs, slog.String("model", f.Model))
 	}
+
 	if f.Effort != "" {
 		attrs = append(attrs, slog.String("effort", f.Effort))
 	}
+
 	if f.ReasoningSummary != "" {
 		attrs = append(attrs, slog.String("reasoning_summary", f.ReasoningSummary))
 	}
+
 	if f.Transport != "" {
 		attrs = append(attrs, slog.String("transport", f.Transport))
 	}
+
 	if f.ServiceTier != "" {
 		attrs = append(attrs, slog.String("service_tier", f.ServiceTier))
 	}
+
 	if f.PreviousResponseID {
 		attrs = append(attrs, slog.Bool("previous_response_id", true))
 	}
+
 	if f.PromptCacheKeyPresent {
 		attrs = append(attrs, slog.Bool("prompt_cache_key_present", true))
 	}
+
 	if f.InputCount > 0 {
 		attrs = append(attrs, slog.Int("input_count", f.InputCount))
 	}
+
 	if f.ToolCount > 0 {
 		attrs = append(attrs, slog.Int("tool_count", f.ToolCount))
 	}
+
 	if f.StreamEventCount > 0 {
 		attrs = append(attrs, slog.Int("stream_event_count", f.StreamEventCount))
 	}
+
 	if f.RetryAttempt > 0 {
 		attrs = append(attrs, slog.Int("retry_attempt", f.RetryAttempt))
 	}
+
 	return attrs
 }
 
@@ -89,6 +100,7 @@ func RegisterBackendFacet(reg backendfacet.Registrar) {
 	if reg == nil {
 		return
 	}
+
 	reg.Register(adaptermodel.BackendCodex.String(), backendfacet.FactoryFunc(newBackendFacet))
 }
 

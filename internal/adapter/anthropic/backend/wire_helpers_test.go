@@ -13,37 +13,45 @@ import (
 func TestToAPIRequestInjectsUnsignedThinkingAsText(t *testing.T) {
 	t.Parallel()
 	tr := AnthRequest{
-		Messages: []AnthMessage{{
-			Role: "assistant",
-			Content: []AnthContentBlock{
-				ThinkingBlock{Thinking: "deliberation body"},
-				TextBlock{Text: "final"},
+		Messages: []AnthMessage{
+			{
+				Role: "assistant",
+				Content: []AnthContentBlock{
+					ThinkingBlock{Thinking: "deliberation body"},
+					TextBlock{Text: "final"},
+				},
 			},
-		}},
+		},
 		MaxTokens: 64,
 	}
 	out, _ := ToAPIRequest(tr, "claude-x", false)
 	if len(out.Messages) != 1 {
 		t.Fatalf("messages=%d want 1", len(out.Messages))
 	}
+
 	wireBlocks := out.Messages[0].Content
 	if len(wireBlocks) != 2 {
 		t.Fatalf("wire blocks=%d want 2: %+v", len(wireBlocks), wireBlocks)
 	}
+
 	if wireBlocks[0].Type != "text" {
 		t.Fatalf("block0 type=%q want text", wireBlocks[0].Type)
 	}
+
 	if wireBlocks[0].Text != "deliberation body" {
 		t.Fatalf("block0 text=%q want %q", wireBlocks[0].Text, "deliberation body")
 	}
+
 	encoded, err := json.Marshal(wireBlocks[0])
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
+
 	wireJSON := string(encoded)
 	if strings.Contains(wireJSON, `"type":"thinking"`) {
 		t.Fatalf("unsigned thinking leaked as native wire block: %s", wireJSON)
 	}
+
 	if !strings.Contains(wireJSON, `"text":"deliberation body"`) {
 		t.Fatalf("thinking body missing from text wire JSON: %s", encoded)
 	}
@@ -56,23 +64,27 @@ func TestToAPIRequestInjectsUnsignedThinkingAsText(t *testing.T) {
 func TestToAPIRequestDropsEmptyThinkingBlock(t *testing.T) {
 	t.Parallel()
 	tr := AnthRequest{
-		Messages: []AnthMessage{{
-			Role: "assistant",
-			Content: []AnthContentBlock{
-				ThinkingBlock{Thinking: ""},
-				ThinkingBlock{Thinking: "   "},
-				TextBlock{Text: "answer"},
+		Messages: []AnthMessage{
+			{
+				Role: "assistant",
+				Content: []AnthContentBlock{
+					ThinkingBlock{Thinking: ""},
+					ThinkingBlock{Thinking: "   "},
+					TextBlock{Text: "answer"},
+				},
 			},
-		}},
+		},
 		MaxTokens: 64,
 	}
 	out, _ := ToAPIRequest(tr, "claude-x", false)
+
 	wireBlocks := out.Messages[0].Content
 	for _, b := range wireBlocks {
 		if b.Type == "thinking" {
 			t.Fatalf("empty-body thinking block leaked through: %+v", b)
 		}
 	}
+
 	if len(wireBlocks) != 1 || wireBlocks[0].Type != "text" {
 		t.Fatalf("expected single text block, got %+v", wireBlocks)
 	}
@@ -87,26 +99,31 @@ func TestToAPIRequestDropsEmptyThinkingBlock(t *testing.T) {
 func TestToAPIRequestCopiesThinkingSignature(t *testing.T) {
 	t.Parallel()
 	tr := AnthRequest{
-		Messages: []AnthMessage{{
-			Role: "assistant",
-			Content: []AnthContentBlock{
-				ThinkingBlock{Thinking: "deliberation body", Signature: "SIG_BLOB=="},
+		Messages: []AnthMessage{
+			{
+				Role: "assistant",
+				Content: []AnthContentBlock{
+					ThinkingBlock{Thinking: "deliberation body", Signature: "SIG_BLOB=="},
+				},
 			},
-		}},
+		},
 		MaxTokens: 64,
 	}
 	out, _ := ToAPIRequest(tr, "claude-x", false)
 	if len(out.Messages) != 1 || len(out.Messages[0].Content) != 1 {
 		t.Fatalf("unexpected message shape: %+v", out.Messages)
 	}
+
 	block := out.Messages[0].Content[0]
 	if block.Signature != "SIG_BLOB==" {
 		t.Fatalf("wire block signature=%q want SIG_BLOB==", block.Signature)
 	}
+
 	encoded, err := json.Marshal(block)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
+
 	if !strings.Contains(string(encoded), `"signature":"SIG_BLOB=="`) {
 		t.Fatalf("signature missing from wire JSON: %s", encoded)
 	}
@@ -122,34 +139,45 @@ func TestToAPIRequestCopiesThinkingSignature(t *testing.T) {
 func TestToAPIRequestPreservesSignedEmptyBodyThinkingBlock(t *testing.T) {
 	t.Parallel()
 	tr := AnthRequest{
-		Messages: []AnthMessage{{
-			Role: "assistant",
-			Content: []AnthContentBlock{
-				ThinkingBlock{Thinking: "", Signature: "SIGNED_EMPTY_BODY=="},
-				TextBlock{Text: "final"},
+		Messages: []AnthMessage{
+			{
+				Role: "assistant",
+				Content: []AnthContentBlock{
+					ThinkingBlock{Thinking: "", Signature: "SIGNED_EMPTY_BODY=="},
+					TextBlock{Text: "final"},
+				},
 			},
-		}},
+		},
 		MaxTokens: 64,
 	}
 	out, _ := ToAPIRequest(tr, "claude-x", false)
 	wireBlocks := out.Messages[0].Content
 	if len(wireBlocks) != 2 {
-		t.Fatalf("wire blocks=%d want 2 (signed thinking + text); got %+v", len(wireBlocks), wireBlocks)
+		t.Fatalf(
+			"wire blocks=%d want 2 (signed thinking + text); got %+v",
+			len(wireBlocks),
+			wireBlocks,
+		)
 	}
+
 	if wireBlocks[0].Type != "thinking" {
 		t.Fatalf("block0 type=%q want thinking", wireBlocks[0].Type)
 	}
+
 	if wireBlocks[0].Signature != "SIGNED_EMPTY_BODY==" {
 		t.Fatalf("block0 signature=%q want SIGNED_EMPTY_BODY==", wireBlocks[0].Signature)
 	}
+
 	encoded, err := json.Marshal(wireBlocks[0])
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
+
 	body := string(encoded)
 	if !strings.Contains(body, `"signature":"SIGNED_EMPTY_BODY=="`) {
 		t.Fatalf("wire JSON missing signature: %s", body)
 	}
+
 	// Empty thinking body must NOT appear on the wire (omitempty).
 	if strings.Contains(body, `"thinking":""`) {
 		t.Fatalf("empty thinking body should be omitted: %s", body)

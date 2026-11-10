@@ -28,7 +28,9 @@ func TestAdapterEgressRecordedToCaptureStore(t *testing.T) {
 	client := New(nil, nil, Config{CaptureStore: store})
 
 	reqBody := []byte(`{"model":"claude-opus-4-8","messages":[]}`)
-	respBody := []byte("event: message_start\ndata: {\"type\":\"message_start\"}\n\nevent: message_stop\ndata: {}\n\n")
+	respBody := []byte(
+		"event: message_start\ndata: {\"type\":\"message_start\"}\n\nevent: message_stop\ndata: {}\n\n",
+	)
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header: http.Header{
@@ -49,7 +51,11 @@ func TestAdapterEgressRecordedToCaptureStore(t *testing.T) {
 		reqBody: reqBody,
 		started: clock.Now(),
 	}
-	base := responseEvent{Subcomponent: "anthropic", Model: "claude-opus-4-8", Status: http.StatusOK}
+	base := responseEvent{
+		Subcomponent: "anthropic",
+		Model:        "claude-opus-4-8",
+		Status:       http.StatusOK,
+	}
 
 	client.attachEgressObservers(context.Background(), resp, base, ex)
 
@@ -57,12 +63,15 @@ func TestAdapterEgressRecordedToCaptureStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read tee body: %v", err)
 	}
+
 	if err := resp.Body.Close(); err != nil {
 		t.Fatalf("close tee body: %v", err)
 	}
+
 	if !bytes.Equal(streamed, respBody) {
 		t.Fatalf("tee altered streamed body: got %q want %q", streamed, respBody)
 	}
+
 	if err := store.Close(context.Background(), "test"); err != nil {
 		t.Fatalf("store.Close: %v", err)
 	}
@@ -71,42 +80,69 @@ func TestAdapterEgressRecordedToCaptureStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open verifier: %v", err)
 	}
+
 	defer func() { _ = db.Close() }()
 
 	var (
 		clientTag, host, method, path, upstreamRequestID, respType string
 		status                                                     int
 	)
-	row := db.QueryRow(`SELECT client, host, method, path, status, upstream_request_id, resp_content_type FROM requests WHERE client='adapter.anthropic'`)
-	if err := row.Scan(&clientTag, &host, &method, &path, &status, &upstreamRequestID, &respType); err != nil {
+	row := db.QueryRow(
+		`SELECT client, host, method, path, status, upstream_request_id, resp_content_type FROM requests WHERE client='adapter.anthropic'`,
+	)
+	if err := row.Scan(
+		&clientTag,
+		&host,
+		&method,
+		&path,
+		&status,
+		&upstreamRequestID,
+		&respType,
+	); err != nil {
 		t.Fatalf("scan requests row: %v", err)
 	}
+
 	if clientTag != "adapter.anthropic" {
 		t.Fatalf("client = %q, want adapter.anthropic", clientTag)
 	}
+
 	if host != "api.anthropic.com" || method != http.MethodPost || path != "/v1/messages" {
 		t.Fatalf("host/method/path = %q/%q/%q", host, method, path)
 	}
+
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, want 200", status)
 	}
+
 	if upstreamRequestID != "req_upstream_1" {
 		t.Fatalf("upstream_request_id = %q, want req_upstream_1", upstreamRequestID)
 	}
+
 	if respType != "text/event-stream" {
 		t.Fatalf("resp_content_type = %q, want text/event-stream", respType)
 	}
 
 	var storedReq, storedResp []byte
-	if err := db.QueryRow(`SELECT data FROM bodies WHERE request_row_id=(SELECT id FROM requests WHERE client='adapter.anthropic') AND which='request'`).Scan(&storedReq); err != nil {
+	if err := db.QueryRow(
+		`SELECT data FROM bodies WHERE request_row_id=(SELECT id FROM requests WHERE client='adapter.anthropic') AND which='request'`,
+	).Scan(
+		&storedReq,
+	); err != nil {
 		t.Fatalf("scan request body: %v", err)
 	}
+
 	if !bytes.Equal(storedReq, reqBody) {
 		t.Fatalf("stored request body = %q, want %q", storedReq, reqBody)
 	}
-	if err := db.QueryRow(`SELECT data FROM bodies WHERE request_row_id=(SELECT id FROM requests WHERE client='adapter.anthropic') AND which='response'`).Scan(&storedResp); err != nil {
+
+	if err := db.QueryRow(
+		`SELECT data FROM bodies WHERE request_row_id=(SELECT id FROM requests WHERE client='adapter.anthropic') AND which='response'`,
+	).Scan(
+		&storedResp,
+	); err != nil {
 		t.Fatalf("scan response body: %v", err)
 	}
+
 	if !bytes.Equal(storedResp, respBody) {
 		t.Fatalf("stored response body = %q, want %q", storedResp, respBody)
 	}
@@ -121,7 +157,12 @@ func TestAdapterEgressNilStoreLeavesBodyUntouched(t *testing.T) {
 	original := io.NopCloser(bytes.NewReader(respBody))
 	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: original}
 
-	client.attachEgressObservers(context.Background(), resp, responseEvent{Status: http.StatusOK}, egressExchange{started: clock.Now()})
+	client.attachEgressObservers(
+		context.Background(),
+		resp,
+		responseEvent{Status: http.StatusOK},
+		egressExchange{started: clock.Now()},
+	)
 
 	if resp.Body != original {
 		t.Fatalf("resp.Body was wrapped despite nil store and wire capture off")

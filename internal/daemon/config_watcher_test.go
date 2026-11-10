@@ -31,6 +31,7 @@ func (r *triggerRecorder) reload(context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.reloads++
+
 	return nil
 }
 
@@ -38,19 +39,25 @@ func (r *triggerRecorder) rebind(context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.rebinds++
+
 	return nil
 }
 
 func (r *triggerRecorder) counts() (int, int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	return r.reloads, r.rebinds
 }
 
 // newTestConfigWatcher builds a watcher over a tempdir config path with a short
 // debounce and injected parse, listenerChanged, reload, and rebind so the test
 // needs no live daemon. baselineHash is the hash of the file's initial content.
-func newTestConfigWatcher(t *testing.T, path, baselineHash string) (*configWatcher, *triggerRecorder, *atomic.Bool) {
+func newTestConfigWatcher(
+	t *testing.T,
+	path string,
+	baselineHash string,
+) (*configWatcher, *triggerRecorder, *atomic.Bool) {
 	t.Helper()
 	rec := &triggerRecorder{}
 	var parseErr atomic.Pointer[error]
@@ -63,27 +70,33 @@ func newTestConfigWatcher(t *testing.T, path, baselineHash string) (*configWatch
 		log:          slog.New(slog.NewTextHandler(io.Discard, nil)),
 		debounce:     15 * time.Millisecond,
 		baselineHash: baselineHash,
-		registry: livetrack.Attach[configWatcherMeta](livetrack.NewGroup(livetrack.GroupOptions{Log: nil}), livetrack.MemberSpec{
-			Phase:         livetrack.PhaseWorkers,
-			QuietRelevant: false,
-			CancelNoWait:  true,
-		}, livetrack.Options[configWatcherMeta]{
-			Component:   "daemon",
-			Concern:     slogger.ConcernProcessDaemonConfig,
-			Log:         slog.New(slog.NewTextHandler(io.Discard, nil)),
-			PollEvery:   5 * time.Millisecond,
-			CloserGrace: 200 * time.Millisecond,
-		}),
+		registry: livetrack.Attach[configWatcherMeta](
+			livetrack.NewGroup(livetrack.GroupOptions{Log: nil}),
+			livetrack.MemberSpec{
+				Phase:         livetrack.PhaseWorkers,
+				QuietRelevant: false,
+				CancelNoWait:  true,
+			},
+			livetrack.Options[configWatcherMeta]{
+				Component:   "daemon",
+				Concern:     slogger.ConcernProcessDaemonConfig,
+				Log:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+				PollEvery:   5 * time.Millisecond,
+				CloserGrace: 200 * time.Millisecond,
+			},
+		),
 		parse: func() (*config.Config, error) {
 			if p := parseErr.Load(); p != nil {
 				return nil, *p
 			}
+
 			return config.NewConfigWithDefaults(), nil
 		},
 		classify: func(*config.Config) config.Route {
 			if listenerChanged.Load() {
 				return config.RouteRebind
 			}
+
 			return config.RouteReload
 		},
 		reload: rec.reload,
@@ -94,6 +107,7 @@ func newTestConfigWatcher(t *testing.T, path, baselineHash string) (*configWatch
 	// helpers. Store the pointer on a package-private map keyed by path.
 	testParseErr[path] = &parseErr
 	t.Cleanup(func() { delete(testParseErr, path) })
+
 	return w, rec, listenerChanged
 }
 
@@ -107,6 +121,7 @@ func setParseErr(path string, err error) {
 			p.Store(nil)
 			return
 		}
+
 		p.Store(&err)
 	}
 }
@@ -136,6 +151,7 @@ func TestHandleChangeWaitsForQuietThenTriggers(t *testing.T) {
 	w.quietWait = func(context.Context) bool {
 		close(waitEntered)
 		<-quietReleased
+
 		return true
 	}
 
@@ -146,6 +162,7 @@ func TestHandleChangeWaitsForQuietThenTriggers(t *testing.T) {
 	if reloads, _ := rec.counts(); reloads != 0 {
 		t.Fatalf("reload fired before quiet: reloads=%d, want 0", reloads)
 	}
+
 	close(quietReleased)
 
 	select {
@@ -156,6 +173,7 @@ func TestHandleChangeWaitsForQuietThenTriggers(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("handleChange did not return after quiet released")
 	}
+
 	if reloads, _ := rec.counts(); reloads != 1 {
 		t.Fatalf("reloads after quiet = %d, want 1", reloads)
 	}
@@ -182,6 +200,7 @@ func TestHandleChangeSkipsReloadWhenRevertedDuringWait(t *testing.T) {
 	if triggered := w.handleChange(context.Background()); triggered {
 		t.Fatal("handleChange returned true; expected skip when reverted during wait")
 	}
+
 	if reloads, rebinds := rec.counts(); reloads != 0 || rebinds != 0 {
 		t.Fatalf("triggers after revert: reloads=%d rebinds=%d, want 0 0", reloads, rebinds)
 	}
@@ -209,14 +228,21 @@ func TestHandleChangeHotApplies(t *testing.T) {
 	if triggered := w.handleChange(context.Background()); triggered {
 		t.Fatal("handleChange returned true; hot apply must keep the loop running")
 	}
+
 	if applied != 1 {
 		t.Fatalf("applyInProcess calls = %d, want 1", applied)
 	}
+
 	if reloads, rebinds := rec.counts(); reloads != 0 || rebinds != 0 {
 		t.Fatalf("triggers on hot apply: reloads=%d rebinds=%d, want 0 0", reloads, rebinds)
 	}
+
 	if w.baselineHash != changedHash {
-		t.Fatalf("baseline not advanced after hot apply: got %q, want %q", w.baselineHash, changedHash)
+		t.Fatalf(
+			"baseline not advanced after hot apply: got %q, want %q",
+			w.baselineHash,
+			changedHash,
+		)
 	}
 }
 
@@ -238,6 +264,7 @@ func TestHandleChangeFallsBackToReloadOnApplyFailure(t *testing.T) {
 	if triggered := w.handleChange(context.Background()); !triggered {
 		t.Fatal("handleChange returned false; expected reload fallback after apply failure")
 	}
+
 	if reloads, _ := rec.counts(); reloads != 1 {
 		t.Fatalf("reloads after apply failure = %d, want 1", reloads)
 	}
@@ -264,6 +291,7 @@ func TestHandleChangeRestartRequiredSkips(t *testing.T) {
 	if triggered := w.handleChange(context.Background()); triggered {
 		t.Fatal("handleChange returned true; restart-required must not re-exec")
 	}
+
 	if reloads, rebinds := rec.counts(); reloads != 0 || rebinds != 0 {
 		t.Fatalf("triggers on restart-required: reloads=%d rebinds=%d, want 0 0", reloads, rebinds)
 	}
@@ -273,22 +301,30 @@ func TestHandleChangeRestartRequiredSkips(t *testing.T) {
 // logger, failing the test on a read error.
 func testConfigHash(t *testing.T, path string) string {
 	t.Helper()
-	h, ok := configFileHash(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), path)
+	h, ok := configFileHash(
+		context.Background(),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		path,
+	)
 	if !ok {
 		t.Fatalf("hash %s: read failed", path)
 	}
+
 	return h
 }
 
 func waitFor(t *testing.T, cond func() bool, msg string) {
 	t.Helper()
+
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if cond() {
 			return
 		}
+
 		time.Sleep(5 * time.Millisecond)
 	}
+
 	t.Fatalf("timed out waiting for %s", msg)
 }
 
@@ -422,6 +458,7 @@ func TestConfigWatcherCancelExitsLoop(t *testing.T) {
 	if err := w.start(ctx); err != nil {
 		t.Fatalf("start: %v", err)
 	}
+
 	w.cancelLoop()
 	waitFor(t, func() bool { return w.registry.Count() == 0 }, "watcher session released")
 }

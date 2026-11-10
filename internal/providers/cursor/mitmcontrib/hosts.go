@@ -33,6 +33,7 @@ func isServiceHost(host string) bool {
 	case api2Host, api3Host:
 		return true
 	}
+
 	return strings.HasSuffix(host, ".cursor.sh") ||
 		strings.HasSuffix(host, ".cursor.com")
 }

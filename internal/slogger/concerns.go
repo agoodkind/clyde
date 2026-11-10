@@ -16,5 +16,6 @@ func ConcernRelPath(concern string) string {
 	if c == "" {
 		return ""
 	}
+
 	return strings.ReplaceAll(c, ".", "/") + ".jsonl"
 }

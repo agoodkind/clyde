@@ -18,17 +18,20 @@ type storedDate struct {
 // knownStoredDates returns the known dates of stored rows in the families.
 func knownStoredDates(families map[string][]collection.StoredRow) []storedDate {
 	dates := make([]storedDate, 0)
+
 	for key, members := range families {
 		message, parsed := familyMessage(key)
 		if !parsed {
 			continue
 		}
+
 		for _, row := range members {
 			if stamp, dated := rowStoredDate(row); dated {
 				dates = append(dates, storedDate{message: message, stamp: stamp})
 			}
 		}
 	}
+
 	return dates
 }
 
@@ -40,24 +43,31 @@ func (lookup sourceTimeLookup) matchedTextOutcome(key string, stamp int64, order
 	if lookup.corrections != nil || (!ordered && !lookup.boundedDates[stamp]) {
 		return SourceOutcomeMatched
 	}
+
 	message, parsed := familyMessage(key)
 	if !parsed {
 		return SourceOutcomeDateOrderConflict
 	}
+
 	earlier, later := -1, -1
+
 	for _, date := range lookup.storedDates {
 		if date.message < message && date.message > earlier {
 			earlier = date.message
 		}
+
 		if date.message > message && (later < 0 || date.message < later) {
 			later = date.message
 		}
 	}
+
 	for _, date := range lookup.storedDates {
-		if (date.message == earlier && date.stamp > stamp) || (date.message == later && date.stamp < stamp) {
+		if (date.message == earlier && date.stamp > stamp) ||
+			(date.message == later && date.stamp < stamp) {
 			return SourceOutcomeDateOrderConflict
 		}
 	}
+
 	return SourceOutcomeMatched
 }
 
@@ -67,15 +77,19 @@ func familyMessage(key string) (int, bool) {
 	if len(parts) <= familyMessagePart {
 		return 0, false
 	}
+
 	message, err := strconv.Atoi(parts[familyMessagePart])
+
 	return message, err == nil
 }
 
 // rowStoredDate returns a stored timestamp other than NULL and the unknown time marker.
 func rowStoredDate(row collection.StoredRow) (int64, bool) {
 	cell, found := row.Scalars[timestampUnixColumn]
-	if !found || cell.State != collection.ScalarCellValue || cell.Value.Int64 == missingTimestampUnix {
+	if !found || cell.State != collection.ScalarCellValue ||
+		cell.Value.Int64 == missingTimestampUnix {
 		return 0, false
 	}
+
 	return cell.Value.Int64, true
 }

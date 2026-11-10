@@ -69,7 +69,11 @@ type WorkspaceListing struct {
 // precedence order. The caller owns the returned slice.
 func (listing WorkspaceListing) DiscoveryEntries() []WorkspaceEntry {
 	entries := append(slices.Clone(listing.Entries), listing.Retained...)
-	sort.SliceStable(entries, func(i, j int) bool { return entries[i].WorkspaceHash < entries[j].WorkspaceHash })
+	sort.SliceStable(
+		entries,
+		func(i, j int) bool { return entries[i].WorkspaceHash < entries[j].WorkspaceHash },
+	)
+
 	return entries
 }
 
@@ -84,14 +88,19 @@ func ResolveDataRoots(ctx context.Context, dataDirs string) ([]DataRoot, error) 
 	if err != nil {
 		return nil, err
 	}
+
 	out := make([]DataRoot, 0, len(roots))
 	for _, root := range roots {
-		out = append(out, DataRoot{
-			RootDir:             root,
-			GlobalDBPath:        filepath.Join(root, cursorGlobalDBRelative),
-			WorkspaceStorageDir: filepath.Join(root, cursorWorkspaceStorageName),
-		})
+		out = append(
+			out,
+			DataRoot{
+				RootDir:             root,
+				GlobalDBPath:        filepath.Join(root, cursorGlobalDBRelative),
+				WorkspaceStorageDir: filepath.Join(root, cursorWorkspaceStorageName),
+			},
+		)
 	}
+
 	return out, nil
 }
 
@@ -118,7 +127,12 @@ func ResolveDataRootsFromEnv(ctx context.Context) ([]DataRoot, error) {
 func (root DataRoot) ListWorkspaceEntries() (WorkspaceListing, error) {
 	sharedDiscovery.mu.Lock()
 	defer sharedDiscovery.mu.Unlock()
-	listing := WorkspaceListing{Entries: nil, Retained: nil, Unreadable: 0, StorageDirMissing: false}
+	listing := WorkspaceListing{
+		Entries:           nil,
+		Retained:          nil,
+		Unreadable:        0,
+		StorageDirMissing: false,
+	}
 	prior := sharedDiscovery.listings[root.WorkspaceStorageDir]
 
 	entries, err := os.ReadDir(root.WorkspaceStorageDir)
@@ -126,12 +140,27 @@ func (root DataRoot) ListWorkspaceEntries() (WorkspaceListing, error) {
 		if StatSaysAbsent(err, root.WorkspaceStorageDir) {
 			listing.StorageDirMissing = true
 			sharedDiscovery.listings[root.WorkspaceStorageDir] = listing
+
 			return listing, nil
 		}
-		slog.Warn("providers.cursor.store.workspace_storage_read_failed", "concern", concern, "path", root.WorkspaceStorageDir, "err", err)
+
+		slog.Warn(
+			"providers.cursor.store.workspace_storage_read_failed",
+			"concern",
+			concern,
+			"path",
+			root.WorkspaceStorageDir,
+			"err",
+			err,
+		)
 		listing.Retained = prior.DiscoveryEntries()
 		listing.Unreadable = max(1, len(listing.Retained))
-		return listing, fmt.Errorf("read cursor workspace storage dir %s: %w", root.WorkspaceStorageDir, err)
+
+		return listing, fmt.Errorf(
+			"read cursor workspace storage dir %s: %w",
+			root.WorkspaceStorageDir,
+			err,
+		)
 	}
 
 	out := make([]WorkspaceEntry, 0, len(entries))
@@ -139,33 +168,51 @@ func (root DataRoot) ListWorkspaceEntries() (WorkspaceListing, error) {
 		if !entry.IsDir() {
 			continue
 		}
+
 		workspaceHash := entry.Name()
 		workspaceDir := filepath.Join(root.WorkspaceStorageDir, workspaceHash)
 		stateDBPath := filepath.Join(workspaceDir, cursorWorkspaceDBName)
 		present, statErr := filePresent(stateDBPath)
 		if statErr != nil {
 			listing.Unreadable++
+
 			for _, previous := range prior.DiscoveryEntries() {
 				if previous.WorkspaceHash == workspaceHash {
 					listing.Retained = append(listing.Retained, previous)
 				}
 			}
+
 			continue
 		}
+
 		if !present {
 			continue
 		}
-		out = append(out, WorkspaceEntry{
-			WorkspaceHash:     workspaceHash,
-			StateDBPath:       stateDBPath,
-			WorkspaceJSONPath: workspaceDescriptorPath(workspaceDir),
-		})
+
+		out = append(
+			out,
+			WorkspaceEntry{
+				WorkspaceHash:     workspaceHash,
+				StateDBPath:       stateDBPath,
+				WorkspaceJSONPath: workspaceDescriptorPath(workspaceDir),
+			},
+		)
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		return out[i].WorkspaceHash < out[j].WorkspaceHash
-	})
+
+	sort.SliceStable(
+		out,
+		func(i, j int) bool {
+			return out[i].WorkspaceHash < out[j].WorkspaceHash
+		},
+	)
 	listing.Entries = out
-	sharedDiscovery.listings[root.WorkspaceStorageDir] = WorkspaceListing{Entries: slices.Clone(out), Retained: slices.Clone(listing.Retained), Unreadable: listing.Unreadable, StorageDirMissing: false}
+	sharedDiscovery.listings[root.WorkspaceStorageDir] = WorkspaceListing{
+		Entries:           slices.Clone(out),
+		Retained:          slices.Clone(listing.Retained),
+		Unreadable:        listing.Unreadable,
+		StorageDirMissing: false,
+	}
+
 	return listing, nil
 }
 
@@ -184,9 +231,11 @@ func workspaceDescriptorPath(workspaceDir string) string {
 	if err != nil {
 		return descriptorPath
 	}
+
 	if !present {
 		return ""
 	}
+
 	return descriptorPath
 }
 
@@ -202,19 +251,40 @@ func readWorkspaceFolderPath(path string, previousError error) (string, error) {
 	if err != nil {
 		readError := fmt.Errorf("read cursor workspace descriptor %s: %w", path, err)
 		if previousError == nil || previousError.Error() != readError.Error() {
-			slog.Warn("providers.cursor.store.workspace_descriptor_read_failed", "concern", concern, "path", path, "err", err)
+			slog.Warn(
+				"providers.cursor.store.workspace_descriptor_read_failed",
+				"concern",
+				concern,
+				"path",
+				path,
+				"err",
+				err,
+			)
 		}
+
 		return "", readError
 	}
+
 	descriptor, err := decodeWorkspaceDescriptorJSON(data)
 	if err != nil {
-		slog.Warn("providers.cursor.store.workspace_descriptor_decode_failed", "concern", concern, "path", path, "err", err)
+		slog.Warn(
+			"providers.cursor.store.workspace_descriptor_decode_failed",
+			"concern",
+			concern,
+			"path",
+			path,
+			"err",
+			err,
+		)
+
 		return "", fmt.Errorf("decode cursor workspace descriptor %s: %w", path, err)
 	}
+
 	folderPath, err := fileURIToPath(descriptor.Folder)
 	if err != nil {
 		return "", err
 	}
+
 	return folderPath, nil
 }
 
@@ -225,30 +295,37 @@ func resolveDataDirList(ctx context.Context, dataDirs string) ([]string, error) 
 		if err != nil {
 			return nil, err
 		}
+
 		raw = defaultDir
 	}
 
 	seen := make(map[string]bool)
 	out := make([]string, 0, 1)
+
 	for _, entry := range filepath.SplitList(raw) {
 		root := strings.TrimSpace(entry)
 		if root == "" {
 			continue
 		}
+
 		if strings.HasPrefix(root, "~") {
 			root = homedir.Expand(root)
 		}
+
 		absoluteRoot, err := filepath.Abs(root)
 		if err == nil {
 			root = absoluteRoot
 		}
+
 		root = filepath.Clean(root)
 		if seen[root] {
 			continue
 		}
+
 		seen[root] = true
 		out = append(out, root)
 	}
+
 	return out, nil
 }
 
@@ -256,36 +333,84 @@ func defaultCursorDataDir(ctx context.Context) (string, error) {
 	if runtime.GOOS == "darwin" {
 		userHome, err := os.UserHomeDir()
 		if err != nil {
-			slog.WarnContext(ctx, "providers.cursor.store.home_resolve_failed", "concern", concern, "goos", runtime.GOOS, "err", err)
+			slog.WarnContext(
+				ctx,
+				"providers.cursor.store.home_resolve_failed",
+				"concern",
+				concern,
+				"goos",
+				runtime.GOOS,
+				"err",
+				err,
+			)
+
 			return "", fmt.Errorf("resolve cursor home: %w", err)
 		}
+
 		return filepath.Join(userHome, "Library", "Application Support", "Cursor", "User"), nil
 	}
+
 	if runtime.GOOS == "linux" {
 		userHome, err := os.UserHomeDir()
 		if err != nil {
-			slog.WarnContext(ctx, "providers.cursor.store.home_resolve_failed", "concern", concern, "goos", runtime.GOOS, "err", err)
+			slog.WarnContext(
+				ctx,
+				"providers.cursor.store.home_resolve_failed",
+				"concern",
+				concern,
+				"goos",
+				runtime.GOOS,
+				"err",
+				err,
+			)
+
 			return "", fmt.Errorf("resolve cursor home: %w", err)
 		}
+
 		return filepath.Join(userHome, ".config", "Cursor", "User"), nil
 	}
+
 	if runtime.GOOS == "windows" {
 		appData := strings.TrimSpace(os.Getenv("APPDATA"))
 		if appData != "" {
 			return filepath.Join(appData, "Cursor", "User"), nil
 		}
+
 		userHome, err := os.UserHomeDir()
 		if err != nil {
-			slog.WarnContext(ctx, "providers.cursor.store.home_resolve_failed", "concern", concern, "goos", runtime.GOOS, "err", err)
+			slog.WarnContext(
+				ctx,
+				"providers.cursor.store.home_resolve_failed",
+				"concern",
+				concern,
+				"goos",
+				runtime.GOOS,
+				"err",
+				err,
+			)
+
 			return "", fmt.Errorf("resolve cursor home: %w", err)
 		}
+
 		return filepath.Join(userHome, "AppData", "Roaming", "Cursor", "User"), nil
 	}
+
 	userHome, err := os.UserHomeDir()
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.home_resolve_failed", "concern", concern, "goos", runtime.GOOS, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.store.home_resolve_failed",
+			"concern",
+			concern,
+			"goos",
+			runtime.GOOS,
+			"err",
+			err,
+		)
+
 		return "", fmt.Errorf("resolve cursor home for %s: %w", runtime.GOOS, err)
 	}
+
 	return filepath.Join(userHome, ".config", "Cursor", "User"), nil
 }
 
@@ -305,13 +430,25 @@ func StatSaysAbsent(statErr error, path string) bool {
 	if statErr == nil {
 		return false
 	}
+
 	if !errors.Is(statErr, os.ErrNotExist) {
 		return false
 	}
+
 	if _, err := os.Lstat(path); err == nil {
-		slog.Warn("providers.cursor.store.path_link_unresolved", "concern", concern, "path", path, "err", statErr)
+		slog.Warn(
+			"providers.cursor.store.path_link_unresolved",
+			"concern",
+			concern,
+			"path",
+			path,
+			"err",
+			statErr,
+		)
+
 		return false
 	}
+
 	return true
 }
 
@@ -324,10 +461,21 @@ func filePresent(path string) (bool, error) {
 	if err == nil {
 		return true, nil
 	}
+
 	if StatSaysAbsent(err, path) {
 		return false, nil
 	}
-	slog.Warn("providers.cursor.store.file_stat_failed", "concern", concern, "path", path, "err", err)
+
+	slog.Warn(
+		"providers.cursor.store.file_stat_failed",
+		"concern",
+		concern,
+		"path",
+		path,
+		"err",
+		err,
+	)
+
 	return false, fmt.Errorf("stat cursor path %s: %w", path, err)
 }
 
@@ -336,24 +484,40 @@ func fileURIToPath(folder string) (string, error) {
 	if trimmed == "" {
 		return "", nil
 	}
-	if len(trimmed) < len(fileURIPrefix) || !strings.EqualFold(trimmed[:len(fileURIPrefix)], fileURIPrefix) {
+
+	if len(trimmed) < len(fileURIPrefix) ||
+		!strings.EqualFold(trimmed[:len(fileURIPrefix)], fileURIPrefix) {
 		return trimmed, nil
 	}
+
 	parsed, err := url.Parse(trimmed)
 	if err != nil {
-		slog.Warn("providers.cursor.store.file_uri_parse_failed", "concern", concern, "folder", folder, "err", err)
+		slog.Warn(
+			"providers.cursor.store.file_uri_parse_failed",
+			"concern",
+			concern,
+			"folder",
+			folder,
+			"err",
+			err,
+		)
+
 		return "", fmt.Errorf("parse file uri %q: %w", folder, err)
 	}
+
 	if parsed.Scheme != "file" {
 		return trimmed, nil
 	}
+
 	folderPath := parsed.Path
 	if parsed.Host != "" && parsed.Host != "localhost" {
 		folderPath = "//" + parsed.Host + parsed.Path
 	}
+
 	if runtime.GOOS == "windows" && isWindowsDrivePath(folderPath) {
 		folderPath = strings.TrimPrefix(folderPath, "/")
 	}
+
 	return filepath.FromSlash(folderPath), nil
 }
 
@@ -361,6 +525,8 @@ func isWindowsDrivePath(path string) bool {
 	if len(path) < 3 || path[0] != '/' || path[2] != ':' {
 		return false
 	}
+
 	driveLetter := path[1]
+
 	return driveLetter >= 'A' && driveLetter <= 'Z' || driveLetter >= 'a' && driveLetter <= 'z'
 }

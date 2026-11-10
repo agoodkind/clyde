@@ -19,12 +19,22 @@ func (s *Server) Start(ctx context.Context) error {
 	listenConfig := net.ListenConfig{}
 	lis, err := listenConfig.Listen(ctx, "tcp", addr)
 	if err != nil {
-		s.log.WarnContext(ctx, "adapter.listen_failed", "concern", "adapter.http.errors", "subcomponent", "adapter",
-			"addr", addr,
-			"err", err.Error(),
+		s.log.WarnContext(
+			ctx,
+			"adapter.listen_failed",
+			"concern",
+			"adapter.http.errors",
+			"subcomponent",
+			"adapter",
+			"addr",
+			addr,
+			"err",
+			err.Error(),
 		)
+
 		return fmt.Errorf("adapter listen %s: %w", addr, err)
 	}
+
 	return s.StartOnListener(ctx, lis)
 }
 
@@ -44,6 +54,7 @@ func ingressLabelFromContext(ctx context.Context) string {
 	if v, ok := ctx.Value(ingressLabelKey{}).(string); ok {
 		return v
 	}
+
 	return ""
 }
 
@@ -55,6 +66,7 @@ func (s *Server) ingressLabel(c net.Conn) string {
 	if tcpAddr, ok := c.LocalAddr().(*net.TCPAddr); ok {
 		localPort = tcpAddr.Port
 	}
+
 	return ingressLabelForPort(s.cfg.CursorIngressPort, localPort)
 }
 
@@ -64,6 +76,7 @@ func ingressLabelForPort(cursorPort, localPort int) string {
 	if cursorPort > 0 && localPort == cursorPort {
 		return "cursor"
 	}
+
 	return "openai"
 }
 
@@ -84,6 +97,7 @@ func (s *Server) StartOnListeners(ctx context.Context, listeners ...net.Listener
 	if len(listeners) == 0 {
 		return fmt.Errorf("adapter: no listeners to serve")
 	}
+
 	httpSrv := &http.Server{
 		Addr:              listeners[0].Addr().String(),
 		Handler:           s.mux,
@@ -96,39 +110,61 @@ func (s *Server) StartOnListeners(ctx context.Context, listeners ...net.Listener
 	s.httpSrvMu.Lock()
 	s.httpSrv = httpSrv
 	s.httpSrvMu.Unlock()
+
 	addrs := make([]string, 0, len(listeners))
 	for _, lis := range listeners {
 		addrs = append(addrs, lis.Addr().String())
 	}
-	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter listening", slog.String("concern", "process.daemon.listeners"), slog.Any("addrs", addrs),
+
+	s.log.LogAttrs(
+		ctx,
+		slog.LevelInfo,
+		"adapter listening",
+		slog.String("concern", "process.daemon.listeners"),
+		slog.Any("addrs", addrs),
 		slog.Int("models", len(s.modelRegistry().List())),
 	)
+
 	errCh := make(chan error, len(listeners))
 	for _, lis := range listeners {
 		go func(lis net.Listener) {
 			defer func() {
 				if recovered := recover(); recovered != nil {
-					s.log.ErrorContext(ctx, "adapter.serve_panic", "concern", "adapter.http.errors", "subcomponent", "adapter",
-						"addr", lis.Addr().String(),
-						"err", fmt.Sprintf("panic: %v", recovered),
-						"panic", recovered,
+					s.log.ErrorContext(
+						ctx,
+						"adapter.serve_panic",
+						"concern",
+						"adapter.http.errors",
+						"subcomponent",
+						"adapter",
+						"addr",
+						lis.Addr().String(),
+						"err",
+						fmt.Sprintf("panic: %v", recovered),
+						"panic",
+						recovered,
 					)
 					errCh <- fmt.Errorf("adapter serve panic: %v", recovered)
 				}
 			}()
 			errCh <- httpSrv.Serve(lis)
-		}(lis)
+		}(
+			lis,
+		)
 	}
+
 	select {
 	case <-ctx.Done():
 		shutCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 		defer cancel()
 		_ = s.ShutdownHTTP(shutCtx)
+
 		return nil
 	case err := <-errCh:
 		if errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
 			return nil
 		}
+
 		return err
 	}
 }
@@ -161,10 +197,22 @@ func (s *Server) ShutdownHTTP(ctx context.Context) error {
 	if httpSrv == nil {
 		return nil
 	}
+
 	if err := httpSrv.Shutdown(ctx); err != nil {
-		s.log.WarnContext(ctx, "adapter.server.http_shutdown_failed", "concern", "adapter.http.ingress", "subcomponent", "adapter", "err", err)
+		s.log.WarnContext(
+			ctx,
+			"adapter.server.http_shutdown_failed",
+			"concern",
+			"adapter.http.ingress",
+			"subcomponent",
+			"adapter",
+			"err",
+			err,
+		)
+
 		return fmt.Errorf("adapter HTTP shutdown: %w", err)
 	}
+
 	return nil
 }
 
@@ -176,10 +224,14 @@ func (s *Server) ShutdownHTTP(ctx context.Context) error {
 //
 // Returns nil, false when the registry has already begun draining
 // (reload in progress): callers should write a 503 and return.
-func (s *Server) registerIngressSession(r *http.Request, meta IngressMeta) (*livetrack.Session[IngressMeta], bool) {
+func (s *Server) registerIngressSession(
+	r *http.Request,
+	meta IngressMeta,
+) (*livetrack.Session[IngressMeta], bool) {
 	if s.requests == nil {
 		return nil, true
 	}
+
 	var closer livetrack.Closer
 	if conn, ok := r.Context().Value(ingressConnKey{}).(net.Conn); ok && conn != nil {
 		closer = ingressConnCloser{conn: conn}
@@ -190,10 +242,12 @@ func (s *Server) registerIngressSession(r *http.Request, meta IngressMeta) (*liv
 		r = r.WithContext(childCtx)
 		closer = &contextCancelCloser{cancel: cancel}
 	}
+
 	sess, err := s.requests.Register(r.Context(), "adapter.ingress", meta, closer)
 	if err != nil {
 		return nil, false
 	}
+
 	return sess, true
 }
 
@@ -205,9 +259,16 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("/v1/chat/completions", s.handle(adapterRouteOpenAI, s.auth(s.handleChat)))
 	mux.HandleFunc("/v1/responses", s.handle(adapterRouteOpenAI, s.auth(s.handleResponses)))
 	mux.HandleFunc("/v1/completions", s.handle(adapterRouteOpenAI, s.auth(s.handleLegacy)))
-	mux.HandleFunc("/v1/messages", s.handle(adapterRouteAnthropic, s.authAnthropic(s.handleAnthropicMessages)))
-	mux.HandleFunc("/v1/messages/count_tokens", s.handle(adapterRouteAnthropic, s.authAnthropic(s.handleAnthropicCountTokens)))
+	mux.HandleFunc(
+		"/v1/messages",
+		s.handle(adapterRouteAnthropic, s.authAnthropic(s.handleAnthropicMessages)),
+	)
+	mux.HandleFunc(
+		"/v1/messages/count_tokens",
+		s.handle(adapterRouteAnthropic, s.authAnthropic(s.handleAnthropicCountTokens)),
+	)
 	mux.HandleFunc("/", s.handle(adapterRouteHealth, s.handleRoot))
+
 	return mux
 }
 
@@ -226,23 +287,52 @@ type healthStatus struct {
 func (s *Server) handleRoot(ctx context.Context, hctx *handlerCtx) error {
 	body, err := json.Marshal(rootRouteIndex{
 		Service: "clyde-adapter",
-		Paths:   []string{"/v1/models", "/v1/models/{model}", "/v1/chat/completions", "/v1/responses", "/v1/completions", "/v1/messages", "/v1/messages/count_tokens", "/healthz"},
+		Paths: []string{
+			"/v1/models",
+			"/v1/models/{model}",
+			"/v1/chat/completions",
+			"/v1/responses",
+			"/v1/completions",
+			"/v1/messages",
+			"/v1/messages/count_tokens",
+			"/healthz",
+		},
 	})
 	if err != nil {
-		s.log.WarnContext(ctx, "adapter.root.marshal_failed", "concern", "adapter.http.errors", "err", err)
+		s.log.WarnContext(
+			ctx,
+			"adapter.root.marshal_failed",
+			"concern",
+			"adapter.http.errors",
+			"err",
+			err,
+		)
+
 		return fmt.Errorf("marshal root index: %w", err)
 	}
+
 	writeJSON(hctx.Writer, body)
+
 	return nil
 }
 
 func (s *Server) handleHealth(ctx context.Context, hctx *handlerCtx) error {
 	body, err := json.Marshal(healthStatus{Status: "ok"})
 	if err != nil {
-		s.log.WarnContext(ctx, "adapter.health.marshal_failed", "concern", "adapter.http.errors", "err", err)
+		s.log.WarnContext(
+			ctx,
+			"adapter.health.marshal_failed",
+			"concern",
+			"adapter.http.errors",
+			"err",
+			err,
+		)
+
 		return fmt.Errorf("marshal health response: %w", err)
 	}
+
 	writeJSON(hctx.Writer, body)
+
 	return nil
 }
 
@@ -256,10 +346,12 @@ func (s *Server) auth(next adapterHandler) adapterHandler {
 		if s.token == "" {
 			return next(ctx, hctx)
 		}
+
 		want := "Bearer " + s.token
 		if hctx.Request.Header.Get("Authorization") != want {
 			return newAdapterError(adapterErrorAuthFailed, "missing or invalid bearer token")
 		}
+
 		return next(ctx, hctx)
 	}
 }
@@ -272,10 +364,12 @@ func (s *Server) authAnthropic(next adapterHandler) adapterHandler {
 		if s.token == "" {
 			return next(ctx, hctx)
 		}
+
 		want := "Bearer " + s.token
 		if hctx.Request.Header.Get("Authorization") != want {
 			return newAdapterError(adapterErrorAuthFailed, "missing or invalid bearer token")
 		}
+
 		return next(ctx, hctx)
 	}
 }

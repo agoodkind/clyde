@@ -21,9 +21,12 @@ func TestAdapterHandleAdapterErrorEnvelope(t *testing.T) {
 	t.Parallel()
 	srv, _ := newLoggingServer(t, config.LoggingConfig{})
 
-	handler := srv.handle(adapterRouteOpenAI, func(context.Context, *handlerCtx) error {
-		return adapterErrInvalidRequest("missing field foo", nil)
-	})
+	handler := srv.handle(
+		adapterRouteOpenAI,
+		func(context.Context, *handlerCtx) error {
+			return adapterErrInvalidRequest("missing field foo", nil)
+		},
+	)
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	resp := httptest.NewRecorder()
 	handler(resp, req)
@@ -31,13 +34,16 @@ func TestAdapterHandleAdapterErrorEnvelope(t *testing.T) {
 	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
 	}
+
 	var out adapteropenai.ErrorResponse
 	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
 		t.Fatalf("unmarshal: %v body=%s", err, resp.Body.String())
 	}
+
 	if out.Error.Type != "invalid_request_error" || out.Error.Code != "invalid_request" {
 		t.Fatalf("error=%+v", out.Error)
 	}
+
 	if !strings.Contains(out.Error.Message, "missing field foo") {
 		t.Fatalf("message=%q", out.Error.Message)
 	}
@@ -46,28 +52,45 @@ func TestAdapterHandleAdapterErrorEnvelope(t *testing.T) {
 func TestAdapterHandleLogsActualRequestAndResponseBytes(t *testing.T) {
 	t.Parallel()
 	srv, buffer := newLoggingServer(t, config.LoggingConfig{})
-	handler := srv.handle(adapterRouteOpenAI, func(_ context.Context, handlerContext *handlerCtx) error {
-		body, err := io.ReadAll(handlerContext.Request.Body)
-		if err != nil {
+	handler := srv.handle(
+		adapterRouteOpenAI,
+		func(_ context.Context, handlerContext *handlerCtx) error {
+			body, err := io.ReadAll(handlerContext.Request.Body)
+			if err != nil {
+				return err
+			}
+
+			if string(body) != "hello" {
+				return errors.New("unexpected request body")
+			}
+
+			_, err = handlerContext.Writer.Write([]byte("reply"))
+			flusher, ok := handlerContext.Writer.(http.Flusher)
+			if !ok {
+				return errors.New("response writer does not preserve flush")
+			}
+
+			flusher.Flush()
+
 			return err
-		}
-		if string(body) != "hello" {
-			return errors.New("unexpected request body")
-		}
-		_, err = handlerContext.Writer.Write([]byte("reply"))
-		flusher, ok := handlerContext.Writer.(http.Flusher)
-		if !ok {
-			return errors.New("response writer does not preserve flush")
-		}
-		flusher.Flush()
-		return err
-	})
-	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("hello"))
+		},
+	)
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		strings.NewReader("hello"),
+	)
 	response := httptest.NewRecorder()
 	handler(response, request)
 	if response.Code != http.StatusOK || response.Body.String() != "reply" || !response.Flushed {
-		t.Fatalf("response = status %d body %q flushed %t", response.Code, response.Body.String(), response.Flushed)
+		t.Fatalf(
+			"response = status %d body %q flushed %t",
+			response.Code,
+			response.Body.String(),
+			response.Flushed,
+		)
 	}
+
 	event := findLogEvent(t, buffer, "adapter.request.io")
 	if event == nil || event["bytes_in"] != float64(5) || event["bytes_out"] != float64(5) {
 		t.Fatalf("io event = %+v, want five bytes in and out", event)
@@ -81,9 +104,12 @@ func TestAdapterHandlePlainErrorWrapped(t *testing.T) {
 	t.Parallel()
 	srv, _ := newLoggingServer(t, config.LoggingConfig{})
 
-	handler := srv.handle(adapterRouteOpenAI, func(context.Context, *handlerCtx) error {
-		return errors.New("plain error from handler")
-	})
+	handler := srv.handle(
+		adapterRouteOpenAI,
+		func(context.Context, *handlerCtx) error {
+			return errors.New("plain error from handler")
+		},
+	)
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	resp := httptest.NewRecorder()
 	handler(resp, req)
@@ -94,16 +120,20 @@ func TestAdapterHandlePlainErrorWrapped(t *testing.T) {
 	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
 	}
+
 	var out adapteropenai.ErrorResponse
 	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
 		t.Fatalf("unmarshal: %v body=%s", err, resp.Body.String())
 	}
+
 	if out.Error.Type != "invalid_request_error" {
 		t.Fatalf("error.type=%q", out.Error.Type)
 	}
+
 	if out.Error.Code != "upstream_failed" {
 		t.Fatalf("error=%+v", out.Error)
 	}
+
 	if !strings.Contains(out.Error.Message, "plain error from handler") {
 		t.Fatalf("message=%q", out.Error.Message)
 	}
@@ -116,9 +146,12 @@ func TestAdapterHandleBodyNotWrittenBackstop(t *testing.T) {
 	t.Parallel()
 	srv, buf := newLoggingServer(t, config.LoggingConfig{})
 
-	handler := srv.handle(adapterRouteOpenAI, func(context.Context, *handlerCtx) error {
-		return nil
-	})
+	handler := srv.handle(
+		adapterRouteOpenAI,
+		func(context.Context, *handlerCtx) error {
+			return nil
+		},
+	)
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	resp := httptest.NewRecorder()
 	handler(resp, req)
@@ -128,16 +161,20 @@ func TestAdapterHandleBodyNotWrittenBackstop(t *testing.T) {
 	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
 	}
+
 	var out adapteropenai.ErrorResponse
 	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
 		t.Fatalf("unmarshal: %v body=%s", err, resp.Body.String())
 	}
+
 	if out.Error.Type != "invalid_request_error" {
 		t.Fatalf("error.type=%q", out.Error.Type)
 	}
+
 	if out.Error.Code != "upstream_failed" {
 		t.Fatalf("error=%+v", out.Error)
 	}
+
 	if evt := findLogEvent(t, buf, "adapter.request.body_not_written"); evt == nil {
 		t.Fatalf("expected adapter.request.body_not_written log event")
 	}
@@ -150,9 +187,12 @@ func TestAdapterHandleRecoversPanic(t *testing.T) {
 	t.Parallel()
 	srv, buf := newLoggingServer(t, config.LoggingConfig{})
 
-	handler := srv.handle(adapterRouteOpenAI, func(context.Context, *handlerCtx) error {
-		panic("synthetic panic")
-	})
+	handler := srv.handle(
+		adapterRouteOpenAI,
+		func(context.Context, *handlerCtx) error {
+			panic("synthetic panic")
+		},
+	)
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	resp := httptest.NewRecorder()
 	handler(resp, req)
@@ -160,20 +200,25 @@ func TestAdapterHandleRecoversPanic(t *testing.T) {
 	if resp.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
 	}
+
 	var out adapteropenai.ErrorResponse
 	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
 		t.Fatalf("unmarshal: %v body=%s", err, resp.Body.String())
 	}
+
 	if out.Error.Type != "internal_error" || out.Error.Code != "internal_error" {
 		t.Fatalf("error=%+v", out.Error)
 	}
+
 	evt := findLogEvent(t, buf, "adapter.request.panic")
 	if evt == nil {
 		t.Fatalf("expected adapter.request.panic log event")
 	}
+
 	if evt["route_family"] != "openai" {
 		t.Fatalf("route_family=%v", evt["route_family"])
 	}
+
 	if stack, _ := evt["stack"].(string); stack == "" {
 		t.Fatalf("expected stack in panic log, got %v", evt["stack"])
 	}
@@ -187,12 +232,16 @@ func TestAdapterHandlePartialResponseThenError(t *testing.T) {
 	t.Parallel()
 	srv, buf := newLoggingServer(t, config.LoggingConfig{})
 
-	handler := srv.handle(adapterRouteOpenAI, func(_ context.Context, hctx *handlerCtx) error {
-		hctx.Writer.Header().Set("Content-Type", "application/json")
-		hctx.Writer.WriteHeader(http.StatusOK)
-		_, _ = hctx.Writer.Write([]byte(`{"partial":true}`))
-		return errors.New("late stream error")
-	})
+	handler := srv.handle(
+		adapterRouteOpenAI,
+		func(_ context.Context, hctx *handlerCtx) error {
+			hctx.Writer.Header().Set("Content-Type", "application/json")
+			hctx.Writer.WriteHeader(http.StatusOK)
+			_, _ = hctx.Writer.Write([]byte(`{"partial":true}`))
+
+			return errors.New("late stream error")
+		},
+	)
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	resp := httptest.NewRecorder()
 	handler(resp, req)
@@ -200,9 +249,11 @@ func TestAdapterHandlePartialResponseThenError(t *testing.T) {
 	if resp.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
 	}
+
 	if !strings.Contains(resp.Body.String(), `"partial":true`) {
 		t.Fatalf("body should retain partial response, got %s", resp.Body.String())
 	}
+
 	if evt := findLogEvent(t, buf, "adapter.request.error_after_headers"); evt == nil {
 		t.Fatalf("expected adapter.request.error_after_headers log event")
 	}

@@ -20,9 +20,11 @@ func (f *fakeRunner) run(_ context.Context, _ string, args ...string) ([]byte, e
 	if e, ok := f.err[key]; ok {
 		return nil, e
 	}
+
 	if v, ok := f.out[key]; ok {
 		return v, nil
 	}
+
 	return nil, errors.New("no fixture for " + key)
 }
 
@@ -40,9 +42,11 @@ func TestWorkspaceProbeReturnsAllFields(t *testing.T) {
 	if got.AssociatedRemoteURLs.Origin != "git@github.com:agoodkind/clyde.git" {
 		t.Errorf("origin: %q", got.AssociatedRemoteURLs.Origin)
 	}
+
 	if got.LatestGitCommitHash != "95d28dd0fdef4d87a64b29283e39605ce759c4cc" {
 		t.Errorf("commit: %q", got.LatestGitCommitHash)
 	}
+
 	if !got.HasChanges {
 		t.Errorf("has_changes should be true")
 	}
@@ -105,9 +109,11 @@ func TestWorkspaceProbeIgnoresGitFailures(t *testing.T) {
 	if got.AssociatedRemoteURLs.Origin != "" {
 		t.Errorf("origin should be empty on git failure")
 	}
+
 	if got.LatestGitCommitHash != "" {
 		t.Errorf("commit should be empty on git failure")
 	}
+
 	if got.HasChanges {
 		t.Errorf("has_changes should be false on git failure")
 	}

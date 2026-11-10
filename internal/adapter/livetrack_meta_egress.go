@@ -52,19 +52,23 @@ const egressSessionKindAttempt = "adapter.egress.attempt"
 // in-flight outbound provider call participates in the reload deadline and
 // holds quiet until it completes.
 func newEgressRegistry(group *livetrack.Group) *livetrack.Registry[EgressMeta] {
-	return livetrack.Attach[EgressMeta](group, livetrack.MemberSpec{
-		Phase:         livetrack.PhaseEgress,
-		QuietRelevant: true,
-		CancelNoWait:  false,
-	}, livetrack.Options[EgressMeta]{
-		Component:     "adapter.egress",
-		Concern:       "adapter.providers",
-		Log:           nil,
-		PollEvery:     0,
-		CloserGrace:   0,
-		ParallelClose: true,
-		Now:           nil,
-	})
+	return livetrack.Attach[EgressMeta](
+		group,
+		livetrack.MemberSpec{
+			Phase:         livetrack.PhaseEgress,
+			QuietRelevant: true,
+			CancelNoWait:  false,
+		},
+		livetrack.Options[EgressMeta]{
+			Component:     "adapter.egress",
+			Concern:       "adapter.providers",
+			Log:           nil,
+			PollEvery:     0,
+			CloserGrace:   0,
+			ParallelClose: true,
+			Now:           nil,
+		},
+	)
 }
 
 // contextCancelCloser implements [livetrack.Closer] by canceling a
@@ -100,6 +104,7 @@ func registerEgress(
 	if reg == nil {
 		return ctx, nil, func(string) {}
 	}
+
 	childCtx, cancel := context.WithCancel(ctx)
 	sess, err := reg.Register(childCtx, kind, meta, &contextCancelCloser{cancel: cancel}, opts...)
 	if err != nil {
@@ -108,6 +113,7 @@ func registerEgress(
 		cancel()
 		return childCtx, nil, func(string) {}
 	}
+
 	return childCtx, sess, func(reason string) {
 		reg.Release(childCtx, sess, reason)
 		cancel()

@@ -16,15 +16,18 @@ func codexRSMirrorRoot() (string, bool) {
 	if err != nil {
 		return "", false
 	}
+
 	for {
 		candidate := filepath.Join(dir, "research", "codex", "codex-rs")
 		if info, statErr := os.Stat(candidate); statErr == nil && info.IsDir() {
 			return candidate, true
 		}
+
 		parent := filepath.Dir(dir)
 		if parent == dir {
 			return "", false
 		}
+
 		dir = parent
 	}
 }
@@ -35,6 +38,7 @@ func readMirrorFile(t *testing.T, root, rel string) string {
 	if err != nil {
 		t.Fatalf("read codex-rs mirror file %s: %v", rel, err)
 	}
+
 	return string(raw)
 }
 
@@ -47,10 +51,15 @@ func TestCodexOriginatorMatchesSource(t *testing.T) {
 	if !ok {
 		t.Skip("codex-rs mirror not present")
 	}
+
 	src := readMirrorFile(t, root, filepath.Join("login", "src", "auth", "default_client.rs"))
 	want := `pub const DEFAULT_ORIGINATOR: &str = "` + CodexOriginatorValue + `";`
 	if !strings.Contains(src, want) {
-		t.Fatalf("codex-rs DEFAULT_ORIGINATOR no longer matches clyde CodexOriginatorValue=%q; expected source line %q", CodexOriginatorValue, want)
+		t.Fatalf(
+			"codex-rs DEFAULT_ORIGINATOR no longer matches clyde CodexOriginatorValue=%q; expected source line %q",
+			CodexOriginatorValue,
+			want,
+		)
 	}
 }
 
@@ -63,11 +72,14 @@ func TestCodexUserAgentShapeMatchesSource(t *testing.T) {
 	if !ok {
 		t.Skip("codex-rs mirror not present")
 	}
+
 	src := readMirrorFile(t, root, filepath.Join("login", "src", "auth", "default_client.rs"))
 	// The format literal in get_codex_user_agent. If codex-rs reorders
 	// the user-agent tokens, this fails so CodexUserAgent is updated.
 	if !strings.Contains(src, `"{}/{build_version} ({} {}; {}) {}"`) {
-		t.Fatalf("codex-rs get_codex_user_agent format string changed; re-verify CodexUserAgent shape")
+		t.Fatalf(
+			"codex-rs get_codex_user_agent format string changed; re-verify CodexUserAgent shape",
+		)
 	}
 }
 
@@ -78,10 +90,15 @@ func TestCodexOpenAIBetaValueMatchesSource(t *testing.T) {
 	if !ok {
 		t.Skip("codex-rs mirror not present")
 	}
+
 	src := readMirrorFile(t, root, filepath.Join("core", "src", "client.rs"))
 	want := `RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "` + responsesWebsocketsV2BetaHeaderValue + `";`
 	if !strings.Contains(src, want) {
-		t.Fatalf("codex-rs RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE no longer matches clyde %q; expected %q", responsesWebsocketsV2BetaHeaderValue, want)
+		t.Fatalf(
+			"codex-rs RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE no longer matches clyde %q; expected %q",
+			responsesWebsocketsV2BetaHeaderValue,
+			want,
+		)
 	}
 }
 
@@ -94,7 +111,9 @@ func TestCodexHeaderNamesMatchSource(t *testing.T) {
 	if !ok {
 		t.Skip("codex-rs mirror not present")
 	}
+
 	src := readMirrorFile(t, root, filepath.Join("core", "src", "client.rs"))
+
 	cases := []struct {
 		name        string
 		clydeHeader string
@@ -108,7 +127,12 @@ func TestCodexHeaderNamesMatchSource(t *testing.T) {
 	for _, tc := range cases {
 		want := `"` + strings.ToLower(tc.clydeHeader) + `"`
 		if !strings.Contains(src, want) {
-			t.Fatalf("codex-rs %s no longer carries clyde header %q (lowercased %s); source drift", tc.name, tc.clydeHeader, want)
+			t.Fatalf(
+				"codex-rs %s no longer carries clyde header %q (lowercased %s); source drift",
+				tc.name,
+				tc.clydeHeader,
+				want,
+			)
 		}
 	}
 }

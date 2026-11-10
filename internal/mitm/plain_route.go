@@ -9,6 +9,7 @@ func classifyRoute(path string) (provider string, upstream string) {
 	if _, claim, ok := providerForPlain(path); ok {
 		return claim.Provider, claim.UpstreamURL
 	}
+
 	return "", ""
 }
 
@@ -28,5 +29,6 @@ func classifyPlainRequest(target *url.URL) (provider string, upstream string) {
 			return hostProvider.ID().String(), target.Scheme + "://" + target.Host
 		}
 	}
+
 	return classifyRoute(target.Path)
 }

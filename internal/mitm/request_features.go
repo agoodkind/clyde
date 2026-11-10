@@ -32,6 +32,7 @@ func ExtractRequestFeatures(request CapturedRequest) (RequestFeatures, error) {
 	if err != nil {
 		return RequestFeatures{}, err
 	}
+
 	return RequestFeatures{ModelID: body.Model}, nil
 }
 
@@ -40,6 +41,7 @@ func decodeRequestFeatureBody(raw json.RawMessage) (requestFeatureBody, error) {
 	if err := body.UnmarshalJSON(raw); err != nil {
 		return requestFeatureBody{}, err
 	}
+
 	return body, nil
 }
 
@@ -48,24 +50,31 @@ func (body *requestFeatureBody) UnmarshalJSON(raw []byte) error {
 	if len(trimmed) == 0 {
 		return fmt.Errorf("extract request features: request body is empty")
 	}
+
 	if bytes.Equal(trimmed, []byte("null")) {
 		return fmt.Errorf("extract request features: request body is null")
 	}
+
 	if trimmed[0] == '"' {
 		var bodyString string
 		if err := json.Unmarshal(trimmed, &bodyString); err != nil {
 			return fmt.Errorf("extract request features: decode string request body: %w", err)
 		}
+
 		return body.UnmarshalJSON([]byte(bodyString))
 	}
+
 	if trimmed[0] != '{' {
 		return fmt.Errorf("extract request features: request body is not a JSON object")
 	}
+
 	type requestFeatureBodyWire requestFeatureBody
 	var wire requestFeatureBodyWire
 	if err := json.Unmarshal(trimmed, &wire); err != nil {
 		return fmt.Errorf("extract request features: decode request body: %w", err)
 	}
+
 	*body = requestFeatureBody(wire)
+
 	return nil
 }

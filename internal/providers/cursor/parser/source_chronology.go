@@ -30,10 +30,12 @@ func composerCandidatesDated(requestID string, candidates []chronologyCandidate)
 		if requestID != "" && candidate.requestID != "" && candidate.requestID != requestID {
 			continue
 		}
+
 		if candidate.created.IsZero() {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -49,10 +51,12 @@ func bubbleChronologyKey(bubble cursorstore.Bubble) (chronologyKey, bool) {
 	default:
 		return chronologyKey{role: "", text: ""}, false
 	}
+
 	text := strings.TrimSpace(bubble.Text)
 	if text == "" {
 		return chronologyKey{role: "", text: ""}, false
 	}
+
 	return chronologyKey{role: role, text: text}, true
 }
 
@@ -60,18 +64,22 @@ func bubbleChronologyKey(bubble cursorstore.Bubble) (chronologyKey, bool) {
 // and assistant messages with nonempty text.
 func nativeChronologyKeys(native cursorstore.NativeToolCalls) map[chronologyKey]bool {
 	keys := make(map[chronologyKey]bool)
+
 	for _, message := range native.Messages {
 		if key, ok := nativeChronologyKey(message); ok {
 			keys[key] = true
 		}
 	}
+
 	return keys
 }
 
 func nativeChronologyKey(message cursorstore.NativeMessage) (chronologyKey, bool) {
-	if message.Missing || message.Text == "" || (message.Role != "user" && message.Role != "assistant") {
+	if message.Missing || message.Text == "" ||
+		(message.Role != "user" && message.Role != "assistant") {
 		return chronologyKey{role: "", text: ""}, false
 	}
+
 	return chronologyKey{role: message.Role, text: message.Text}, true
 }
 
@@ -79,24 +87,39 @@ func nativeChronologyKey(message cursorstore.NativeMessage) (chronologyKey, bool
 // text pairs retain a date only when every occurrence agrees. It returns nil when
 // the native messages do not contain a dated tool call. It also returns nonzero dates
 // that used composer times as a bound.
-func nativeChronologyTimes(native cursorstore.NativeToolCalls, callDates map[string][]time.Time, candidates map[chronologyKey][]chronologyCandidate, header cursorstore.ComposerHeader) (map[chronologyKey]time.Time, []time.Time) {
-	resolver := chronologyResolver{messages: native.Messages, callDates: callDates, composerCreated: composerMillis(header.CreatedAt), composerUpdated: composerMillis(header.LastUpdatedAt)}
+func nativeChronologyTimes(
+	native cursorstore.NativeToolCalls,
+	callDates map[string][]time.Time,
+	candidates map[chronologyKey][]chronologyCandidate,
+	header cursorstore.ComposerHeader,
+) (map[chronologyKey]time.Time, []time.Time) {
+	resolver := chronologyResolver{
+		messages:        native.Messages,
+		callDates:       callDates,
+		composerCreated: composerMillis(header.CreatedAt),
+		composerUpdated: composerMillis(header.LastUpdatedAt),
+	}
 	if !resolver.hasAnchor() {
 		return nil, nil
 	}
+
 	results := make(map[chronologyKey][]time.Time)
 	composerBound := make(map[chronologyKey]bool)
+
 	for position, message := range native.Messages {
 		key, ok := nativeChronologyKey(message)
 		if !ok {
 			continue
 		}
+
 		stamp, usedComposer := resolver.occurrenceTime(position, candidates[key])
 		results[key] = append(results[key], stamp)
 		composerBound[key] = composerBound[key] || usedComposer
 	}
+
 	governed := make(map[chronologyKey]time.Time, len(results))
 	bounded := make([]time.Time, 0)
+
 	for key, times := range results {
 		chosen := times[0]
 		for _, other := range times[1:] {
@@ -105,11 +128,13 @@ func nativeChronologyTimes(native cursorstore.NativeToolCalls, callDates map[str
 				break
 			}
 		}
+
 		governed[key] = chosen
 		if composerBound[key] && !chosen.IsZero() {
 			bounded = append(bounded, chosen)
 		}
 	}
+
 	return governed, bounded
 }
 
@@ -129,6 +154,7 @@ func composerMillis(millis int64) time.Time {
 	if millis <= 0 {
 		return time.Time{}
 	}
+
 	return time.UnixMilli(millis).UTC()
 }
 
@@ -138,6 +164,7 @@ func (resolver chronologyResolver) hasAnchor() bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -147,23 +174,28 @@ func (resolver chronologyResolver) anchorTimes(message cursorstore.NativeMessage
 	if message.Missing || message.Duplicate {
 		return nil
 	}
+
 	times := make([]time.Time, 0, len(message.Calls))
 	for _, call := range message.Calls {
 		dates := resolver.callDates[call.ID]
 		if len(dates) == 0 || dates[0].IsZero() {
 			continue
 		}
+
 		consistent := true
+
 		for _, other := range dates[1:] {
 			if !other.Equal(dates[0]) {
 				consistent = false
 				break
 			}
 		}
+
 		if consistent {
 			times = append(times, dates[0])
 		}
 	}
+
 	return times
 }
 
@@ -174,46 +206,61 @@ func (resolver chronologyResolver) anchorTimes(message cursorstore.NativeMessage
 // bound and the earlier of the next tool call or composer update plus one second as
 // the upper bound. In that case, it returns zero if a candidate lacks a date or falls
 // outside the bounds. It also reports whether it used the composer times.
-func (resolver chronologyResolver) occurrenceTime(position int, candidates []chronologyCandidate) (time.Time, bool) {
+func (resolver chronologyResolver) occurrenceTime(
+	position int,
+	candidates []chronologyCandidate,
+) (time.Time, bool) {
 	lower, lowerFound := resolver.search(position, -1)
 	upper, upperFound := resolver.search(position, 1)
 	if !upperFound {
 		return time.Time{}, false
 	}
+
 	if !lowerFound {
 		if resolver.composerCreated.IsZero() || resolver.composerUpdated.IsZero() {
 			return time.Time{}, false
 		}
+
 		lower = resolver.composerCreated.Truncate(time.Second)
 		if latest := resolver.composerUpdated.Add(time.Second); latest.Before(upper) {
 			upper = latest
 		}
 	}
+
 	requestID := resolver.messages[position].RequestID
 	if !lowerFound && !composerCandidatesDated(requestID, candidates) {
 		return time.Time{}, false
 	}
+
 	var chosen time.Time
+
 	for _, candidate := range candidates {
-		if candidate.created.IsZero() || (requestID != "" && candidate.requestID != "" && candidate.requestID != requestID) {
+		if candidate.created.IsZero() ||
+			(requestID != "" && candidate.requestID != "" && candidate.requestID != requestID) {
 			continue
 		}
+
 		if candidate.created.Before(lower) || candidate.created.After(upper) {
 			if !lowerFound {
 				return time.Time{}, false
 			}
+
 			continue
 		}
+
 		if !chosen.IsZero() && !chosen.Equal(candidate.created) {
 			return time.Time{}, false
 		}
+
 		chosen = candidate.created
 	}
+
 	return chosen, !lowerFound
 }
 
 func (resolver chronologyResolver) sameSequence(left int, right int) bool {
-	return resolver.messages[left].Source == resolver.messages[right].Source && resolver.messages[left].Archive == resolver.messages[right].Archive
+	return resolver.messages[left].Source == resolver.messages[right].Source &&
+		resolver.messages[left].Archive == resolver.messages[right].Archive
 }
 
 func (resolver chronologyResolver) bounds(position int) (int, int) {
@@ -221,10 +268,12 @@ func (resolver chronologyResolver) bounds(position int) (int, int) {
 	for first > 0 && resolver.sameSequence(first-1, position) {
 		first--
 	}
+
 	last := position
 	for last+1 < len(resolver.messages) && resolver.sameSequence(last+1, position) {
 		last++
 	}
+
 	return first, last
 }
 
@@ -234,39 +283,48 @@ func (resolver chronologyResolver) bounds(position int) (int, int) {
 func (resolver chronologyResolver) search(position int, step int) (time.Time, bool) {
 	current := position
 	first, last := resolver.bounds(position)
+
 	for hops := 0; ; hops++ {
 		for cursor := current + step; cursor >= first && cursor <= last; cursor += step {
 			times := resolver.anchorTimes(resolver.messages[cursor])
 			if len(times) == 0 {
 				continue
 			}
+
 			chosen := times[0]
 			for _, other := range times[1:] {
 				if (step < 0 && other.After(chosen)) || (step > 0 && other.Before(chosen)) {
 					chosen = other
 				}
 			}
+
 			return chosen, true
 		}
+
 		if hops >= chronologyLinkHops {
 			return time.Time{}, false
 		}
+
 		shared, ok := resolver.boundaryUser(current, first, last, step)
 		if !ok {
 			return time.Time{}, false
 		}
+
 		neighbor := first - 1
 		if step > 0 {
 			neighbor = last + 1
 		}
+
 		if neighbor < 0 || neighbor >= len(resolver.messages) {
 			return time.Time{}, false
 		}
+
 		nextFirst, nextLast := resolver.bounds(neighbor)
 		linked, ok := resolver.linkedUser(shared, nextFirst, nextLast)
 		if !ok {
 			return time.Time{}, false
 		}
+
 		current, first, last = linked, nextFirst, nextLast
 	}
 }
@@ -275,7 +333,12 @@ func (resolver chronologyResolver) search(position int, step int) (time.Time, bo
 // or the last user after current when searching forward, skipping missing messages
 // and empty request IDs. It requires the request ID to occur once among available
 // users in the sequence.
-func (resolver chronologyResolver) boundaryUser(current int, first int, last int, step int) (int, bool) {
+func (resolver chronologyResolver) boundaryUser(
+	current int,
+	first int,
+	last int,
+	step int,
+) (int, bool) {
 	shared := -1
 	if step < 0 {
 		for index := first; index < current; index++ {
@@ -292,15 +355,20 @@ func (resolver chronologyResolver) boundaryUser(current int, first int, last int
 			}
 		}
 	}
+
 	if shared < 0 {
 		return 0, false
 	}
+
 	count := 0
+
 	for index := first; index <= last; index++ {
-		if resolver.requestUser(index) && resolver.messages[index].RequestID == resolver.messages[shared].RequestID {
+		if resolver.requestUser(index) &&
+			resolver.messages[index].RequestID == resolver.messages[shared].RequestID {
 			count++
 		}
 	}
+
 	return shared, count == 1
 }
 
@@ -316,16 +384,23 @@ func (resolver chronologyResolver) linkedUser(shared int, first int, last int) (
 	if resolver.messages[shared].ContentHash == "" {
 		return 0, false
 	}
+
 	linked := -1
+
 	for index := first; index <= last; index++ {
 		message := resolver.messages[index]
-		if !resolver.requestUser(index) || message.RequestID != resolver.messages[shared].RequestID || message.ContentHash != resolver.messages[shared].ContentHash {
+		if !resolver.requestUser(index) ||
+			message.RequestID != resolver.messages[shared].RequestID ||
+			message.ContentHash != resolver.messages[shared].ContentHash {
 			continue
 		}
+
 		if linked >= 0 {
 			return 0, false
 		}
+
 		linked = index
 	}
+
 	return linked, linked >= 0
 }

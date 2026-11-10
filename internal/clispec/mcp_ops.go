@@ -45,6 +45,7 @@ func mcpServeOp() Operation[mcpServeInput, mcpServePayload] {
 		Run: func(ctx context.Context, _ mcpServePayload, _ Surface, _ ResultSink) error {
 			srv := mcpserver.NewServer(resolveMCPAuditRotation())
 			RenderMCP(NewConversationRegistry(), srv.MCPServer())
+
 			return srv.Serve(ctx)
 		},
 		runResult: nil,
@@ -62,11 +63,14 @@ func resolveMCPAuditRotation() audit.RotationConfig {
 	if err != nil {
 		return fallback
 	}
+
 	policies, err := logpolicy.Resolve(*cfg)
 	if err != nil {
 		return fallback
 	}
+
 	rotation := policies.Sinks[logpolicy.SinkAudit].Rotation
+
 	return audit.RotationConfig{
 		MaxSizeMB:  rotation.MaxSizeMB,
 		MaxBackups: rotation.MaxBackups,

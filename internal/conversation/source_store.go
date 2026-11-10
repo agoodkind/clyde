@@ -54,7 +54,11 @@ type SourceMessages struct {
 
 // SourceStoreReader reads provider messages and prepares stored text for source matching.
 type SourceStoreReader interface {
-	SourceStoreMessages(ctx context.Context, record Record, opts LoadOptions) (SourceMessages, bool, error)
+	SourceStoreMessages(
+		ctx context.Context,
+		record Record,
+		opts LoadOptions,
+	) (SourceMessages, bool, error)
 	// SourceMatchText prepares stored text for matching against source messages.
 	SourceMatchText(role string, text string) string
 }
@@ -65,6 +69,8 @@ func (r *Registry) SourceStoreReader(provider providerid.Provider) (SourceStoreR
 	if err != nil {
 		return nil, false
 	}
+
 	reader, implemented := parser.(SourceStoreReader)
+
 	return reader, implemented
 }

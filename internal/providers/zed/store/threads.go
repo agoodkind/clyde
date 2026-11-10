@@ -37,6 +37,7 @@ func ReadThreadRows(ctx context.Context, db *sql.DB) ([]ThreadRow, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	if !exists {
 		return nil, nil
 	}
@@ -48,12 +49,22 @@ func ReadThreadRows(ctx context.Context, db *sql.DB) ([]ThreadRow, error) {
 		 ORDER BY TRIM(updated_at) DESC, TRIM(created_at) DESC`,
 	)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.zed.store.threads_query_failed", "concern", "providers.zed.store", "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.zed.store.threads_query_failed",
+			"concern",
+			"providers.zed.store",
+			"err",
+			err,
+		)
+
 		return nil, fmt.Errorf("query threads: %w", err)
 	}
+
 	defer func() { _ = rows.Close() }()
 
 	threads := make([]ThreadRow, 0)
+
 	for rows.Next() {
 		var threadID string
 		var parentThreadID sql.NullString
@@ -64,35 +75,54 @@ func ReadThreadRows(ctx context.Context, db *sql.DB) ([]ThreadRow, error) {
 		var createdAt string
 		var dataType string
 		var data []byte
-		if err := rows.Scan(&threadID, &parentThreadID, &folderPaths, &folderPathsOrder, &summary, &updatedAt, &createdAt, &dataType, &data); err != nil {
+		if err := rows.Scan(
+			&threadID,
+			&parentThreadID,
+			&folderPaths,
+			&folderPathsOrder,
+			&summary,
+			&updatedAt,
+			&createdAt,
+			&dataType,
+			&data,
+		); err != nil {
 			return nil, fmt.Errorf("scan threads row: %w", err)
 		}
+
 		updatedTime, err := time.Parse(time.RFC3339, strings.TrimSpace(updatedAt))
 		if err != nil {
 			return nil, fmt.Errorf("parse threads updated_at %q: %w", updatedAt, err)
 		}
+
 		createdTime, err := time.Parse(time.RFC3339, strings.TrimSpace(createdAt))
 		if err != nil {
 			return nil, fmt.Errorf("parse threads created_at %q: %w", createdAt, err)
 		}
+
 		typedDataType, err := parseDataType(dataType, threadID)
 		if err != nil {
 			return nil, err
 		}
-		threads = append(threads, ThreadRow{
-			ThreadID:       threadID,
-			ParentThreadID: parentThreadID.String,
-			Summary:        summary,
-			UpdatedAt:      updatedTime,
-			CreatedAt:      createdTime,
-			FolderPaths:    deserializePathList(folderPaths.String, folderPathsOrder.String),
-			DataType:       typedDataType,
-			Data:           append([]byte(nil), data...),
-		})
+
+		threads = append(
+			threads,
+			ThreadRow{
+				ThreadID:       threadID,
+				ParentThreadID: parentThreadID.String,
+				Summary:        summary,
+				UpdatedAt:      updatedTime,
+				CreatedAt:      createdTime,
+				FolderPaths:    deserializePathList(folderPaths.String, folderPathsOrder.String),
+				DataType:       typedDataType,
+				Data:           append([]byte(nil), data...),
+			},
+		)
 	}
+
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate threads rows: %w", err)
 	}
+
 	return threads, nil
 }
 
@@ -104,6 +134,7 @@ func ReadThreadRowByID(ctx context.Context, db *sql.DB, threadID string) (Thread
 	if err != nil {
 		return emptyRow, false, err
 	}
+
 	if !exists {
 		return emptyRow, false, nil
 	}
@@ -125,11 +156,32 @@ func ReadThreadRowByID(ctx context.Context, db *sql.DB, threadID string) (Thread
 	var createdAt string
 	var dataType string
 	var data []byte
-	if err := row.Scan(&rowThreadID, &parentThreadID, &folderPaths, &folderPathsOrder, &summary, &updatedAt, &createdAt, &dataType, &data); err != nil {
+	if err := row.Scan(
+		&rowThreadID,
+		&parentThreadID,
+		&folderPaths,
+		&folderPathsOrder,
+		&summary,
+		&updatedAt,
+		&createdAt,
+		&dataType,
+		&data,
+	); err != nil {
 		if err == sql.ErrNoRows {
 			return emptyRow, false, nil
 		}
-		slog.WarnContext(ctx, "providers.zed.store.thread_row_by_id_scan_failed", "concern", "providers.zed.store", "thread_id", threadID, "err", err)
+
+		slog.WarnContext(
+			ctx,
+			"providers.zed.store.thread_row_by_id_scan_failed",
+			"concern",
+			"providers.zed.store",
+			"thread_id",
+			threadID,
+			"err",
+			err,
+		)
+
 		return emptyRow, false, fmt.Errorf("scan threads row by id: %w", err)
 	}
 
@@ -137,10 +189,12 @@ func ReadThreadRowByID(ctx context.Context, db *sql.DB, threadID string) (Thread
 	if err != nil {
 		return emptyRow, false, fmt.Errorf("parse threads updated_at %q: %w", updatedAt, err)
 	}
+
 	createdTime, err := time.Parse(time.RFC3339, strings.TrimSpace(createdAt))
 	if err != nil {
 		return emptyRow, false, fmt.Errorf("parse threads created_at %q: %w", createdAt, err)
 	}
+
 	typedDataType, err := parseDataType(dataType, rowThreadID)
 	if err != nil {
 		return emptyRow, false, err

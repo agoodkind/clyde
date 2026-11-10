@@ -22,6 +22,7 @@ func TestCapToLastLines(t *testing.T) {
 	if capped != "l3\nl4\nl5\n" {
 		t.Fatalf("capped = %q, want last three lines", capped)
 	}
+
 	if total != 3 || !truncated {
 		t.Fatalf("total = %d truncated = %v, want 3 and true", total, truncated)
 	}
@@ -51,9 +52,11 @@ func TestCapToLastBytesKeepsTailOnLineBoundary(t *testing.T) {
 	if capped != want {
 		t.Fatalf("capped = %q, want %q", capped, want)
 	}
+
 	if !truncated {
 		t.Fatal("truncated = false, want true")
 	}
+
 	if len(capped) > maxBytes {
 		t.Fatalf("capped len = %d, want <= %d", len(capped), maxBytes)
 	}
@@ -72,9 +75,11 @@ func TestRenderReorientSnapshotHonorsMaxBytes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReorientPage: %v", err)
 	}
+
 	if page.TotalBytes > maxBytes {
 		t.Fatalf("TotalBytes = %d, want <= %d", page.TotalBytes, maxBytes)
 	}
+
 	if len(page.Body) > maxBytes {
 		t.Fatalf("page body len = %d, want <= %d", len(page.Body), maxBytes)
 	}
@@ -88,30 +93,33 @@ func TestRenderReorientSnapshotStripsPriorInjection(t *testing.T) {
 		"OLD-NESTED-TRANSCRIPT\n" +
 		reorienttag.PreCompactionTranscriptClose + "\n" +
 		"summary after"
-	fixture := buildReorientFixture(t, []transcript.Message{
-		{
-			UUID:      "child-summary-with-prior-injection",
-			Role:      "user",
-			Timestamp: baseTime,
-			Text:      priorInjectedSummary,
-			Compaction: &transcript.CompactionMetadata{
-				Kind:    transcript.CompactionKindSummary,
-				Trigger: transcript.CompactionTriggerManual,
-				ContextItems: []transcript.CompactedContextItem{
-					{
-						Kind: transcript.CompactedContextItemKindMessage,
-						Message: &transcript.CompactedMessageItem{
-							Role:         "user",
-							MessageClass: transcript.CompactedMessageClassSummary,
-							Content: []transcript.CompactedMessageContentItem{
-								{Type: "text", Text: priorInjectedSummary},
+	fixture := buildReorientFixture(
+		t,
+		[]transcript.Message{
+			{
+				UUID:      "child-summary-with-prior-injection",
+				Role:      "user",
+				Timestamp: baseTime,
+				Text:      priorInjectedSummary,
+				Compaction: &transcript.CompactionMetadata{
+					Kind:    transcript.CompactionKindSummary,
+					Trigger: transcript.CompactionTriggerManual,
+					ContextItems: []transcript.CompactedContextItem{
+						{
+							Kind: transcript.CompactedContextItemKindMessage,
+							Message: &transcript.CompactedMessageItem{
+								Role:         "user",
+								MessageClass: transcript.CompactedMessageClassSummary,
+								Content: []transcript.CompactedMessageContentItem{
+									{Type: "text", Text: priorInjectedSummary},
+								},
 							},
 						},
 					},
 				},
 			},
 		},
-	})
+	)
 	page, err := fixture.index.ReorientPage(
 		context.Background(),
 		ReorientOptions{
@@ -127,13 +135,16 @@ func TestRenderReorientSnapshotStripsPriorInjection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReorientPage: %v", err)
 	}
+
 	if strings.Contains(page.Body, "OLD-NESTED-TRANSCRIPT") {
 		t.Fatalf("prior injected transcript survived:\n%s", page.Body)
 	}
+
 	if strings.Contains(page.Body, reorienttag.PreCompactionTranscriptOpen) ||
 		strings.Contains(page.Body, reorienttag.PreCompactionTranscriptClose) {
 		t.Fatalf("prior injection markers survived:\n%s", page.Body)
 	}
+
 	for _, want := range []string{"summary before", "summary after"} {
 		if !strings.Contains(page.Body, want) {
 			t.Fatalf("recovered body missing stripped summary text %q:\n%s", want, page.Body)
@@ -175,12 +186,15 @@ func TestCollapseRepeatedRunsKeepsFirstAndDistinctTurns(t *testing.T) {
 	if len(collapsed) != 2 {
 		t.Fatalf("collapsed len = %d, want 2", len(collapsed))
 	}
+
 	if collapsed[0].UUID != "poll-1" {
 		t.Fatalf("first collapsed message UUID = %q, want poll-1", collapsed[0].UUID)
 	}
+
 	if !strings.Contains(collapsed[0].Text, "[collapsed 2 near-identical turns]") {
 		t.Fatalf("collapsed marker missing from first message text: %q", collapsed[0].Text)
 	}
+
 	if collapsed[1].UUID != distinct.UUID ||
 		collapsed[1].Role != distinct.Role ||
 		collapsed[1].Text != distinct.Text {
@@ -198,12 +212,15 @@ func TestStripPriorReorientInjectionSpansHandlesNesting(t *testing.T) {
 	if !changed {
 		t.Fatal("changed = false, want true")
 	}
+
 	if got != "head  tail" {
 		t.Fatalf("got %q, want %q (whole outer span removed)", got, "head  tail")
 	}
+
 	if strings.Contains(got, openTag) || strings.Contains(got, closeTag) {
 		t.Fatalf("orphan injection marker survived: %q", got)
 	}
+
 	if strings.Contains(got, "inner nested") || strings.Contains(got, "outer") {
 		t.Fatalf("nested injection content survived: %q", got)
 	}
@@ -221,8 +238,10 @@ func TestCollapseRepeatedRunsKeepsDistinctToolCalls(t *testing.T) {
 			HasTools:  true,
 			Tools: []transcript.ToolCall{
 				{
-					Name:        "Bash",
-					Input:       transcript.ToolInputJSON{Raw: []byte(`{"command":"` + command + `"}`)},
+					Name: "Bash",
+					Input: transcript.ToolInputJSON{
+						Raw: []byte(`{"command":"` + command + `"}`),
+					},
 					Display:     "",
 					DisplayLang: "",
 				},
@@ -236,7 +255,10 @@ func TestCollapseRepeatedRunsKeepsDistinctToolCalls(t *testing.T) {
 	}
 	collapsedDistinct := collapseRepeatedRuns(distinctTools)
 	if len(collapsedDistinct) != 3 {
-		t.Fatalf("distinct tool calls collapsed to %d, want 3 (must not merge)", len(collapsedDistinct))
+		t.Fatalf(
+			"distinct tool calls collapsed to %d, want 3 (must not merge)",
+			len(collapsedDistinct),
+		)
 	}
 
 	identicalTools := []transcript.Message{
@@ -248,6 +270,7 @@ func TestCollapseRepeatedRunsKeepsDistinctToolCalls(t *testing.T) {
 	if len(collapsedSame) != 1 {
 		t.Fatalf("identical tool calls collapsed to %d, want 1", len(collapsedSame))
 	}
+
 	if !strings.Contains(collapsedSame[0].Text, "[collapsed 2 near-identical turns]") {
 		t.Fatalf("collapse marker missing from identical tool run: %q", collapsedSame[0].Text)
 	}
@@ -256,22 +279,27 @@ func TestCollapseRepeatedRunsKeepsDistinctToolCalls(t *testing.T) {
 func TestSliceReorientBodyAdvancesAndReassembles(t *testing.T) {
 	t.Parallel()
 	var builder strings.Builder
+
 	for index := range 40 {
 		fmt.Fprintf(&builder, "line %02d of the recovered transcript\n", index)
 	}
+
 	body := builder.String()
 
 	var rebuilt strings.Builder
 	offset := 0
 	pages := 0
+
 	for offset < len(body) {
 		slice, next := sliceReorientBody(body, offset, 100)
 		if next <= offset {
 			t.Fatalf("slice did not advance: offset %d next %d", offset, next)
 		}
+
 		if slice != body[offset:next] {
 			t.Fatalf("slice mismatch at offset %d", offset)
 		}
+
 		rebuilt.WriteString(slice)
 		offset = next
 		pages++
@@ -279,9 +307,11 @@ func TestSliceReorientBodyAdvancesAndReassembles(t *testing.T) {
 			t.Fatalf("slice loop did not terminate")
 		}
 	}
+
 	if rebuilt.String() != body {
 		t.Fatalf("reassembled body != original")
 	}
+
 	if pages < 2 {
 		t.Fatalf("pages = %d, want more than one", pages)
 	}
@@ -298,6 +328,7 @@ func TestSliceReorientBodyHardCutsLongLine(t *testing.T) {
 
 func TestReorientCursorRoundTrip(t *testing.T) {
 	t.Parallel()
+
 	cases := []reorientCursor{
 		{Fingerprint: "", Offset: 0},
 		{Fingerprint: "child-37", Offset: 42},
@@ -309,6 +340,7 @@ func TestReorientCursorRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("decode(%q) err = %v", encoded, err)
 		}
+
 		if got != want {
 			t.Fatalf("round trip = %#v, want %#v", got, want)
 		}
@@ -321,6 +353,7 @@ func TestReorientCursorEmptyIsZero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("empty cursor err = %v", err)
 	}
+
 	if got != (reorientCursor{Fingerprint: "", Offset: 0}) {
 		t.Fatalf("empty cursor = %#v, want zero", got)
 	}
@@ -340,9 +373,11 @@ func TestReorientSelectorPicksPreBoundaryHistory(t *testing.T) {
 	if got := reorientSelector(messages, false); got != "1..2" {
 		t.Fatalf("selector = %q, want 1..2 (all segments before the latest boundary)", got)
 	}
+
 	if got := reorientSelector(messages, true); got != "all" {
 		t.Fatalf("synthetic selector = %q, want all", got)
 	}
+
 	uncompacted := []transcript.Message{{UUID: "a", Role: "user", Text: "hi"}}
 	if got := reorientSelector(uncompacted, false); got != "0" {
 		t.Fatalf("uncompacted selector = %q, want 0", got)
@@ -356,6 +391,7 @@ func TestReorientFingerprintIsLatestBoundary(t *testing.T) {
 	if got := reorientFingerprint(messages); got != "child-37" {
 		t.Fatalf("fingerprint = %q, want child-37", got)
 	}
+
 	uncompacted := []transcript.Message{{UUID: "a", Role: "user", Text: "hi"}}
 	if got := reorientFingerprint(uncompacted); got != "" {
 		t.Fatalf("uncompacted fingerprint = %q, want empty", got)
@@ -365,15 +401,25 @@ func TestReorientFingerprintIsLatestBoundary(t *testing.T) {
 func TestReorientPageRecoversPreBoundaryHistoryOnly(t *testing.T) {
 	t.Parallel()
 	fixture := newReorientFixture(t)
-	body, total, pages := collectReorientPages(t, fixture.index, ReorientOptions{ConversationID: fixture.child.ID})
+	body, total, pages := collectReorientPages(
+		t,
+		fixture.index,
+		ReorientOptions{ConversationID: fixture.child.ID},
+	)
 	if total <= 0 || pages < 1 {
 		t.Fatalf("total = %d pages = %d, want positive", total, pages)
 	}
-	for _, want := range []string{"segment beginning detail", "I rather idiot proof it", "working before compact"} {
+
+	for _, want := range []string{
+		"segment beginning detail",
+		"I rather idiot proof it",
+		"working before compact",
+	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("recovered body missing pre-boundary detail %q:\n%s", want, body)
 		}
 	}
+
 	for _, unwanted := range []string{"post compact tail", "tail request"} {
 		if strings.Contains(body, unwanted) {
 			t.Fatalf("recovered body included post-boundary tail %q:\n%s", unwanted, body)
@@ -385,31 +431,45 @@ func TestReorientPageStableWhenTailGrows(t *testing.T) {
 	t.Parallel()
 	baseTime := time.Date(2026, 6, 27, 12, 0, 0, 0, time.UTC)
 	base := buildReorientFixture(t, nil)
-	baseBody, baseTotal, _ := collectReorientPages(t, base.index, ReorientOptions{ConversationID: base.child.ID})
+	baseBody, baseTotal, _ := collectReorientPages(
+		t,
+		base.index,
+		ReorientOptions{ConversationID: base.child.ID},
+	)
 
-	grown := buildReorientFixture(t, []transcript.Message{
-		{
-			UUID:      "child-40",
-			Role:      "assistant",
-			Timestamp: baseTime.Add(41 * time.Minute),
-			Text:      "new post compact work after the loop started",
+	grown := buildReorientFixture(
+		t,
+		[]transcript.Message{
+			{
+				UUID:      "child-40",
+				Role:      "assistant",
+				Timestamp: baseTime.Add(41 * time.Minute),
+				Text:      "new post compact work after the loop started",
+			},
+			{
+				UUID:      "child-41",
+				Role:      "user",
+				Timestamp: baseTime.Add(42 * time.Minute),
+				Text:      "even more new tail",
+			},
 		},
-		{
-			UUID:      "child-41",
-			Role:      "user",
-			Timestamp: baseTime.Add(42 * time.Minute),
-			Text:      "even more new tail",
-		},
-	})
-	grownBody, grownTotal, _ := collectReorientPages(t, grown.index, ReorientOptions{ConversationID: grown.child.ID})
+	)
+	grownBody, grownTotal, _ := collectReorientPages(
+		t,
+		grown.index,
+		ReorientOptions{ConversationID: grown.child.ID},
+	)
 
 	if grownTotal != baseTotal {
 		t.Fatalf("total bytes changed after tail growth: base %d grown %d", baseTotal, grownTotal)
 	}
+
 	if grownBody != baseBody {
 		t.Fatalf("recovered body changed after tail growth")
 	}
-	if strings.Contains(grownBody, "new post compact work") || strings.Contains(grownBody, "even more new tail") {
+
+	if strings.Contains(grownBody, "new post compact work") ||
+		strings.Contains(grownBody, "even more new tail") {
 		t.Fatalf("recovered body leaked post-boundary growth:\n%s", grownBody)
 	}
 }
@@ -417,21 +477,38 @@ func TestReorientPageStableWhenTailGrows(t *testing.T) {
 func TestReorientPageRestartsOnFingerprintMismatch(t *testing.T) {
 	t.Parallel()
 	fixture := newReorientFixture(t)
-	staleCursor := encodeReorientCursor(reorientCursor{Fingerprint: "stale-fingerprint", Offset: 24})
-	page, err := fixture.index.ReorientPage(context.Background(), ReorientOptions{ConversationID: fixture.child.ID}, staleCursor, 200)
+	staleCursor := encodeReorientCursor(reorientCursor{
+		Fingerprint: "stale-fingerprint",
+		Offset:      24,
+	})
+	page, err := fixture.index.ReorientPage(
+		context.Background(),
+		ReorientOptions{ConversationID: fixture.child.ID},
+		staleCursor,
+		200,
+	)
 	if err != nil {
 		t.Fatalf("ReorientPage: %v", err)
 	}
+
 	if !page.Restart {
 		t.Fatalf("restart = false, want true on fingerprint mismatch")
 	}
+
 	if page.Offset != 0 {
 		t.Fatalf("offset = %d, want 0 after restart", page.Offset)
 	}
-	firstPage, err := fixture.index.ReorientPage(context.Background(), ReorientOptions{ConversationID: fixture.child.ID}, "", 200)
+
+	firstPage, err := fixture.index.ReorientPage(
+		context.Background(),
+		ReorientOptions{ConversationID: fixture.child.ID},
+		"",
+		200,
+	)
 	if err != nil {
 		t.Fatalf("ReorientPage first: %v", err)
 	}
+
 	if page.Body != firstPage.Body {
 		t.Fatalf("restart body != first page body")
 	}
@@ -450,6 +527,7 @@ func TestExportMaxLinesKeepsLastLines(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Export full: %v", err)
 	}
+
 	fullLines := countLines(string(full))
 	if fullLines <= 5 {
 		t.Fatalf("fixture export has %d lines, want more than 5 for a meaningful cap", fullLines)
@@ -460,10 +538,15 @@ func TestExportMaxLinesKeepsLastLines(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Export capped: %v", err)
 	}
+
 	if got := countLines(string(capped)); got != 5 {
 		t.Fatalf("capped export has %d lines, want 5", got)
 	}
-	if !strings.HasSuffix(strings.TrimRight(string(full), "\n"), strings.TrimRight(string(capped), "\n")) {
+
+	if !strings.HasSuffix(
+		strings.TrimRight(string(full), "\n"),
+		strings.TrimRight(string(capped), "\n"),
+	) {
 		t.Fatalf("capped export is not the tail of the full export:\ncapped=%q", string(capped))
 	}
 }
@@ -473,6 +556,7 @@ func countLines(text string) int {
 	if trimmed == "" {
 		return 0
 	}
+
 	return strings.Count(trimmed, "\n") + 1
 }
 
@@ -483,31 +567,38 @@ func collectReorientPages(t *testing.T, idx *Index, options ReorientOptions) (st
 	total := -1
 	pages := 0
 	seen := map[string]bool{}
+
 	for {
 		page, err := idx.ReorientPage(context.Background(), options, cursor, 200)
 		if err != nil {
 			t.Fatalf("ReorientPage: %v", err)
 		}
+
 		if total < 0 {
 			total = page.TotalBytes
 		}
+
 		builder.WriteString(page.Body)
 		pages++
 		if page.Remaining <= 0 {
 			break
 		}
+
 		if page.NextCursor == "" {
 			t.Fatalf("remaining %d but next cursor is empty", page.Remaining)
 		}
+
 		if seen[page.NextCursor] {
 			t.Fatalf("repeated next cursor %q", page.NextCursor)
 		}
+
 		seen[page.NextCursor] = true
 		cursor = page.NextCursor
 		if pages > 1000 {
 			t.Fatalf("reorient page loop did not terminate")
 		}
 	}
+
 	return builder.String(), total, pages
 }
 
@@ -525,7 +616,10 @@ func (parser staticParser) Provider() providerid.Provider {
 	return parser.provider
 }
 
-func (parser staticParser) Discover(_ context.Context, _ map[string]Record) ([]ScanCandidate, error) {
+func (parser staticParser) Discover(
+	_ context.Context,
+	_ map[string]Record,
+) ([]ScanCandidate, error) {
 	return nil, nil
 }
 
@@ -577,6 +671,7 @@ func buildReorientFixture(t *testing.T, extraChildTail []transcript.Message) reo
 	if len(extraChildTail) > 0 {
 		childMessages = append(childMessages, extraChildTail...)
 	}
+
 	registry := NewRegistry()
 	registry.Register(staticParser{
 		provider: providerid.ProviderClaude,
@@ -596,6 +691,7 @@ func buildReorientFixture(t *testing.T, extraChildTail []transcript.Message) reo
 	index.scanProvider = func(context.Context, *Registry, scanCache) (scanResult, error) {
 		return scanResult{records: records, stamps: nil}, nil
 	}
+
 	return reorientFixture{index: index, child: child}
 }
 
@@ -661,14 +757,19 @@ func reorientChildMessages(baseTime time.Time) []transcript.Message {
 			Text:      "segment beginning detail",
 		},
 	}
+
 	for index := range 30 {
-		messages = append(messages, transcript.Message{
-			UUID:      fmt.Sprintf("child-filler-%02d", index),
-			Role:      "assistant",
-			Timestamp: baseTime.Add(time.Duration(5+index) * time.Minute),
-			Text:      fmt.Sprintf("segment filler %02d", index),
-		})
+		messages = append(
+			messages,
+			transcript.Message{
+				UUID:      fmt.Sprintf("child-filler-%02d", index),
+				Role:      "assistant",
+				Timestamp: baseTime.Add(time.Duration(5+index) * time.Minute),
+				Text:      fmt.Sprintf("segment filler %02d", index),
+			},
+		)
 	}
+
 	messages = append(
 		messages,
 		transcript.Message{
@@ -733,5 +834,6 @@ func reorientChildMessages(baseTime time.Time) []transcript.Message {
 			Text:      "tail request",
 		},
 	)
+
 	return messages
 }

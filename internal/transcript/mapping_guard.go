@@ -73,9 +73,14 @@ func ContainMappingPanic() {
 	if recovered == nil {
 		return
 	}
-	slog.Error("transcript.mapping_panic",
-		"concern", slogger.ConcernTranscript,
-		"err", fmt.Sprintf("panic: %v", recovered),
-		"stack", string(debug.Stack()),
+
+	slog.Error(
+		"transcript.mapping_panic",
+		"concern",
+		slogger.ConcernTranscript,
+		"err",
+		fmt.Sprintf("panic: %v", recovered),
+		"stack",
+		string(debug.Stack()),
 	)
 }

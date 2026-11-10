@@ -13,7 +13,16 @@ func statusProofMetric(metrics []daemon.StatusMetric, name string) (daemon.Statu
 			return metric, true
 		}
 	}
-	return daemon.StatusMetric{Name: name, Unit: "", Kind: daemon.StatusMetricAbsent, Int: 0, Float: 0, Bool: false, Text: ""}, false
+
+	return daemon.StatusMetric{
+		Name:  name,
+		Unit:  "",
+		Kind:  daemon.StatusMetricAbsent,
+		Int:   0,
+		Float: 0,
+		Bool:  false,
+		Text:  "",
+	}, false
 }
 
 func statusProofKnownInt(metrics []daemon.StatusMetric, name string) (int64, bool) {
@@ -26,6 +35,7 @@ func statusProofText(metrics []daemon.StatusMetric, name string) string {
 	if !found || metric.Kind != daemon.StatusMetricText {
 		return ""
 	}
+
 	return metric.Text
 }
 
@@ -34,12 +44,25 @@ func statusProofInt(t *testing.T, step string, metrics []daemon.StatusMetric, na
 	value, known := statusProofKnownInt(metrics, name)
 	if !known {
 		metric, found := statusProofMetric(metrics, name)
-		t.Errorf("step=%s metric=%s found=%t kind=%s want_kind=%s", step, name, found, metric.Kind, daemon.StatusMetricInt)
+		t.Errorf(
+			"step=%s metric=%s found=%t kind=%s want_kind=%s",
+			step,
+			name,
+			found,
+			metric.Kind,
+			daemon.StatusMetricInt,
+		)
 	}
+
 	return value
 }
 
-func statusProofNumber(t *testing.T, step string, metrics []daemon.StatusMetric, name string) float64 {
+func statusProofNumber(
+	t *testing.T,
+	step string,
+	metrics []daemon.StatusMetric,
+	name string,
+) float64 {
 	t.Helper()
 	metric, found := statusProofMetric(metrics, name)
 	switch {
@@ -53,8 +76,14 @@ func statusProofNumber(t *testing.T, step string, metrics []daemon.StatusMetric,
 	}
 }
 
-func assertStatusProofTexts(t *testing.T, step string, metrics []daemon.StatusMetric, names ...string) {
+func assertStatusProofTexts(
+	t *testing.T,
+	step string,
+	metrics []daemon.StatusMetric,
+	names ...string,
+) {
 	t.Helper()
+
 	for _, name := range names {
 		if statusProofText(metrics, name) == "" {
 			metric, found := statusProofMetric(metrics, name)
@@ -63,18 +92,37 @@ func assertStatusProofTexts(t *testing.T, step string, metrics []daemon.StatusMe
 	}
 }
 
-func assertStatusProofUnknown(t *testing.T, step string, metrics []daemon.StatusMetric, names ...string) {
+func assertStatusProofUnknown(
+	t *testing.T,
+	step string,
+	metrics []daemon.StatusMetric,
+	names ...string,
+) {
 	t.Helper()
+
 	for _, name := range names {
 		metric, found := statusProofMetric(metrics, name)
 		if !found || metric.Kind != daemon.StatusMetricAbsent {
-			t.Errorf("step=%s metric=%s found=%t kind=%s want_kind=%s", step, name, found, metric.Kind, daemon.StatusMetricAbsent)
+			t.Errorf(
+				"step=%s metric=%s found=%t kind=%s want_kind=%s",
+				step,
+				name,
+				found,
+				metric.Kind,
+				daemon.StatusMetricAbsent,
+			)
 		}
 	}
 }
 
-func assertStatusProofMissing(t *testing.T, step string, metrics []daemon.StatusMetric, names ...string) {
+func assertStatusProofMissing(
+	t *testing.T,
+	step string,
+	metrics []daemon.StatusMetric,
+	names ...string,
+) {
 	t.Helper()
+
 	for _, name := range names {
 		if metric, found := statusProofMetric(metrics, name); found {
 			t.Errorf("step=%s metric=%s kind=%s want_missing", step, name, metric.Kind)
@@ -82,8 +130,12 @@ func assertStatusProofMissing(t *testing.T, step string, metrics []daemon.Status
 	}
 }
 
-func statusProofMetricsWithPrefix(metrics []daemon.StatusMetric, prefixes ...string) []daemon.StatusMetric {
+func statusProofMetricsWithPrefix(
+	metrics []daemon.StatusMetric,
+	prefixes ...string,
+) []daemon.StatusMetric {
 	selected := make([]daemon.StatusMetric, 0)
+
 	for _, metric := range metrics {
 		for _, prefix := range prefixes {
 			if strings.HasPrefix(metric.Name, prefix) {
@@ -92,5 +144,6 @@ func statusProofMetricsWithPrefix(metrics []daemon.StatusMetric, prefixes ...str
 			}
 		}
 	}
+
 	return selected
 }

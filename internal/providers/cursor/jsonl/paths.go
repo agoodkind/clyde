@@ -56,33 +56,47 @@ func ResolveProjectRoots() ([]ProjectRoot, error) {
 	if configuredRoots == "" {
 		userHome, err := os.UserHomeDir()
 		if err != nil {
-			slog.Warn("providers.cursor.jsonl.projects_home_resolve_failed", "concern", concern, "err", err)
+			slog.Warn(
+				"providers.cursor.jsonl.projects_home_resolve_failed",
+				"concern",
+				concern,
+				"err",
+				err,
+			)
+
 			return nil, fmt.Errorf("resolve cursor projects home: %w", err)
 		}
+
 		configuredRoots = filepath.Join(userHome, cursorProjectsSubdir)
 	}
 
 	seen := make(map[string]bool)
 	roots := make([]ProjectRoot, 0, 1)
+
 	for _, rawEntry := range filepath.SplitList(configuredRoots) {
 		rootPath := strings.TrimSpace(rawEntry)
 		if rootPath == "" {
 			continue
 		}
+
 		if strings.HasPrefix(rootPath, "~") {
 			rootPath = homedir.Expand(rootPath)
 		}
+
 		absolutePath, err := filepath.Abs(rootPath)
 		if err == nil {
 			rootPath = absolutePath
 		}
+
 		rootPath = filepath.Clean(rootPath)
 		if seen[rootPath] {
 			continue
 		}
+
 		seen[rootPath] = true
 		roots = append(roots, ProjectRoot{Path: rootPath})
 	}
+
 	return roots, nil
 }
 
@@ -93,16 +107,20 @@ func MatchTranscriptFile(path string) (TranscriptFile, bool, error) {
 	if err != nil {
 		return TranscriptFile{}, false, err
 	}
+
 	for _, root := range roots {
 		file, ok := transcriptFileFromPath(root.Path, path)
 		if ok {
 			if file.ParentConversationID == "" {
 				file.TwinSubagentParentID = findSubagentTwinParent(file.Path, file.ConversationID)
 			}
+
 			return file, true, nil
 		}
 	}
+
 	var emptyFile TranscriptFile
+
 	return emptyFile, false, nil
 }
 
@@ -113,40 +131,65 @@ func MatchTranscriptFile(path string) (TranscriptFile, bool, error) {
 // transcript whose containing directory names the conversation that owns it.
 func DiscoverTranscriptFiles(roots []ProjectRoot) ([]TranscriptFile, error) {
 	files := make([]TranscriptFile, 0)
+
 	for _, root := range roots {
-		err := filepath.WalkDir(root.Path, func(path string, entry os.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				if errors.Is(walkErr, os.ErrNotExist) || errors.Is(walkErr, os.ErrPermission) {
+		err := filepath.WalkDir(
+			root.Path,
+			func(path string, entry os.DirEntry, walkErr error) error {
+				if walkErr != nil {
+					if errors.Is(walkErr, os.ErrNotExist) || errors.Is(walkErr, os.ErrPermission) {
+						return nil
+					}
+
+					return walkErr
+				}
+
+				if entry.IsDir() {
+					relativePath, err := filepath.Rel(root.Path, path)
+					if err != nil {
+						return fmt.Errorf("relativize transcript path %s: %w", path, err)
+					}
+
+					if shouldSkipTranscriptDirectory(relativePath) {
+						return filepath.SkipDir
+					}
+
 					return nil
 				}
-				return walkErr
-			}
-			if entry.IsDir() {
-				relativePath, err := filepath.Rel(root.Path, path)
-				if err != nil {
-					return fmt.Errorf("relativize transcript path %s: %w", path, err)
+
+				file, ok := transcriptFileFromPath(root.Path, path)
+				if !ok {
+					return nil
 				}
-				if shouldSkipTranscriptDirectory(relativePath) {
-					return filepath.SkipDir
-				}
+
+				files = append(files, file)
+
 				return nil
-			}
-			file, ok := transcriptFileFromPath(root.Path, path)
-			if !ok {
-				return nil
-			}
-			files = append(files, file)
-			return nil
-		})
+			},
+		)
 		if err != nil {
-			slog.Warn("providers.cursor.jsonl.transcript_root_walk_failed", "concern", concern, "path", root.Path, "err", err)
+			slog.Warn(
+				"providers.cursor.jsonl.transcript_root_walk_failed",
+				"concern",
+				concern,
+				"path",
+				root.Path,
+				"err",
+				err,
+			)
+
 			return nil, fmt.Errorf("walk cursor transcript root %s: %w", root.Path, err)
 		}
 	}
-	sort.SliceStable(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
+
+	sort.SliceStable(
+		files,
+		func(i, j int) bool {
+			return files[i].Path < files[j].Path
+		},
+	)
 	fillTwinSubagentParents(files)
+
 	return files, nil
 }
 
@@ -154,14 +197,17 @@ func shouldSkipTranscriptDirectory(relativePath string) bool {
 	if relativePath == "." {
 		return false
 	}
+
 	parts := strings.Split(relativePath, string(filepath.Separator))
 	depth := len(parts)
 	if depth == 2 {
 		return parts[1] != agentTranscriptsDirName
 	}
+
 	if depth == 4 {
 		return parts[3] != subagentsDirName
 	}
+
 	return depth >= 5
 }
 
@@ -179,23 +225,34 @@ type projectConversationKey struct {
 // dispatching conversation's id onto the twin.
 func fillTwinSubagentParents(files []TranscriptFile) {
 	subagentParentByKey := make(map[projectConversationKey]string)
+
 	for _, file := range files {
 		if file.ParentConversationID == "" {
 			continue
 		}
-		key := projectConversationKey{ProjectKey: file.ProjectKey, ConversationID: file.ConversationID}
+
+		key := projectConversationKey{
+			ProjectKey:     file.ProjectKey,
+			ConversationID: file.ConversationID,
+		}
 		if _, exists := subagentParentByKey[key]; !exists {
 			subagentParentByKey[key] = file.ParentConversationID
 		}
 	}
+
 	if len(subagentParentByKey) == 0 {
 		return
 	}
+
 	for i := range files {
 		if files[i].ParentConversationID != "" {
 			continue
 		}
-		key := projectConversationKey{ProjectKey: files[i].ProjectKey, ConversationID: files[i].ConversationID}
+
+		key := projectConversationKey{
+			ProjectKey:     files[i].ProjectKey,
+			ConversationID: files[i].ConversationID,
+		}
 		files[i].TwinSubagentParentID = subagentParentByKey[key]
 	}
 }
@@ -206,11 +263,17 @@ func fillTwinSubagentParents(files []TranscriptFile) {
 // that conversation's id, or an empty string when no twin exists.
 func findSubagentTwinParent(topLevelPath string, conversationID string) string {
 	agentTranscriptsDir := filepath.Dir(filepath.Dir(topLevelPath))
-	pattern := filepath.Join(agentTranscriptsDir, "*", subagentsDirName, conversationID+jsonlExtension)
+	pattern := filepath.Join(
+		agentTranscriptsDir,
+		"*",
+		subagentsDirName,
+		conversationID+jsonlExtension,
+	)
 	matches, err := filepath.Glob(pattern)
 	if err != nil || len(matches) == 0 {
 		return ""
 	}
+
 	return filepath.Base(filepath.Dir(filepath.Dir(matches[0])))
 }
 
@@ -222,6 +285,7 @@ func WorkspacePathFromProjectKey(projectKey string) string {
 	if trimmed == "" {
 		return ""
 	}
+
 	return "/" + strings.ReplaceAll(trimmed, "-", "/")
 }
 
@@ -231,17 +295,21 @@ func transcriptFileFromPath(rootPath string, path string) (TranscriptFile, bool)
 	if filepath.Ext(path) != jsonlExtension {
 		return emptyFile, false
 	}
+
 	relativePath, err := filepath.Rel(rootPath, path)
 	if err != nil {
 		return emptyFile, false
 	}
+
 	if relativePath == ".." || strings.HasPrefix(relativePath, ".."+string(filepath.Separator)) {
 		return emptyFile, false
 	}
+
 	parts := splitPathParts(relativePath)
 	if len(parts) < 4 || parts[1] != agentTranscriptsDirName {
 		return emptyFile, false
 	}
+
 	projectKey := parts[0]
 	conversationDirName := parts[2]
 	if conversationDirName == "" {
@@ -254,6 +322,7 @@ func transcriptFileFromPath(rootPath string, path string) (TranscriptFile, bool)
 		if filenameStem != conversationDirName {
 			return emptyFile, false
 		}
+
 		return TranscriptFile{
 			Path:                 path,
 			ConversationID:       conversationDirName,
@@ -273,10 +342,12 @@ func transcriptFileFromPath(rootPath string, path string) (TranscriptFile, bool)
 	if len(parts) != 5 || parts[3] != subagentsDirName {
 		return emptyFile, false
 	}
+
 	subagentID := strings.TrimSuffix(parts[4], jsonlExtension)
 	if subagentID == "" {
 		return emptyFile, false
 	}
+
 	return TranscriptFile{
 		Path:                 path,
 		ConversationID:       subagentID,
@@ -293,5 +364,6 @@ func splitPathParts(path string) []string {
 	if cleaned == "." {
 		return nil
 	}
+
 	return strings.Split(filepath.ToSlash(cleaned), "/")
 }

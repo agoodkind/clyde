@@ -38,8 +38,10 @@ func (c *prefixConn) Read(b []byte) (int, error) {
 	if len(c.prefix) > 0 {
 		n := copy(b, c.prefix)
 		c.prefix = c.prefix[n:]
+
 		return n, nil
 	}
+
 	n, err := c.Conn.Read(b)
 	switch {
 	case n > 0 && errors.Is(err, io.EOF):
@@ -61,11 +63,22 @@ func (c *prefixConn) CloseWrite() error {
 	if !ok {
 		return nil
 	}
+
 	if err := closeWrite.CloseWrite(); err != nil {
 		wrapped := fmt.Errorf("prefix conn close write: %w", err)
-		slog.Warn("mitm.transparent.prefix_close_write_failed", "concern", "providers.mitm.wire", "component", "mitm", "err", wrapped)
+		slog.Warn(
+			"mitm.transparent.prefix_close_write_failed",
+			"concern",
+			"providers.mitm.wire",
+			"component",
+			"mitm",
+			"err",
+			wrapped,
+		)
+
 		return wrapped
 	}
+
 	return nil
 }
 
@@ -95,7 +108,16 @@ func newSniffListener(ctx context.Context, listener net.Listener, proxy *Proxy) 
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				panicErr := fmt.Errorf("transparent sniff accept loop panic: %v", recovered)
-				proxy.log.WarnContext(ctx, "mitm.transparent.accept_loop_panicked", "concern", "providers.mitm.wire", "panic", recovered, "err", panicErr)
+				proxy.log.WarnContext(
+					ctx,
+					"mitm.transparent.accept_loop_panicked",
+					"concern",
+					"providers.mitm.wire",
+					"panic",
+					recovered,
+					"err",
+					panicErr,
+				)
 				// Close done and the listener so a caller blocked in Accept does
 				// not hang forever after the accept loop dies.
 				sniffer.fail(panicErr)
@@ -103,6 +125,7 @@ func newSniffListener(ctx context.Context, listener net.Listener, proxy *Proxy) 
 		}()
 		sniffer.acceptLoop(ctx)
 	}()
+
 	return sniffer
 }
 
@@ -114,6 +137,7 @@ func (l *sniffListener) Accept() (net.Conn, error) {
 		return nil, net.ErrClosed
 	default:
 	}
+
 	select {
 	case conn := <-l.conns:
 		// Select does not prioritize a closed done over a ready conn, so a
@@ -145,9 +169,19 @@ func (l *sniffListener) Close() error {
 	})
 	if l.closeErr != nil {
 		wrapped := fmt.Errorf("close sniff listener: %w", l.closeErr)
-		l.proxy.log.Warn("mitm.transparent.listener_close_failed", "concern", "providers.mitm.wire", "component", "mitm", "err", wrapped)
+		l.proxy.log.Warn(
+			"mitm.transparent.listener_close_failed",
+			"concern",
+			"providers.mitm.wire",
+			"component",
+			"mitm",
+			"err",
+			wrapped,
+		)
+
 		return wrapped
 	}
+
 	return nil
 }
 
@@ -158,9 +192,12 @@ func (l *sniffListener) acceptLoop(ctx context.Context) {
 			if l.closed() || errors.Is(err, net.ErrClosed) {
 				return
 			}
+
 			l.fail(fmt.Errorf("transparent sniff accept: %w", err))
+
 			return
 		}
+
 		// Acquire a worker slot before sniffing so concurrent sniff goroutines
 		// stay bounded. When the limit is reached this blocks, which pauses the
 		// accept loop and applies backpressure to the OS accept backlog until a
@@ -171,44 +208,83 @@ func (l *sniffListener) acceptLoop(ctx context.Context) {
 			_ = conn.Close()
 			return
 		}
+
 		go func(rawConn net.Conn) {
 			defer func() { <-l.workers }()
 			defer func() {
 				if recovered := recover(); recovered != nil {
-					l.proxy.log.WarnContext(ctx, "mitm.transparent.conn_sniff_panicked", "concern", "providers.mitm.wire", "panic", recovered)
+					l.proxy.log.WarnContext(
+						ctx,
+						"mitm.transparent.conn_sniff_panicked",
+						"concern",
+						"providers.mitm.wire",
+						"panic",
+						recovered,
+					)
 					_ = rawConn.Close()
 				}
 			}()
 			l.handleAcceptedConn(ctx, rawConn)
-		}(conn)
+		}(
+			conn,
+		)
 	}
 }
 
 func (l *sniffListener) handleAcceptedConn(ctx context.Context, conn net.Conn) {
 	if err := conn.SetReadDeadline(clock.Now().Add(transparentSniffTimeout)); err != nil {
-		l.proxy.log.DebugContext(ctx, "mitm.transparent.set_sniff_deadline_failed", "concern", "providers.mitm.wire", "err", err)
+		l.proxy.log.DebugContext(
+			ctx,
+			"mitm.transparent.set_sniff_deadline_failed",
+			"concern",
+			"providers.mitm.wire",
+			"err",
+			err,
+		)
 		_ = conn.Close()
+
 		return
 	}
+
 	var firstByte [1]byte
 	n, err := conn.Read(firstByte[:])
 	if resetErr := conn.SetReadDeadline(time.Time{}); resetErr != nil {
-		l.proxy.log.DebugContext(ctx, "mitm.transparent.clear_sniff_deadline_failed", "concern", "providers.mitm.wire", "err", resetErr)
+		l.proxy.log.DebugContext(
+			ctx,
+			"mitm.transparent.clear_sniff_deadline_failed",
+			"concern",
+			"providers.mitm.wire",
+			"err",
+			resetErr,
+		)
 		_ = conn.Close()
+
 		return
 	}
+
 	if n == 0 {
 		if err != nil {
-			l.proxy.log.DebugContext(ctx, "mitm.transparent.sniff_read_failed", "concern", "providers.mitm.wire", "err", err)
+			l.proxy.log.DebugContext(
+				ctx,
+				"mitm.transparent.sniff_read_failed",
+				"concern",
+				"providers.mitm.wire",
+				"err",
+				err,
+			)
 		}
+
 		_ = conn.Close()
+
 		return
 	}
+
 	client := &prefixConn{Conn: conn, prefix: []byte{firstByte[0]}}
 	if firstByte[0] == transparentTLSHandshakeRecord {
 		l.proxy.handleTransparentTLS(ctx, client)
 		return
 	}
+
 	l.handoff(client)
 }
 
@@ -225,6 +301,7 @@ func (l *sniffListener) fail(err error) {
 	case l.acceptErr <- err:
 	default:
 	}
+
 	l.closeOnce.Do(func() {
 		close(l.done)
 		l.closeErr = l.Listener.Close()
@@ -246,54 +323,101 @@ func (p *Proxy) handleTransparentTLS(parentCtx context.Context, client net.Conn)
 	started := clock.Now()
 	ca, err := p.mitmCA()
 	if err != nil {
-		p.log.WarnContext(ctx, "mitm.transparent.ca_failed", "concern", "providers.mitm.wire", "err", err)
+		p.log.WarnContext(
+			ctx,
+			"mitm.transparent.ca_failed",
+			"concern",
+			"providers.mitm.wire",
+			"err",
+			err,
+		)
+
 		return
 	}
+
 	var sniHost string
-	tlsConn := tls.Server(client, &tls.Config{
-		MinVersion: tls.VersionTLS12,
-		GetConfigForClient: func(info *tls.ClientHelloInfo) (*tls.Config, error) {
-			sniHost = normalizeConnectHost(info.ServerName)
-			if sniHost == "" {
-				return nil, fmt.Errorf("transparent client hello has no SNI")
-			}
-			leaf, leafErr := ca.leafForHost(sniHost)
-			if leafErr != nil {
-				return nil, fmt.Errorf("mint transparent leaf for %q: %w", sniHost, leafErr)
-			}
-			nextProtos := mitmALPNProtocols(info.SupportedProtos)
-			config := &tls.Config{
-				Certificates: []tls.Certificate{*leaf},
-				MinVersion:   tls.VersionTLS12,
-				NextProtos:   nil,
-			}
-			if len(nextProtos) > 0 {
-				config.NextProtos = nextProtos
-			}
-			return config, nil
+	tlsConn := tls.Server(
+		client,
+		&tls.Config{
+			MinVersion: tls.VersionTLS12,
+			GetConfigForClient: func(info *tls.ClientHelloInfo) (*tls.Config, error) {
+				sniHost = normalizeConnectHost(info.ServerName)
+				if sniHost == "" {
+					return nil, fmt.Errorf("transparent client hello has no SNI")
+				}
+
+				leaf, leafErr := ca.leafForHost(sniHost)
+				if leafErr != nil {
+					return nil, fmt.Errorf("mint transparent leaf for %q: %w", sniHost, leafErr)
+				}
+
+				nextProtos := mitmALPNProtocols(info.SupportedProtos)
+				config := &tls.Config{
+					Certificates: []tls.Certificate{*leaf},
+					MinVersion:   tls.VersionTLS12,
+					NextProtos:   nil,
+				}
+				if len(nextProtos) > 0 {
+					config.NextProtos = nextProtos
+				}
+
+				return config, nil
+			},
 		},
-	})
+	)
 	// Bound the handshake so a client that sends only the 0x16 record byte and
 	// then stalls cannot pin this goroutine and its fd indefinitely. The sniff
 	// read deadline was already cleared, and ctx has no cancellation, so this
 	// deadline is the only bound on the ClientHello read.
 	if err := client.SetDeadline(clock.Now().Add(transparentSniffTimeout)); err != nil {
-		p.log.WarnContext(ctx, "mitm.transparent.set_handshake_deadline_failed", "concern", "providers.mitm.wire", "err", err)
+		p.log.WarnContext(
+			ctx,
+			"mitm.transparent.set_handshake_deadline_failed",
+			"concern",
+			"providers.mitm.wire",
+			"err",
+			err,
+		)
+
 		return
 	}
+
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
-		p.log.WarnContext(ctx, "mitm.transparent.client_tls_failed", "concern", "providers.mitm.wire", "host", sniHost, "err", err)
+		p.log.WarnContext(
+			ctx,
+			"mitm.transparent.client_tls_failed",
+			"concern",
+			"providers.mitm.wire",
+			"host",
+			sniHost,
+			"err",
+			err,
+		)
+
 		return
 	}
+
 	if err := client.SetDeadline(time.Time{}); err != nil {
-		p.log.WarnContext(ctx, "mitm.transparent.clear_handshake_deadline_failed", "concern", "providers.mitm.wire", "host", sniHost, "err", err)
+		p.log.WarnContext(
+			ctx,
+			"mitm.transparent.clear_handshake_deadline_failed",
+			"concern",
+			"providers.mitm.wire",
+			"host",
+			sniHost,
+			"err",
+			err,
+		)
+
 		return
 	}
+
 	host := sniHost
 	if host == "" {
 		p.log.WarnContext(ctx, "mitm.transparent.missing_sni", "concern", "providers.mitm.wire")
 		return
 	}
+
 	provider, _, ok := providerForConnect(net.JoinHostPort(host, "443"))
 	if !ok {
 		// No registered provider claims this SNI host. The listener's port
@@ -301,7 +425,23 @@ func (p *Proxy) handleTransparentTLS(parentCtx context.Context, client net.Conn)
 		// every host as unclaimed metadata instead of dropping it. The leaf was
 		// already minted for this SNI during the handshake above.
 		provider = unclaimedProvider{}
-		p.log.DebugContext(ctx, "mitm.transparent.unclaimed_host_captured", "concern", "providers.mitm.wire", "host", host)
+		p.log.DebugContext(
+			ctx,
+			"mitm.transparent.unclaimed_host_captured",
+			"concern",
+			"providers.mitm.wire",
+			"host",
+			host,
+		)
 	}
-	p.serveInterceptedTLS(ctx, tlsConn, client, net.JoinHostPort(host, "443"), host, provider, started)
+
+	p.serveInterceptedTLS(
+		ctx,
+		tlsConn,
+		client,
+		net.JoinHostPort(host, "443"),
+		host,
+		provider,
+		started,
+	)
 }

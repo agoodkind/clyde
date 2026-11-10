@@ -45,7 +45,9 @@ func HeaderNames(h map[string][]string) []string {
 	for k := range h {
 		out = append(out, lowercaseASCII(k))
 	}
+
 	sort.Strings(out)
+
 	return out
 }
 
@@ -95,17 +97,42 @@ var knownChatRequestKeys = map[string]bool{
 // RequestDiscovery describing every key that appeared. It does not retain
 // any payload values. It is safe to log the result.
 func DiscoverRequest(body []byte) RequestDiscovery {
-	disc := RequestDiscovery{BodyBytes: len(body), TopLevelKeys: nil, UnknownKeys: nil, MetadataKeys: nil, MetadataIsObject: false, MessageFieldKeys: nil, InputItemKeys: nil, InputItemRoles: nil, InputItemTypes: nil, InputContentTypes: nil, ToolCount: 0, ToolKinds: nil, ToolFieldKeys: nil, ToolFunctionKeys: nil, ToolFunctionTopKeys: nil, ToolCustomTopKeys: nil, ToolCustomFormatKeys: nil, ToolFunctionNames: nil, ToolCustomNames: nil, MCPToolNames: nil, HasMCPLikeFields: false, MCPLikeFieldNames: nil}
+	disc := RequestDiscovery{
+		BodyBytes:            len(body),
+		TopLevelKeys:         nil,
+		UnknownKeys:          nil,
+		MetadataKeys:         nil,
+		MetadataIsObject:     false,
+		MessageFieldKeys:     nil,
+		InputItemKeys:        nil,
+		InputItemRoles:       nil,
+		InputItemTypes:       nil,
+		InputContentTypes:    nil,
+		ToolCount:            0,
+		ToolKinds:            nil,
+		ToolFieldKeys:        nil,
+		ToolFunctionKeys:     nil,
+		ToolFunctionTopKeys:  nil,
+		ToolCustomTopKeys:    nil,
+		ToolCustomFormatKeys: nil,
+		ToolFunctionNames:    nil,
+		ToolCustomNames:      nil,
+		MCPToolNames:         nil,
+		HasMCPLikeFields:     false,
+		MCPLikeFieldNames:    nil,
+	}
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(body, &top); err != nil {
 		return disc
 	}
+
 	disc.TopLevelKeys = sortedKeys(top)
 	for _, key := range disc.TopLevelKeys {
 		if _, ok := knownChatRequestKeys[key]; !ok {
 			disc.UnknownKeys = append(disc.UnknownKeys, key)
 		}
 	}
+
 	if raw, ok := top["metadata"]; ok && len(raw) > 0 && string(raw) != "null" {
 		var asObject map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &asObject); err == nil {
@@ -113,6 +140,7 @@ func DiscoverRequest(body []byte) RequestDiscovery {
 			disc.MetadataKeys = sortedKeys(asObject)
 		}
 	}
+
 	if raw, ok := top["input"]; ok && len(raw) > 0 {
 		ii := inspectInput(raw)
 		disc.InputItemKeys = ii.itemKeys
@@ -120,6 +148,7 @@ func DiscoverRequest(body []byte) RequestDiscovery {
 		disc.InputItemTypes = ii.types
 		disc.InputContentTypes = ii.contentTypes
 	}
+
 	if raw, ok := top["tools"]; ok && len(raw) > 0 {
 		ti := inspectTools(raw)
 		disc.ToolCount = ti.count
@@ -131,8 +160,17 @@ func DiscoverRequest(body []byte) RequestDiscovery {
 		disc.ToolCustomNames = ti.customNames
 		disc.MCPToolNames = ti.mcpNames
 	}
-	disc.MCPLikeFieldNames = collectMCPLikeNames(disc.UnknownKeys, disc.MetadataKeys, disc.ToolFunctionTopKeys, disc.ToolCustomTopKeys, disc.ToolFunctionNames, disc.ToolCustomNames)
+
+	disc.MCPLikeFieldNames = collectMCPLikeNames(
+		disc.UnknownKeys,
+		disc.MetadataKeys,
+		disc.ToolFunctionTopKeys,
+		disc.ToolCustomTopKeys,
+		disc.ToolFunctionNames,
+		disc.ToolCustomNames,
+	)
 	disc.HasMCPLikeFields = len(disc.MCPLikeFieldNames) > 0
+
 	return disc
 }
 
@@ -153,18 +191,22 @@ func inspectInput(raw json.RawMessage) inputInspect {
 	if err := json.Unmarshal(raw, &arr); err != nil {
 		return out
 	}
+
 	keySet := map[string]bool{}
 	roleSet := map[string]bool{}
 	typeSet := map[string]bool{}
 	contentTypeSet := map[string]bool{}
+
 	for _, elem := range arr {
 		var item map[string]json.RawMessage
 		if err := json.Unmarshal(elem, &item); err != nil {
 			continue
 		}
+
 		for k := range item {
 			keySet[k] = true
 		}
+
 		var probe struct {
 			Role    string            `json:"role"`
 			Type    string            `json:"type"`
@@ -174,9 +216,11 @@ func inspectInput(raw json.RawMessage) inputInspect {
 			if probe.Role != "" {
 				roleSet[probe.Role] = true
 			}
+
 			if probe.Type != "" {
 				typeSet[probe.Type] = true
 			}
+
 			for _, c := range probe.Content {
 				var cprobe struct {
 					Type string `json:"type"`
@@ -187,10 +231,12 @@ func inspectInput(raw json.RawMessage) inputInspect {
 			}
 		}
 	}
+
 	out.itemKeys = sortedSet(keySet)
 	out.roles = sortedSet(roleSet)
 	out.types = sortedSet(typeSet)
 	out.contentTypes = sortedSet(contentTypeSet)
+
 	return out
 }
 
@@ -237,16 +283,28 @@ func newToolInspectAccumulator() toolInspectAccumulator {
 }
 
 func inspectTools(raw json.RawMessage) toolsInspect {
-	out := toolsInspect{count: 0, kinds: nil, functionTopKeys: nil, customTopKeys: nil, customFormatKeys: nil, functionNames: nil, customNames: nil, mcpNames: nil}
+	out := toolsInspect{
+		count:            0,
+		kinds:            nil,
+		functionTopKeys:  nil,
+		customTopKeys:    nil,
+		customFormatKeys: nil,
+		functionNames:    nil,
+		customNames:      nil,
+		mcpNames:         nil,
+	}
 	var arr []json.RawMessage
 	if err := json.Unmarshal(raw, &arr); err != nil {
 		return out
 	}
+
 	out.count = len(arr)
 	acc := newToolInspectAccumulator()
+
 	for _, elem := range arr {
 		acc.foldElement(elem)
 	}
+
 	out.kinds = sortedSet(acc.kinds)
 	out.functionTopKeys = sortedSet(acc.functionTopKeys)
 	out.customTopKeys = sortedSet(acc.customTopKeys)
@@ -254,6 +312,7 @@ func inspectTools(raw json.RawMessage) toolsInspect {
 	out.functionNames = sortedSet(acc.functionNames)
 	out.customNames = sortedSet(acc.customNames)
 	out.mcpNames = sortedSet(acc.mcpNames)
+
 	return out
 }
 
@@ -264,6 +323,7 @@ func (a *toolInspectAccumulator) foldElement(elem json.RawMessage) {
 	if err := json.Unmarshal(elem, &top); err != nil {
 		return
 	}
+
 	var probe struct {
 		Type   string          `json:"type"`
 		Name   string          `json:"name"`
@@ -273,6 +333,7 @@ func (a *toolInspectAccumulator) foldElement(elem json.RawMessage) {
 	if probe.Type != "" {
 		a.kinds[probe.Type] = true
 	}
+
 	switch openAIToolWireType(probe.Type) {
 	case openAIToolWireTypeFunction:
 		a.foldFunctionTool(top, probe.Name)
@@ -290,9 +351,11 @@ func (a *toolInspectAccumulator) foldFunctionTool(top map[string]json.RawMessage
 	for k := range top {
 		a.functionTopKeys[k] = true
 	}
+
 	if name == "" {
 		return
 	}
+
 	a.functionNames[name] = true
 	if isMCPLikeToolName(name) {
 		a.mcpNames[name] = true
@@ -301,20 +364,28 @@ func (a *toolInspectAccumulator) foldFunctionTool(top map[string]json.RawMessage
 
 // foldCustomTool records the top-level keys, name, and format-object
 // keys of one `type:"custom"` tool entry.
-func (a *toolInspectAccumulator) foldCustomTool(top map[string]json.RawMessage, name string, format json.RawMessage) {
+func (a *toolInspectAccumulator) foldCustomTool(
+	top map[string]json.RawMessage,
+	name string,
+	format json.RawMessage,
+) {
 	for k := range top {
 		a.customTopKeys[k] = true
 	}
+
 	if name != "" {
 		a.customNames[name] = true
 	}
+
 	if len(format) == 0 || string(format) == "null" {
 		return
 	}
+
 	var fmtObj map[string]json.RawMessage
 	if err := json.Unmarshal(format, &fmtObj); err != nil {
 		return
 	}
+
 	for k := range fmtObj {
 		a.customFormatKeys[k] = true
 	}
@@ -322,11 +393,13 @@ func (a *toolInspectAccumulator) foldCustomTool(top map[string]json.RawMessage, 
 
 func isMCPLikeToolName(name string) bool {
 	lower := lowercaseASCII(name)
+
 	for _, needle := range []string{"mcp", "callmcp", "fetchmcp"} {
 		if containsASCII(lower, needle) {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -335,7 +408,9 @@ func sortedSet(m map[string]bool) []string {
 	for k := range m {
 		out = append(out, k)
 	}
+
 	sort.Strings(out)
+
 	return out
 }
 
@@ -344,7 +419,9 @@ func sortedKeys(m map[string]json.RawMessage) []string {
 	for k := range m {
 		out = append(out, k)
 	}
+
 	sort.Strings(out)
+
 	return out
 }
 
@@ -352,11 +429,21 @@ func sortedKeys(m map[string]json.RawMessage) []string {
 // MCP-related. Heuristic: substring match on "mcp", "subagent", "agent_mode",
 // "background", "resume", "workspace", "cursor".
 func collectMCPLikeNames(sets ...[]string) []string {
-	needles := []string{"mcp", "subagent", "agent_mode", "background", "resume", "workspace", "cursor"}
+	needles := []string{
+		"mcp",
+		"subagent",
+		"agent_mode",
+		"background",
+		"resume",
+		"workspace",
+		"cursor",
+	}
 	seen := map[string]bool{}
+
 	for _, set := range sets {
 		for _, k := range set {
 			lower := lowercaseASCII(k)
+
 			for _, needle := range needles {
 				if containsASCII(lower, needle) {
 					seen[k] = true
@@ -365,11 +452,14 @@ func collectMCPLikeNames(sets ...[]string) []string {
 			}
 		}
 	}
+
 	out := make([]string, 0, len(seen))
 	for k := range seen {
 		out = append(out, k)
 	}
+
 	sort.Strings(out)
+
 	return out
 }
 
@@ -380,6 +470,7 @@ func lowercaseASCII(s string) string {
 			b[i] = c + ('a' - 'A')
 		}
 	}
+
 	return string(b)
 }
 
@@ -387,13 +478,16 @@ func containsASCII(haystack, needle string) bool {
 	if len(needle) == 0 {
 		return true
 	}
+
 	if len(needle) > len(haystack) {
 		return false
 	}
+
 	for i := 0; i <= len(haystack)-len(needle); i++ {
 		if haystack[i:i+len(needle)] == needle {
 			return true
 		}
 	}
+
 	return false
 }

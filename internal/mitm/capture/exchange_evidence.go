@@ -42,19 +42,34 @@ type ExchangeEvidenceQuery struct {
 // ReadExchangeEvidence opens the live database for reading only and calls
 // visit for each exchange with complete bodies. It returns nil when the
 // database is missing and stops iteration when visit returns false.
-func ReadExchangeEvidence(ctx context.Context, query ExchangeEvidenceQuery, visit func(ExchangeEvidence) bool) error {
+func ReadExchangeEvidence(
+	ctx context.Context,
+	query ExchangeEvidenceQuery,
+	visit func(ExchangeEvidence) bool,
+) error {
 	if _, err := os.Stat(query.DBPath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
+
 		slog.Warn("mitm.capture.evidence_stat_failed", "path", query.DBPath, "err", err)
-		return fmt.Errorf("capture: the evidence reader could not read database file information with stat: %w", err)
+
+		return fmt.Errorf(
+			"capture: the evidence reader could not read database file information with stat: %w",
+			err,
+		)
 	}
+
 	db, err := sql.Open("sqlite3", "file:"+query.DBPath+"?mode=ro&_busy_timeout=5000")
 	if err != nil {
 		slog.Warn("mitm.capture.evidence_open_failed", "path", query.DBPath, "err", err)
-		return fmt.Errorf("capture: the evidence reader could not open the evidence database: %w", err)
+
+		return fmt.Errorf(
+			"capture: the evidence reader could not open the evidence database: %w",
+			err,
+		)
 	}
+
 	defer func() { _ = db.Close() }()
 	rows, err := db.QueryContext(
 		ctx,
@@ -71,20 +86,34 @@ func ReadExchangeEvidence(ctx context.Context, query ExchangeEvidenceQuery, visi
 		slog.Warn("mitm.capture.evidence_query_failed", "path", query.DBPath, "err", err)
 		return fmt.Errorf("capture: the evidence reader could not query the evidence: %w", err)
 	}
+
 	defer func() { _ = rows.Close() }()
+
 	for rows.Next() {
 		var evidence ExchangeEvidence
-		if err := rows.Scan(&evidence.RequestID, &evidence.ClientRequest, &evidence.ClientResponse, &evidence.UpstreamResponse); err != nil {
+		if err := rows.Scan(
+			&evidence.RequestID,
+			&evidence.ClientRequest,
+			&evidence.ClientResponse,
+			&evidence.UpstreamResponse,
+		); err != nil {
 			slog.Warn("mitm.capture.evidence_scan_failed", "path", query.DBPath, "err", err)
-			return fmt.Errorf("capture: the evidence reader could not scan an evidence row: %w", err)
+
+			return fmt.Errorf(
+				"capture: the evidence reader could not scan an evidence row: %w",
+				err,
+			)
 		}
+
 		if !visit(evidence) {
 			return nil
 		}
 	}
+
 	if err := rows.Err(); err != nil {
 		slog.Warn("mitm.capture.evidence_read_failed", "path", query.DBPath, "err", err)
 		return fmt.Errorf("capture: the evidence reader could not read the evidence: %w", err)
 	}
+
 	return nil
 }

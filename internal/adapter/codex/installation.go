@@ -45,9 +45,17 @@ type installationFileFinder struct{}
 func (installationFileFinder) codexPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		slog.Warn("adapter.codex.installation.user_home_failed", "concern", "adapter.providers.codex.request", "err", err)
+		slog.Warn(
+			"adapter.codex.installation.user_home_failed",
+			"concern",
+			"adapter.providers.codex.request",
+			"err",
+			err,
+		)
+
 		return "", fmt.Errorf("user home dir: %w", err)
 	}
+
 	return filepath.Join(home, ".codex", "installation_id"), nil
 }
 
@@ -57,7 +65,8 @@ func (installationFileFinder) clydePath() (string, error) {
 
 func newInstallationLoader(finder installationPathFinder) *installationLoader {
 	return &installationLoader{
-		finder: finder, mu: sync.
+		finder: finder,
+		mu: sync.
 			Mutex{},
 
 		cached: "",
@@ -70,6 +79,7 @@ func (l *installationLoader) Load() (string, error) {
 	if l.cached != "" {
 		return l.cached, nil
 	}
+
 	codexPath, err := l.finder.codexPath()
 	if err == nil {
 		if id, ok := readNonEmpty(codexPath); ok {
@@ -77,22 +87,28 @@ func (l *installationLoader) Load() (string, error) {
 			return id, nil
 		}
 	}
+
 	clydePath, err := l.finder.clydePath()
 	if err != nil {
 		return "", err
 	}
+
 	if id, ok := readNonEmpty(clydePath); ok {
 		l.cached = id
 		return id, nil
 	}
+
 	id, err := generateInstallationID()
 	if err != nil {
 		return "", err
 	}
+
 	if err := persistInstallationID(clydePath, id); err != nil {
 		return "", err
 	}
+
 	l.cached = id
+
 	return id, nil
 }
 
@@ -101,10 +117,12 @@ func readNonEmpty(path string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
+
 	id := strings.TrimSpace(string(raw))
 	if id == "" {
 		return "", false
 	}
+
 	return id, true
 }
 
@@ -117,11 +135,19 @@ func generateInstallationID() (string, error) {
 	log := codexConcernLog.Logger()
 	var buf [16]byte
 	if _, err := rand.Read(buf[:]); err != nil {
-		log.Warn("adapter.codex.installation_id.rand_failed", "concern", "adapter.providers.codex.request", "subcomponent", "codex",
-			"err", err.Error(),
+		log.Warn(
+			"adapter.codex.installation_id.rand_failed",
+			"concern",
+			"adapter.providers.codex.request",
+			"subcomponent",
+			"codex",
+			"err",
+			err.Error(),
 		)
+
 		return "", fmt.Errorf("codex installation id rand: %w", err)
 	}
+
 	return hex.EncodeToString(buf[:]), nil
 }
 
@@ -130,20 +156,40 @@ func persistInstallationID(path, id string) error {
 	if path == "" {
 		return errors.New("codex installation id path is empty")
 	}
+
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		log.Warn("adapter.codex.installation_id.mkdir_failed", "concern", "adapter.providers.codex.request", "subcomponent", "codex",
-			"path", filepath.Dir(path),
-			"err", err.Error(),
+		log.Warn(
+			"adapter.codex.installation_id.mkdir_failed",
+			"concern",
+			"adapter.providers.codex.request",
+			"subcomponent",
+			"codex",
+			"path",
+			filepath.Dir(path),
+			"err",
+			err.Error(),
 		)
+
 		return fmt.Errorf("codex installation id mkdir: %w", err)
 	}
+
 	if err := os.WriteFile(path, []byte(id+"\n"), 0o600); err != nil {
-		log.Warn("adapter.codex.installation_id.write_failed", "concern", "adapter.providers.codex.request", "subcomponent", "codex",
-			"path", path,
-			"id_len", len(id),
-			"err", err.Error(),
+		log.Warn(
+			"adapter.codex.installation_id.write_failed",
+			"concern",
+			"adapter.providers.codex.request",
+			"subcomponent",
+			"codex",
+			"path",
+			path,
+			"id_len",
+			len(id),
+			"err",
+			err.Error(),
 		)
+
 		return fmt.Errorf("codex installation id write: %w", err)
 	}
+
 	return nil
 }

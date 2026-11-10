@@ -32,28 +32,46 @@ func NewModelRegistryAdapter(inner *adaptermodel.Registry) *ModelRegistryAdapter
 
 // Resolve satisfies the ModelRegistry interface. It calls
 // model.Registry.Resolve and projects the result.
-func (a *ModelRegistryAdapter) Resolve(surface IngressSurface, alias, reqEffort string) (ResolvedModelView, error) {
+func (a *ModelRegistryAdapter) Resolve(
+	surface IngressSurface,
+	alias string,
+	reqEffort string,
+) (ResolvedModelView, error) {
 	if a == nil || a.inner == nil {
 		return ResolvedModelView{}, ErrUnresolvedProvider
 	}
+
 	resolved, effort, err := a.inner.Resolve(surface, alias, reqEffort)
 	if err != nil {
-		slog.Warn("adapter.resolver.bridge_resolve_failed", "concern", "adapter.models.resolve", "alias", alias, "err", err)
-		if kind, ok := adaptermodel.ResolveErrorKindOf(err); ok && kind == adaptermodel.ResolveErrorInvalidRequest {
+		slog.Warn(
+			"adapter.resolver.bridge_resolve_failed",
+			"concern",
+			"adapter.models.resolve",
+			"alias",
+			alias,
+			"err",
+			err,
+		)
+		if kind, ok := adaptermodel.ResolveErrorKindOf(err); ok &&
+			kind == adaptermodel.ResolveErrorInvalidRequest {
 			return ResolvedModelView{}, &InvalidRequestError{message: err.Error(), cause: err}
 		}
+
 		return ResolvedModelView{}, fmt.Errorf("resolve model alias %s: %w", alias, err)
 	}
+
 	provider := resolved.Backend
 	parsedEffort, _ := ParseEffort(effort)
 	parsedWireEffort, _ := ParseEffort(resolved.WireEffort)
 	if parsedWireEffort == EffortUnset {
 		parsedWireEffort = parsedEffort
 	}
+
 	family := resolved.Profile
 	if family == "" {
 		family = resolved.WireModel
 	}
+
 	return ResolvedModelView{
 		Provider:                provider,
 		Family:                  family,

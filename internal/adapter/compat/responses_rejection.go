@@ -42,34 +42,50 @@ var responsesHintParams = map[string]bool{
 // rejects a field that the provider omits or overrides unless the field is
 // a hint or the request sets its documented default. unsupportedTools lists
 // the tool types that the Chat translation cannot send to the provider.
-func ResponsesRejection(presenceFor func(string) int, values ResponsesRequestValues, provider adaptermodel.BackendID, unsupportedTools []string) (Rejection, bool) {
+func ResponsesRejection(
+	presenceFor func(string) int,
+	values ResponsesRequestValues,
+	provider adaptermodel.BackendID,
+	unsupportedTools []string,
+) (Rejection, bool) {
 	if len(values.UnknownKeys) > 0 {
 		key := values.UnknownKeys[0]
+
 		return Rejection{
 			Code:    RejectionCodeUnknownParameter,
 			Param:   key,
 			Message: "Unrecognized request argument supplied: " + key,
 		}, true
 	}
+
 	column, known := providerColumnFor(provider)
 	if !known {
 		return noRejection(), false
 	}
+
 	if presenceSet(presenceFor("access_programs")) {
 		return unsupportedParameter("access_programs", column), true
 	}
+
 	for _, entry := range responsesCatalog {
 		if !valueSet(presenceFor(entry.param)) {
 			continue
 		}
+
 		if responsesFieldUnsupported(entry, column, values, unsupportedTools) {
 			return unsupportedParameter(entry.param, column), true
 		}
 	}
+
 	return noRejection(), false
 }
 
-func responsesFieldUnsupported(entry catalogEntry, column providerColumn, values ResponsesRequestValues, unsupportedTools []string) bool {
+func responsesFieldUnsupported(
+	entry catalogEntry,
+	column providerColumn,
+	values ResponsesRequestValues,
+	unsupportedTools []string,
+) bool {
 	switch entry.dispositionFor(column) {
 	case dispositionTranslate:
 		return entry.param == "temperature" && temperatureUnsupported(column, values.Temperature)
@@ -77,6 +93,7 @@ func responsesFieldUnsupported(entry catalogEntry, column providerColumn, values
 		if responsesHintParams[entry.param] {
 			return false
 		}
+
 		return !responsesValueIsDocumentedDefault(entry.param, values)
 	case dispositionPartial:
 		return responsesPartialUnsupported(entry.param, column, values, unsupportedTools)
@@ -88,21 +105,33 @@ func responsesFieldUnsupported(entry catalogEntry, column providerColumn, values
 }
 
 // A partially supported field without a value check passes.
-func responsesPartialUnsupported(param string, column providerColumn, values ResponsesRequestValues, unsupportedTools []string) bool {
+func responsesPartialUnsupported(
+	param string,
+	column providerColumn,
+	values ResponsesRequestValues,
+	unsupportedTools []string,
+) bool {
 	checks := map[string]func() bool{
-		"n":           func() bool { return values.N != nil && *values.N > 1 },
-		"tools":       func() bool { return len(unsupportedTools) > 0 },
-		"tool_choice": func() bool { return column == columnCodex && !choiceIsAuto(values.ToolChoice) },
+		"n":     func() bool { return values.N != nil && *values.N > 1 },
+		"tools": func() bool { return len(unsupportedTools) > 0 },
+		"tool_choice": func() bool {
+			return column == columnCodex && !choiceIsAuto(values.ToolChoice)
+		},
 	}
 	check, ok := checks[param]
+
 	return ok && check()
 }
 
 // A provider that ignores one of these fields still produces the documented
 // output when the request sets the documented default.
 var responsesDocumentedDefaults = map[string]func(ResponsesRequestValues) bool{
-	"temperature":  func(values ResponsesRequestValues) bool { return !numberDiffers(values.Temperature, 1) },
-	"top_p":        func(values ResponsesRequestValues) bool { return !numberDiffers(values.TopP, 1) },
+	"temperature": func(values ResponsesRequestValues) bool {
+		return !numberDiffers(values.Temperature, 1)
+	},
+	"top_p": func(values ResponsesRequestValues) bool {
+		return !numberDiffers(values.TopP, 1)
+	},
 	"top_logprobs": func(values ResponsesRequestValues) bool { return values.TopLogprobs == nil || *values.TopLogprobs == 0 },
 	"background":   func(values ResponsesRequestValues) bool { return values.Background == nil || !*values.Background },
 	"store":        func(values ResponsesRequestValues) bool { return values.Store != nil && !*values.Store },

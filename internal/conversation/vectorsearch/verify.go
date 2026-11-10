@@ -31,136 +31,240 @@ type IndexCheck struct {
 
 // VerifyIndex checks the first-result cosine score for stored Milvus vectors.
 // It rejects other backends and returns [ErrCollectionAbsent] for a missing collection.
-func (c *Client) VerifyIndex(ctx context.Context, collectionID string, sample int) (IndexCheck, error) {
+func (c *Client) VerifyIndex(
+	ctx context.Context,
+	collectionID string,
+	sample int,
+) (IndexCheck, error) {
 	check := IndexCheck{Checked: 0, Found: 0, Misses: nil}
 	if c == nil {
 		return check, errors.New("verify conversation index: client is nil")
 	}
+
 	if sample <= 0 {
 		return check, errors.New("verify conversation index: sample must be positive")
 	}
+
 	milvus, isMilvus := c.store.(*milvusBackend)
 	if !isMilvus {
 		return check, errors.New("verify conversation index: the configured backend is not Milvus")
 	}
+
 	collectionName := CollectionName(strings.TrimSpace(collectionID))
 	exists, err := c.loadCollectionIfPresent(ctx, collectionName)
 	if err != nil {
 		return check, err
 	}
+
 	if !exists {
-		slog.WarnContext(ctx, "conversation.vectorsearch.verify_collection_absent",
-			"concern", "conversation.semantic",
-			"component", "conversation",
-			"collection", collectionName,
+		slog.WarnContext(
+			ctx,
+			"conversation.vectorsearch.verify_collection_absent",
+			"concern",
+			"conversation.semantic",
+			"component",
+			"conversation",
+			"collection",
+			collectionName,
 		)
-		return check, fmt.Errorf("verify conversation index in %s: %w", collectionName, ErrCollectionAbsent)
+
+		return check, fmt.Errorf(
+			"verify conversation index in %s: %w",
+			collectionName,
+			ErrCollectionAbsent,
+		)
 	}
+
 	searchCollection := collectionName
 	if milvus.shared != nil {
 		searchCollection = milvusstore.VectorCollectionName(collectionName)
 	}
+
 	seen := make(map[string]bool, sample)
 	for i := range sample {
-		key, vector, ok, readErr := milvus.sampleVector(ctx, collectionName, fmt.Sprintf(sampleKeyPattern, i*primaryKeySpace/sample))
+		key, vector, ok, readErr := milvus.sampleVector(
+			ctx,
+			collectionName,
+			fmt.Sprintf(sampleKeyPattern, i*primaryKeySpace/sample),
+		)
 		if readErr != nil {
 			return check, readErr
 		}
+
 		if !ok || seen[key] {
 			continue
 		}
+
 		seen[key] = true
-		score, searchErr := firstDenseScore(ctx, milvus.client, searchCollection, vector, c.denseSearchParams)
+		score, searchErr := firstDenseScore(
+			ctx,
+			milvus.client,
+			searchCollection,
+			vector,
+			c.denseSearchParams,
+		)
 		if searchErr != nil {
 			return check, searchErr
 		}
+
 		check.Checked++
 		if score >= selfMatchScore {
 			check.Found++
 			continue
 		}
+
 		if len(check.Misses) < reportedMissMax {
 			check.Misses = append(check.Misses, key)
 		}
 	}
+
 	return check, nil
 }
 
 // sampleVector returns the primary key and dense vector of the first row with
 // a primary key after after. In the shared layout it reads the row's vector key
 // from the occurrence collection and the vector from the vector collection.
-func (b *milvusBackend) sampleVector(ctx context.Context, collectionName string, after string) (string, []float32, bool, error) {
+func (b *milvusBackend) sampleVector(
+	ctx context.Context,
+	collectionName string,
+	after string,
+) (string, []float32, bool, error) {
 	if b.shared == nil {
 		return firstRowAfter(ctx, b.client, collectionName, after)
 	}
+
 	option := milvusclient.NewQueryOption(collectionName).
-		WithFilter(fmt.Sprintf("%s > %q", milvusstore.IDField, after)).
-		WithOutputFields(milvusstore.IDField, milvusstore.VectorKeyField).
-		WithLimit(1)
+		WithFilter(
+			fmt.Sprintf("%s > %q", milvusstore.IDField, after),
+		).
+		WithOutputFields(
+			milvusstore.IDField,
+			milvusstore.VectorKeyField,
+		).
+		WithLimit(
+			1,
+		)
 	result, err := b.client.Query(ctx, option)
 	if err != nil {
 		return "", nil, false, failRead("read a sample row of "+collectionName, err)
 	}
+
 	if result.ResultCount == 0 {
 		return "", nil, false, nil
 	}
+
 	key, err := result.GetColumn(milvusstore.IDField).GetAsString(0)
 	if err != nil {
 		return "", nil, false, failRead("read a sample key of "+collectionName, err)
 	}
+
 	vectorKey, err := result.GetColumn(milvusstore.VectorKeyField).GetAsString(0)
 	if err != nil {
 		return "", nil, false, failRead("read a sample vector key of "+collectionName, err)
 	}
+
 	vectors := milvusstore.VectorCollectionName(collectionName)
-	stored, err := b.client.Get(ctx, milvusclient.NewQueryOption(vectors).
-		WithIDs(column.NewColumnVarChar(milvusstore.VectorKeyField, []string{vectorKey})).
-		WithOutputFields(milvusstore.VectorKeyField, milvusstore.DenseVectorField))
+	stored, err := b.client.Get(
+		ctx,
+		milvusclient.NewQueryOption(vectors).
+			WithIDs(
+				column.NewColumnVarChar(milvusstore.VectorKeyField, []string{vectorKey}),
+			).
+			WithOutputFields(
+				milvusstore.VectorKeyField,
+				milvusstore.DenseVectorField,
+			),
+	)
 	if err != nil {
 		return "", nil, false, failRead("read the vector of sample "+key+" from "+vectors, err)
 	}
-	denseColumn, isFloat := stored.GetColumn(milvusstore.DenseVectorField).(*column.ColumnFloatVector)
+
+	denseColumn, isFloat := stored.GetColumn(
+		milvusstore.DenseVectorField,
+	).(*column.ColumnFloatVector)
 	if !isFloat || denseColumn.Len() == 0 {
-		return "", nil, false, failRead("read the vector of sample "+key+" from "+vectors, errors.New("vector "+vectorKey+" is missing"))
+		return "", nil, false, failRead(
+			"read the vector of sample "+key+" from "+vectors,
+			errors.New("vector "+vectorKey+" is missing"),
+		)
 	}
+
 	return key, denseColumn.Data()[0], true, nil
 }
 
-func firstRowAfter(ctx context.Context, client *milvusclient.Client, collectionName string, after string) (string, []float32, bool, error) {
+func firstRowAfter(
+	ctx context.Context,
+	client *milvusclient.Client,
+	collectionName string,
+	after string,
+) (string, []float32, bool, error) {
 	option := milvusclient.NewQueryOption(collectionName).
-		WithFilter(fmt.Sprintf("%s > %q", milvusstore.IDField, after)).
-		WithOutputFields(milvusstore.IDField, milvusstore.DenseVectorField).
-		WithLimit(1)
+		WithFilter(
+			fmt.Sprintf("%s > %q", milvusstore.IDField, after),
+		).
+		WithOutputFields(
+			milvusstore.IDField,
+			milvusstore.DenseVectorField,
+		).
+		WithLimit(
+			1,
+		)
 	result, err := client.Query(ctx, option)
 	if err != nil {
 		return "", nil, false, failRead("read a sample row of "+collectionName, err)
 	}
+
 	if result.ResultCount == 0 {
 		return "", nil, false, nil
 	}
+
 	key, err := result.GetColumn(milvusstore.IDField).GetAsString(0)
 	if err != nil {
 		return "", nil, false, failRead("read a sample key of "+collectionName, err)
 	}
+
 	vectors, isFloat := result.GetColumn(milvusstore.DenseVectorField).(*column.ColumnFloatVector)
 	if !isFloat || vectors.Len() == 0 {
-		return "", nil, false, failRead("read a sample vector of "+collectionName, errors.New("dense vector column is missing"))
+		return "", nil, false, failRead(
+			"read a sample vector of "+collectionName,
+			errors.New("dense vector column is missing"),
+		)
 	}
+
 	return key, vectors.Data()[0], true, nil
 }
 
-func firstDenseScore(ctx context.Context, client *milvusclient.Client, collectionName string, vector []float32, searchParams map[string]string) (float32, error) {
-	option := milvusclient.NewSearchOption(collectionName, 1, []entity.Vector{entity.FloatVector(vector)}).
-		WithANNSField(milvusstore.DenseVectorField)
+func firstDenseScore(
+	ctx context.Context,
+	client *milvusclient.Client,
+	collectionName string,
+	vector []float32,
+	searchParams map[string]string,
+) (float32, error) {
+	option := milvusclient.NewSearchOption(
+		collectionName,
+		1,
+		[]entity.Vector{entity.FloatVector(vector)},
+	).
+		WithANNSField(
+			milvusstore.DenseVectorField,
+		)
+
 	for key, value := range searchParams {
 		option = option.WithSearchParam(key, value)
 	}
+
 	resultSets, err := client.Search(ctx, option)
 	if err != nil {
 		return 0, failRead("search "+collectionName+" with a stored vector", err)
 	}
+
 	if len(resultSets) == 0 || len(resultSets[0].Scores) == 0 {
-		return 0, failRead("search "+collectionName+" with a stored vector", errors.New("search returned no result"))
+		return 0, failRead(
+			"search "+collectionName+" with a stored vector",
+			errors.New("search returned no result"),
+		)
 	}
+
 	return resultSets[0].Scores[0], nil
 }

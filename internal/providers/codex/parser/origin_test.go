@@ -19,22 +19,31 @@ func TestScanRecordClassifiesSpawnedCodexSubagentFromSessionMeta(t *testing.T) {
 	if !ok {
 		t.Fatalf("ScanRecord returned ok=false")
 	}
+
 	if record.Origin != conversation.OriginSubagent {
 		t.Fatalf("origin = %q, want %q", record.Origin, conversation.OriginSubagent)
 	}
+
 	if !record.IsSubagent() {
 		t.Fatalf("IsSubagent = false, want true for a spawned subagent thread")
 	}
+
 	if record.Lineage == nil || record.Lineage.ParentNativeID != parentID {
 		t.Fatalf("lineage = %#v, want the spawning parent thread id %q", record.Lineage, parentID)
 	}
+
 	parentConversationID, ok := conversation.ParentConversationID(record)
 	if !ok {
 		t.Fatalf("ParentConversationID reported no parent for a spawned subagent")
 	}
+
 	wantParentConversationID := conversation.DerivedID(conversation.ProviderCodex, parentID, "")
 	if parentConversationID != wantParentConversationID {
-		t.Fatalf("parent conversation id = %q, want %q", parentConversationID, wantParentConversationID)
+		t.Fatalf(
+			"parent conversation id = %q, want %q",
+			parentConversationID,
+			wantParentConversationID,
+		)
 	}
 }
 
@@ -50,12 +59,15 @@ func TestScanRecordClassifiesCodexUserThreadFromSessionMeta(t *testing.T) {
 	if !ok {
 		t.Fatalf("ScanRecord returned ok=false")
 	}
+
 	if record.Origin != conversation.OriginUser {
 		t.Fatalf("origin = %q, want %q", record.Origin, conversation.OriginUser)
 	}
+
 	if record.IsSubagent() {
 		t.Fatalf("IsSubagent = true, want false for a user thread")
 	}
+
 	if record.Lineage != nil {
 		t.Fatalf("lineage = %#v, want nil for a user thread", record.Lineage)
 	}

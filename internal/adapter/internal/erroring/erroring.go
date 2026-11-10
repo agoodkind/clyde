@@ -31,10 +31,18 @@ func WriteJSONStatus(w http.ResponseWriter, code int, payload []byte) error {
 	w.WriteHeader(code)
 	log := slog.Default()
 	if _, err := w.Write(payload); err != nil {
-		log.Warn("adapter.erroring.write_failed", "concern", "adapter.http.errors", "status", code,
-			"err", err.Error(),
+		log.Warn(
+			"adapter.erroring.write_failed",
+			"concern",
+			"adapter.http.errors",
+			"status",
+			code,
+			"err",
+			err.Error(),
 		)
+
 		return fmt.Errorf("write json status %d: %w", code, err)
 	}
+
 	return nil
 }

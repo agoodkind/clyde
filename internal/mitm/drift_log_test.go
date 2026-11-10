@@ -10,6 +10,7 @@ func TestDiffReportSummaryMarksDrift(t *testing.T) {
 	if clean.HasDiverged() {
 		t.Fatalf("empty report HasDiverged=true want false")
 	}
+
 	if strings.Contains(clean.SummaryString(), "DRIFT") {
 		t.Fatalf("clean summary marked DRIFT: %q", clean.SummaryString())
 	}
@@ -18,6 +19,7 @@ func TestDiffReportSummaryMarksDrift(t *testing.T) {
 	if !drifted.HasDiverged() {
 		t.Fatalf("report with missing flavor HasDiverged=false want true")
 	}
+
 	if !strings.Contains(drifted.SummaryString(), "DRIFT") {
 		t.Fatalf("drifted summary missing DRIFT marker: %q", drifted.SummaryString())
 	}

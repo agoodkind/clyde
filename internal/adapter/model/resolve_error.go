@@ -24,6 +24,7 @@ func (err *ResolveError) Error() string {
 	if err == nil {
 		return ""
 	}
+
 	return err.Message
 }
 
@@ -33,6 +34,7 @@ func ResolveErrorKindOf(err error) (ResolveErrorKind, bool) {
 	if !errors.As(err, &resolveErr) {
 		return "", false
 	}
+
 	return resolveErr.Kind, true
 }
 

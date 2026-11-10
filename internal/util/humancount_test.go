@@ -26,6 +26,7 @@ func TestParseHumanCountAccepts(t *testing.T) {
 			t.Errorf("ParseHumanCount(%q) unexpected error: %v", tc.in, err)
 			continue
 		}
+
 		if got != tc.want {
 			t.Errorf("ParseHumanCount(%q) = %d, want %d", tc.in, got, tc.want)
 		}

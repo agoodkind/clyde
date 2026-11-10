@@ -31,6 +31,7 @@ func newCmdWithDeps(
 		},
 	}
 	cmd.AddCommand(newRunCmd(f, reorient, snapshotStore, getenv))
+
 	return cmd
 }
 
@@ -51,6 +52,7 @@ func newRunCmd(
 		},
 	}
 	cmd.AddCommand(newRunReorientCmd(f, reorient, snapshotStore, getenv))
+
 	return cmd
 }
 
@@ -70,9 +72,37 @@ func newRunReorientCmd(
 			return cmd.Help()
 		},
 	}
-	cmd.AddCommand(newRunHookActionCmd(f, reorient, snapshotStore, getenv, "before-compact", hookspec.HookIDReorientBeforeCompact))
-	cmd.AddCommand(newRunHookActionCmd(f, reorient, snapshotStore, getenv, "after-compact", hookspec.HookIDReorientAfterCompact))
-	cmd.AddCommand(newRunHookActionCmd(f, reorient, snapshotStore, getenv, "stop-followup", hookspec.HookIDReorientStopFollowup))
+	cmd.AddCommand(
+		newRunHookActionCmd(
+			f,
+			reorient,
+			snapshotStore,
+			getenv,
+			"before-compact",
+			hookspec.HookIDReorientBeforeCompact,
+		),
+	)
+	cmd.AddCommand(
+		newRunHookActionCmd(
+			f,
+			reorient,
+			snapshotStore,
+			getenv,
+			"after-compact",
+			hookspec.HookIDReorientAfterCompact,
+		),
+	)
+	cmd.AddCommand(
+		newRunHookActionCmd(
+			f,
+			reorient,
+			snapshotStore,
+			getenv,
+			"stop-followup",
+			hookspec.HookIDReorientStopFollowup,
+		),
+	)
+
 	return cmd
 }
 
@@ -99,6 +129,7 @@ func newRunHookActionCmd(
 				Reorient:      reorient,
 				SnapshotStore: snapshotStore,
 			}
+
 			return runner.Run(cmd.Context(), hookID)
 		},
 	}

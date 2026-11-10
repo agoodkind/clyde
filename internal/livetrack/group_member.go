@@ -29,7 +29,11 @@ func (m registryMember[M]) activeCount(grace time.Duration) int {
 	return m.reg.ActiveCount(grace)
 }
 
-func (m registryMember[M]) drainWith(ctx context.Context, reason string, opts DrainOptions) DrainResult {
+func (m registryMember[M]) drainWith(
+	ctx context.Context,
+	reason string,
+	opts DrainOptions,
+) DrainResult {
 	return m.reg.drainWith(ctx, reason, opts)
 }
 

@@ -109,6 +109,7 @@ func NewGroup(opts GroupOptions) *Group {
 	if log == nil {
 		log = slog.Default()
 	}
+
 	return &Group{log: log, mu: sync.Mutex{}, members: nil, hooks: map[Phase][]hook{}}
 }
 
@@ -117,6 +118,7 @@ func NewGroup(opts GroupOptions) *Group {
 func (g *Group) MemberCount() int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+
 	return len(g.members)
 }
 
@@ -129,6 +131,7 @@ func Attach[M Meta](g *Group, member MemberSpec, opts Options[M]) *Registry[M] {
 	g.mu.Lock()
 	g.members = append(g.members, registryMember[M]{reg: reg, memSpec: member})
 	g.mu.Unlock()
+
 	return reg
 }
 
@@ -145,7 +148,12 @@ func (g *Group) AddHookBefore(phase Phase, name string, fn func(context.Context)
 	g.addHook(phase, hookBefore, name, fn)
 }
 
-func (g *Group) addHook(phase Phase, timing hookTiming, name string, fn func(context.Context) error) {
+func (g *Group) addHook(
+	phase Phase,
+	timing hookTiming,
+	name string,
+	fn func(context.Context) error,
+) {
 	g.mu.Lock()
 	g.hooks[phase] = append(g.hooks[phase], hook{name: name, timing: timing, fn: fn})
 	g.mu.Unlock()
@@ -158,6 +166,7 @@ func (g *Group) addHook(phase Phase, timing hookTiming, name string, fn func(con
 func (g *Group) Quiesce(parent context.Context, reason string, budget Budget) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), budget.Cap)
 	defer cancel()
+
 	for _, phase := range orderedPhases() {
 		g.quiescePhase(ctx, phase, reason, budget)
 	}
@@ -171,12 +180,14 @@ func (g *Group) Quiesce(parent context.Context, reason string, budget Budget) {
 // registry drain, store closes after every surface drained).
 func (g *Group) quiescePhase(ctx context.Context, phase Phase, reason string, budget Budget) {
 	g.mu.Lock()
+
 	members := make([]drainMember, 0)
 	for _, m := range g.members {
 		if m.spec().Phase == phase {
 			members = append(members, m)
 		}
 	}
+
 	hooks := append([]hook(nil), g.hooks[phase]...)
 	g.mu.Unlock()
 
@@ -185,7 +196,9 @@ func (g *Group) quiescePhase(ctx context.Context, phase Phase, reason string, bu
 			g.runHook(ctx, phase, h)
 		}
 	}
+
 	var wg sync.WaitGroup
+
 	for _, m := range members {
 		if m.spec().CancelNoWait {
 			// Force-close immediately and do not wait: a CancelNoWait member's
@@ -195,19 +208,32 @@ func (g *Group) quiescePhase(ctx context.Context, phase Phase, reason string, bu
 			m.forceCloseNow(ctx, reason)
 			continue
 		}
+
 		wg.Add(1)
 		go func(member drainMember) {
 			defer wg.Done()
 			defer func() {
 				if recovered := recover(); recovered != nil {
-					g.log.ErrorContext(ctx, "livetrack.group.member_panic", "concern", "livetrack",
-						"name", member.component(), "err", recovered)
+					g.log.ErrorContext(
+						ctx,
+						"livetrack.group.member_panic",
+						"concern",
+						"livetrack",
+						"name",
+						member.component(),
+						"err",
+						recovered,
+					)
 				}
 			}()
 			member.drainWith(ctx, reason, DrainOptions{IdleGrace: budget.IdleGrace})
-		}(m)
+		}(
+			m,
+		)
 	}
+
 	wg.Wait()
+
 	for _, h := range hooks {
 		if h.timing == hookAfter {
 			g.runHook(ctx, phase, h)
@@ -221,13 +247,31 @@ func (g *Group) quiescePhase(ctx context.Context, phase Phase, reason string, bu
 func (g *Group) runHook(ctx context.Context, phase Phase, h hook) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			g.log.ErrorContext(ctx, "livetrack.group.hook_panic", "concern", "livetrack",
-				"name", h.name, "err", recovered)
+			g.log.ErrorContext(
+				ctx,
+				"livetrack.group.hook_panic",
+				"concern",
+				"livetrack",
+				"name",
+				h.name,
+				"err",
+				recovered,
+			)
 		}
 	}()
 	if err := h.fn(ctx); err != nil {
-		g.log.WarnContext(ctx, "livetrack.group.hook_failed", "concern", "livetrack",
-			"phase", phase.String(), "hook", h.name, "err", err)
+		g.log.WarnContext(
+			ctx,
+			"livetrack.group.hook_failed",
+			"concern",
+			"livetrack",
+			"phase",
+			phase.String(),
+			"hook",
+			h.name,
+			"err",
+			err,
+		)
 	}
 }
 
@@ -242,8 +286,10 @@ func (g *Group) AwaitQuiet(ctx context.Context, grace time.Duration) bool {
 	if g.quietActiveCount(grace) == 0 {
 		return true
 	}
+
 	ticker := time.NewTicker(quietPollEvery)
 	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -264,10 +310,12 @@ func (g *Group) quietActiveCount(grace time.Duration) int {
 	members := append([]drainMember(nil), g.members...)
 	g.mu.Unlock()
 	total := 0
+
 	for _, m := range members {
 		if m.spec().QuietRelevant {
 			total += m.activeCount(grace)
 		}
 	}
+
 	return total
 }

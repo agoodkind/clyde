@@ -117,6 +117,7 @@ type Registry struct {
 // NewRegistry returns Clyde's built-in hooks registry.
 func NewRegistry() Registry {
 	registry := Registry{hooks: nil}
+
 	for _, hook := range []Hook{
 		reorientBeforeCompactHook(),
 		reorientAfterCompactHook(),
@@ -126,6 +127,7 @@ func NewRegistry() Registry {
 			slog.Error("hooks registry initialization failed", "err", err)
 		}
 	}
+
 	return registry
 }
 
@@ -134,29 +136,38 @@ func Register(registry *Registry, hook Hook) error {
 	if registry == nil {
 		return fmt.Errorf("hooks registry is nil")
 	}
+
 	if strings.TrimSpace(string(hook.ID)) == "" {
 		return fmt.Errorf("hook id is required")
 	}
+
 	if _, ok := registry.Hook(hook.ID); ok {
 		return fmt.Errorf("hook %q already registered", hook.ID)
 	}
+
 	seenAliases := map[HookID]bool{}
+
 	for _, alias := range hook.Aliases {
 		if strings.TrimSpace(string(alias)) == "" {
 			return fmt.Errorf("hook %q has an empty alias", hook.ID)
 		}
+
 		if alias == hook.ID {
 			return fmt.Errorf("hook %q has alias equal to hook id", hook.ID)
 		}
+
 		if seenAliases[alias] {
 			return fmt.Errorf("hook %q has duplicate alias %q", hook.ID, alias)
 		}
+
 		seenAliases[alias] = true
 		if _, ok := registry.Hook(alias); ok {
 			return fmt.Errorf("hook alias %q already registered", alias)
 		}
 	}
+
 	registry.hooks = append(registry.hooks, hook)
+
 	return nil
 }
 
@@ -167,6 +178,7 @@ func (registry Registry) Hook(id HookID) (Hook, bool) {
 			return hook, true
 		}
 	}
+
 	return Hook{
 		ID:     "",
 		Client: "",
@@ -191,12 +203,17 @@ func (registry Registry) InstallsForClient(client Client) []RegisteredInstall {
 			if install.Client != client {
 				continue
 			}
-			installs = append(installs, RegisteredInstall{
-				HookID: hook.ID,
-				Spec:   install.clone(),
-			})
+
+			installs = append(
+				installs,
+				RegisteredInstall{
+					HookID: hook.ID,
+					Spec:   install.clone(),
+				},
+			)
 		}
 	}
+
 	return installs
 }
 
@@ -204,11 +221,13 @@ func (registry Registry) InstallsForClient(client Client) []RegisteredInstall {
 // that marks a hook handler as Clyde-owned.
 func (registry Registry) ClydeCommandSignatures() [][]string {
 	var signatures [][]string
+
 	for _, hook := range registry.hooks {
 		for _, install := range hook.Installs {
 			signatures = append(signatures, slices.Clone(install.Args))
 		}
 	}
+
 	return signatures
 }
 
@@ -331,16 +350,18 @@ func reorientStopFollowupHook() Hook {
 			StatusMessage:  "",
 		},
 		Aliases: nil,
-		Installs: []InstallSpec{{
-			Client:         ClientCursor,
-			Event:          EventCursorStop,
-			Matcher:        "",
-			Args:           reorientHookArgs("stop-followup"),
-			TimeoutSeconds: 600,
-			StatusMessage:  "",
-			FailClosed:     false,
-			LoopLimit:      1,
-		}},
+		Installs: []InstallSpec{
+			{
+				Client:         ClientCursor,
+				Event:          EventCursorStop,
+				Matcher:        "",
+				Args:           reorientHookArgs("stop-followup"),
+				TimeoutSeconds: 600,
+				StatusMessage:  "",
+				FailClosed:     false,
+				LoopLimit:      1,
+			},
+		},
 		Run: runReorientStopFollowup,
 	}
 }

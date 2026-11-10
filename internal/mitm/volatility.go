@@ -38,12 +38,15 @@ func headerValueIsVolatile(value string) bool {
 	if v == "" {
 		return false
 	}
+
 	if isAllDigits(v) {
 		return true
 	}
+
 	if uuidPattern.MatchString(v) {
 		return true
 	}
+
 	return isHighEntropyToken(v)
 }
 
@@ -55,11 +58,13 @@ func allValuesVolatile(values []string) bool {
 	if len(values) == 0 {
 		return false
 	}
+
 	for _, v := range values {
 		if !headerValueIsVolatile(v) {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -70,6 +75,7 @@ func isAllDigits(s string) bool {
 			return false
 		}
 	}
+
 	return s != ""
 }
 
@@ -81,11 +87,14 @@ func isHighEntropyToken(s string) bool {
 	if len(s) < highEntropyMinLen {
 		return false
 	}
+
 	if strings.ContainsAny(s, " ,") {
 		return false
 	}
+
 	hasLetter := false
 	hasDigit := false
+
 	for _, r := range s {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
@@ -94,6 +103,7 @@ func isHighEntropyToken(s string) bool {
 			hasDigit = true
 		}
 	}
+
 	return hasLetter && hasDigit
 }
 
@@ -107,12 +117,14 @@ func templateChurningPath(path string) string {
 	if path == "" {
 		return path
 	}
+
 	segments := strings.Split(path, "/")
 	for i, seg := range segments {
 		if pathSegmentIsID(seg) {
 			segments[i] = "{id}"
 		}
 	}
+
 	return strings.Join(segments, "/")
 }
 
@@ -121,14 +133,18 @@ func pathSegmentIsID(seg string) bool {
 	if seg == "" {
 		return false
 	}
+
 	if isAllDigits(seg) && len(seg) >= 7 {
 		return true
 	}
+
 	if uuidPattern.MatchString(seg) {
 		return true
 	}
+
 	if prefixedIDPattern.MatchString(seg) {
 		return true
 	}
+
 	return isHighEntropyToken(seg)
 }

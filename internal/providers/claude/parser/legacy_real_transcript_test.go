@@ -48,9 +48,21 @@ type legacyRealWrapper struct {
 }
 
 var legacyRealWrappers = []legacyRealWrapper{
-	{summary: "7a81bdc0-3281-4595-bbd0-9850eb1a7f18", bytes: 1521589, sha256: "ae4557b0c1400ab6062f236b988a5d16f9e825b15b9b8379ead357f92bb99f97"},
-	{summary: "4d37ca0b-c5f2-4747-a636-f0e2ab207a20", bytes: 1511122, sha256: "acf1439db68158fc2fa5940e3e077af504bc03f37376fd1669a0def962dd0175"},
-	{summary: legacyRealTargetSummary, bytes: 1535022, sha256: "e176228df4d45a773637353178ee694c476ac7833b8ac730d3874666762d9954"},
+	{
+		summary: "7a81bdc0-3281-4595-bbd0-9850eb1a7f18",
+		bytes:   1521589,
+		sha256:  "ae4557b0c1400ab6062f236b988a5d16f9e825b15b9b8379ead357f92bb99f97",
+	},
+	{
+		summary: "4d37ca0b-c5f2-4747-a636-f0e2ab207a20",
+		bytes:   1511122,
+		sha256:  "acf1439db68158fc2fa5940e3e077af504bc03f37376fd1669a0def962dd0175",
+	},
+	{
+		summary: legacyRealTargetSummary,
+		bytes:   1535022,
+		sha256:  "e176228df4d45a773637353178ee694c476ac7833b8ac730d3874666762d9954",
+	},
 }
 
 // legacyRealEvent stores the fields of the resolution event the parser logs
@@ -73,39 +85,70 @@ type legacyRealEvent struct {
 func TestLegacyResolverRecoversRealTranscript(t *testing.T) {
 	path := os.Getenv(legacyRealTranscriptEnvironment)
 	if path == "" {
-		t.Skip("set " + legacyRealTranscriptEnvironment + " to the native Claude transcript that contains summary " + legacyRealTargetSummary)
+		t.Skip(
+			"set " + legacyRealTranscriptEnvironment + " to the native Claude transcript that contains summary " + legacyRealTargetSummary,
+		)
 	}
+
 	var logs bytes.Buffer
 	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	slog.SetDefault(
+		slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	)
 	defer slog.SetDefault(previous)
 
 	index, record := legacyRealIndex(t, path)
-	messages, err := index.LoadMessagesWithOptions(record, conversation.LoadOptions{
-		IncludeSystemPrompts:       false,
-		IncludeSystemMessages:      true,
-		IncludeToolOutputs:         false,
-		IncludeInjected:            false,
-		HarnessTally:               nil,
-		ResolveInjectedTranscripts: true,
-	})
+	messages, err := index.LoadMessagesWithOptions(
+		record,
+		conversation.LoadOptions{
+			IncludeSystemPrompts:       false,
+			IncludeSystemMessages:      true,
+			IncludeToolOutputs:         false,
+			IncludeInjected:            false,
+			HarnessTally:               nil,
+			ResolveInjectedTranscripts: true,
+		},
+	)
 	if err != nil {
 		t.Fatalf("load messages: %v", err)
 	}
+
 	spans := legacyRealSpans(messages)
+
 	for _, wrapper := range legacyRealWrappers {
 		body := spans[wrapper.summary].body
 		if len(body) != wrapper.bytes || legacyRealDigest(body) != wrapper.sha256 {
-			t.Errorf("summary %s body = %d bytes %s, want %d bytes %s", wrapper.summary, len(body), legacyRealDigest(body), wrapper.bytes, wrapper.sha256)
+			t.Errorf(
+				"summary %s body = %d bytes %s, want %d bytes %s",
+				wrapper.summary,
+				len(body),
+				legacyRealDigest(body),
+				wrapper.bytes,
+				wrapper.sha256,
+			)
 		}
-		t.Logf("summary %s body: %d UTF-8 bytes, SHA256 %s", wrapper.summary, len(body), legacyRealDigest(body))
+
+		t.Logf(
+			"summary %s body: %d UTF-8 bytes, SHA256 %s",
+			wrapper.summary,
+			len(body),
+			legacyRealDigest(body),
+		)
 	}
+
 	target := spans[legacyRealTargetSummary]
 	utf16Units := len(utf16.Encode([]rune(target.body)))
 	runes := utf8.RuneCountInString(target.body)
 	if utf16Units != legacyRealOuterUTF16 || runes != legacyRealOuterRunes {
-		t.Errorf("outer body = %d UTF-16 units and %d runes, want %d and %d", utf16Units, runes, legacyRealOuterUTF16, legacyRealOuterRunes)
+		t.Errorf(
+			"outer body = %d UTF-16 units and %d runes, want %d and %d",
+			utf16Units,
+			runes,
+			legacyRealOuterUTF16,
+			legacyRealOuterRunes,
+		)
 	}
+
 	t.Logf("outer body: %d UTF-16 units, %d runes", utf16Units, runes)
 	assertLegacyRealCut(t, target.span)
 	assertLegacyRealEvent(t, logs.Bytes())
@@ -121,10 +164,15 @@ func legacyRealIndex(t *testing.T, path string) (*conversation.Index, conversati
 	if err != nil {
 		t.Fatalf("stat %s: %v", path, err)
 	}
-	record, ok := parser.New().ScanRecord(path, conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()})
+
+	record, ok := parser.New().ScanRecord(
+		path,
+		conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()},
+	)
 	if !ok {
 		t.Fatalf("scan record %s failed", path)
 	}
+
 	return index, record
 }
 
@@ -139,19 +187,28 @@ func legacyRealSpans(messages []transcript.Message) map[string]legacyRealSpan {
 	spans := make(map[string]legacyRealSpan)
 	open := reorienttag.PreCompactionTranscriptOpen + "\n"
 	closing := "\n" + reorienttag.PreCompactionTranscriptClose
+
 	for _, message := range messages {
-		if message.Compaction == nil || message.Compaction.Kind != transcript.CompactionKindSummary {
+		if message.Compaction == nil ||
+			message.Compaction.Kind != transcript.CompactionKindSummary {
 			continue
 		}
+
 		for _, item := range message.Compaction.ContextItems {
-			if item.Message == nil || len(item.Message.Content) == 0 || len(item.Message.Content[0].TranscriptSpans) == 0 {
+			if item.Message == nil || len(item.Message.Content) == 0 ||
+				len(item.Message.Content[0].TranscriptSpans) == 0 {
 				continue
 			}
+
 			content := item.Message.Content[0]
 			span := content.TranscriptSpans[0]
-			spans[message.UUID] = legacyRealSpan{span: span, body: content.Text[span.Start+len(open) : span.End-len(closing)]}
+			spans[message.UUID] = legacyRealSpan{
+				span: span,
+				body: content.Text[span.Start+len(open) : span.End-len(closing)],
+			}
 		}
 	}
+
 	return spans
 }
 
@@ -160,83 +217,150 @@ func assertLegacyRealCut(t *testing.T, span reorienttag.TranscriptSpan) {
 	if len(span.Segments) == 0 {
 		t.Fatal("target span has no segments")
 	}
+
 	first := span.Segments[0]
-	if first.Kind != reorienttag.SegmentKindToolOutput || len(first.Text) != legacyRealCutSuffixBytes || legacyRealDigest(first.Text) != legacyRealCutSuffixSHA256 {
-		t.Errorf("first segment = %s %d bytes %s, want %s %d bytes %s", first.Kind, len(first.Text), legacyRealDigest(first.Text), reorienttag.SegmentKindToolOutput, legacyRealCutSuffixBytes, legacyRealCutSuffixSHA256)
+	if first.Kind != reorienttag.SegmentKindToolOutput ||
+		len(first.Text) != legacyRealCutSuffixBytes ||
+		legacyRealDigest(first.Text) != legacyRealCutSuffixSHA256 {
+		t.Errorf(
+			"first segment = %s %d bytes %s, want %s %d bytes %s",
+			first.Kind,
+			len(first.Text),
+			legacyRealDigest(first.Text),
+			reorienttag.SegmentKindToolOutput,
+			legacyRealCutSuffixBytes,
+			legacyRealCutSuffixSHA256,
+		)
 	}
-	t.Logf("cut suffix: %s %d bytes, SHA256 %s", first.Kind, len(first.Text), legacyRealDigest(first.Text))
+
+	t.Logf(
+		"cut suffix: %s %d bytes, SHA256 %s",
+		first.Kind,
+		len(first.Text),
+		legacyRealDigest(first.Text),
+	)
 }
 
 func assertLegacyRealEvent(t *testing.T, logs []byte) {
 	t.Helper()
 	scanner := bufio.NewScanner(bytes.NewReader(logs))
 	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+
 	for scanner.Scan() {
 		var event legacyRealEvent
-		if json.Unmarshal(scanner.Bytes(), &event) != nil || event.Message != legacyRealResolvedEvent || event.SummaryUUID != legacyRealTargetSummary {
+		if json.Unmarshal(scanner.Bytes(), &event) != nil ||
+			event.Message != legacyRealResolvedEvent ||
+			event.SummaryUUID != legacyRealTargetSummary {
 			continue
 		}
-		if event.Summaries != legacyRealSummaries || event.RequestPositions != legacyRealPositions || event.DirectBlobs != legacyRealDirectBlobs || event.NormalizedBlobs != legacyRealNormalizedBlobs || event.RetainedPositions != legacyRealRetained {
-			t.Errorf("resolution event = %+v, want %d summaries, %d positions, %d direct blobs with %d normalized, %d retained positions", event, legacyRealSummaries, legacyRealPositions, legacyRealDirectBlobs, legacyRealNormalizedBlobs, legacyRealRetained)
+
+		if event.Summaries != legacyRealSummaries ||
+			event.RequestPositions != legacyRealPositions ||
+			event.DirectBlobs != legacyRealDirectBlobs ||
+			event.NormalizedBlobs != legacyRealNormalizedBlobs ||
+			event.RetainedPositions != legacyRealRetained {
+			t.Errorf(
+				"resolution event = %+v, want %d summaries, %d positions, %d direct blobs with %d normalized, %d retained positions",
+				event,
+				legacyRealSummaries,
+				legacyRealPositions,
+				legacyRealDirectBlobs,
+				legacyRealNormalizedBlobs,
+				legacyRealRetained,
+			)
 		}
+
 		t.Logf("resolution event: %+v", event)
+
 		return
 	}
-	t.Fatalf("the parser did not log %s for summary %s", legacyRealResolvedEvent, legacyRealTargetSummary)
+
+	t.Fatalf(
+		"the parser did not log %s for summary %s",
+		legacyRealResolvedEvent,
+		legacyRealTargetSummary,
+	)
 }
 
 // assertLegacyRealChatExport exports the compaction segment starting with the
 // target summary and selects only chat. For each non-chat segment of at least
 // 80 bytes that does not occur in any chat segment, it checks that the export
 // omits the first 200 runes.
-func assertLegacyRealChatExport(t *testing.T, index *conversation.Index, record conversation.Record, messages []transcript.Message, span reorienttag.TranscriptSpan) {
+func assertLegacyRealChatExport(
+	t *testing.T,
+	index *conversation.Index,
+	record conversation.Record,
+	messages []transcript.Message,
+	span reorienttag.TranscriptSpan,
+) {
 	t.Helper()
 	selector := ""
+
 	for _, segment := range conversation.CompactionSegments(messages) {
 		if segment.SummaryUUID == legacyRealTargetSummary {
 			selector = strconv.Itoa(segment.Index)
 		}
 	}
+
 	if selector == "" {
 		t.Fatalf("no compaction segment starts with summary %s", legacyRealTargetSummary)
 	}
-	body, err := index.Export(record, conversation.ExportOptions{
-		Format:       conversation.ExportFormatPlainText,
-		HistoryStart: 0,
-		LastN:        0,
-		MaxLines:     0,
-		MaxTokens:    "",
-		TokenModel:   "",
-		Whitespace:   conversation.WhitespacePreserve,
-		Content:      conversation.NewContentKindSet(conversation.ContentKindChat),
-		Compaction:   conversation.CompactionExportOptions{IncludeSelector: selector, FullHistory: false},
-	})
+
+	body, err := index.Export(
+		record,
+		conversation.ExportOptions{
+			Format:       conversation.ExportFormatPlainText,
+			HistoryStart: 0,
+			LastN:        0,
+			MaxLines:     0,
+			MaxTokens:    "",
+			TokenModel:   "",
+			Whitespace:   conversation.WhitespacePreserve,
+			Content:      conversation.NewContentKindSet(conversation.ContentKindChat),
+			Compaction: conversation.CompactionExportOptions{
+				IncludeSelector: selector,
+				FullHistory:     false,
+			},
+		},
+	)
 	if err != nil {
 		t.Fatalf("chat export of summary %s: %v", legacyRealTargetSummary, err)
 	}
+
 	var chat strings.Builder
+
 	for _, segment := range span.Segments {
 		if segment.Kind == reorienttag.SegmentKindChat {
 			chat.WriteString(segment.Text)
 		}
 	}
+
 	checked := 0
+
 	for _, segment := range span.Segments {
-		if segment.Kind == reorienttag.SegmentKindChat || len(segment.Text) < legacyRealProbeMinimum {
+		if segment.Kind == reorienttag.SegmentKindChat ||
+			len(segment.Text) < legacyRealProbeMinimum {
 			continue
 		}
-		probe := string([]rune(segment.Text)[:min(legacyRealProbeRunes, utf8.RuneCountInString(segment.Text))])
+
+		probe := string(
+			[]rune(segment.Text)[:min(legacyRealProbeRunes, utf8.RuneCountInString(segment.Text))],
+		)
 		if strings.Contains(chat.String(), probe) {
 			continue
 		}
+
 		checked++
-		if strings.Contains(string(body), probe) || strings.Contains(string(body), legacyRealJSONText(t, probe)) {
+		if strings.Contains(string(body), probe) ||
+			strings.Contains(string(body), legacyRealJSONText(t, probe)) {
 			t.Errorf("chat export contains %s segment text %q", segment.Kind, probe)
 		}
 	}
+
 	if checked == 0 {
 		t.Fatal("no non-chat segment text was checked")
 	}
+
 	t.Logf("chat export: %d bytes; %d non-chat segment probes absent", len(body), checked)
 }
 
@@ -246,6 +370,7 @@ func legacyRealJSONText(t *testing.T, text string) string {
 	if err != nil {
 		t.Fatalf("encode probe: %v", err)
 	}
+
 	return strings.Trim(string(encoded), `"`)
 }
 

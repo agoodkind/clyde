@@ -30,7 +30,10 @@ type DiscoveryReadCounter struct {
 
 var testDriverSequence atomic.Uint64
 
-func readComposerBubbleStocksForTest(ctx context.Context, db *sql.DB) (map[string]ComposerBubbleStock, error) {
+func readComposerBubbleStocksForTest(
+	ctx context.Context,
+	db *sql.DB,
+) (map[string]ComposerBubbleStock, error) {
 	snapshot, err := beginReadSnapshot(ctx, db)
 	if err != nil {
 		return nil, err
@@ -40,46 +43,71 @@ func readComposerBubbleStocksForTest(ctx context.Context, db *sql.DB) (map[strin
 	if err != nil {
 		return nil, err
 	}
-	stocks, _, _, err := refreshComposerBubbleStocksInSnapshot(ctx, snapshot, inventory.selectors, nil, nil)
+
+	stocks, _, _, err := refreshComposerBubbleStocksInSnapshot(
+		ctx,
+		snapshot,
+		inventory.selectors,
+		nil,
+		nil,
+	)
+
 	return stocks, err
 }
 
 // ObserveDiscoveryReads replaces only Clyde's readonly driver for this test.
 func ObserveDiscoveryReads(t *testing.T) *DiscoveryReadCounter {
 	t.Helper()
-	counter := &DiscoveryReadCounter{counts: make(map[string]DiscoveryReadCounts), attempts: make(map[string]int)}
+	counter := &DiscoveryReadCounter{
+		counts:   make(map[string]DiscoveryReadCounts),
+		attempts: make(map[string]int),
+	}
 	name := fmt.Sprintf("cursor-discovery-test-%d", testDriverSequence.Add(1))
-	sql.Register(name, &observedSQLiteDriver{counter: counter, driver: &sqlite3.SQLiteDriver{ConnectHook: func(connection *sqlite3.SQLiteConn) error {
-		path := connection.GetFilename("main")
-		counter.mu.Lock()
-		value := counter.counts[path]
-		value.Opens++
-		counter.counts[path] = value
-		counter.mu.Unlock()
-		connection.RegisterAuthorizer(func(operation int, first, second, database string) int {
-			if operation == sqlite3.SQLITE_SELECT {
-				counter.mu.Lock()
-				pause := path == counter.pausePath
-				entered, release := counter.readEntered, counter.readRelease
-				if pause {
-					counter.pausePath = ""
-				}
-				value := counter.counts[path]
-				value.SelectAuthorizations++
-				counter.counts[path] = value
-				counter.mu.Unlock()
-				if pause {
-					entered <- true
-					<-release
-				}
-			}
-			return sqlite3.SQLITE_OK
-		})
-		return nil
-	}}})
+	sql.Register(
+		name,
+		&observedSQLiteDriver{
+			counter: counter,
+			driver: &sqlite3.SQLiteDriver{
+				ConnectHook: func(connection *sqlite3.SQLiteConn) error {
+					path := connection.GetFilename("main")
+					counter.mu.Lock()
+					value := counter.counts[path]
+					value.Opens++
+					counter.counts[path] = value
+					counter.mu.Unlock()
+					connection.RegisterAuthorizer(
+						func(operation int, first, second, database string) int {
+							if operation == sqlite3.SQLITE_SELECT {
+								counter.mu.Lock()
+								pause := path == counter.pausePath
+								entered, release := counter.readEntered, counter.readRelease
+								if pause {
+									counter.pausePath = ""
+								}
+
+								value := counter.counts[path]
+								value.SelectAuthorizations++
+								counter.counts[path] = value
+								counter.mu.Unlock()
+								if pause {
+									entered <- true
+									<-release
+								}
+							}
+
+							return sqlite3.SQLITE_OK
+						},
+					)
+
+					return nil
+				},
+			},
+		},
+	)
 	previous := readOnlyDriverName
 	readOnlyDriverName = name
 	t.Cleanup(func() { readOnlyDriverName = previous })
+
 	return counter
 }
 
@@ -93,14 +121,17 @@ func (observed *observedSQLiteDriver) Open(name string) (driver.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	path := parsed.Path
 	resolved, err := filepath.EvalSymlinks(path)
 	if err == nil {
 		path = resolved
 	}
+
 	observed.counter.mu.Lock()
 	observed.counter.attempts[path]++
 	observed.counter.mu.Unlock()
+
 	return observed.driver.Open(name)
 }
 
@@ -110,10 +141,12 @@ func (counter *DiscoveryReadCounter) TakeOpenAttempts(path string) int {
 	if err == nil {
 		path = resolved
 	}
+
 	counter.mu.Lock()
 	defer counter.mu.Unlock()
 	count := counter.attempts[path]
 	delete(counter.attempts, path)
+
 	return count
 }
 
@@ -123,11 +156,13 @@ func (counter *DiscoveryReadCounter) PauseNextSelect(path string) (<-chan bool, 
 	if err == nil {
 		path = resolved
 	}
+
 	counter.mu.Lock()
 	defer counter.mu.Unlock()
 	counter.pausePath = path
 	counter.readEntered = make(chan bool, 1)
 	counter.readRelease = make(chan bool, 1)
+
 	return counter.readEntered, counter.readRelease
 }
 
@@ -137,10 +172,12 @@ func (counter *DiscoveryReadCounter) Take(path string) DiscoveryReadCounts {
 	if err == nil {
 		path = resolved
 	}
+
 	counter.mu.Lock()
 	defer counter.mu.Unlock()
 	value := counter.counts[path]
 	delete(counter.counts, path)
+
 	return value
 }
 
@@ -148,14 +185,25 @@ func (counter *DiscoveryReadCounter) Take(path string) DiscoveryReadCounts {
 func CreateDiscoveryFixture(t *testing.T) (DataRoot, WorkspaceEntry) {
 	t.Helper()
 	rootDir := t.TempDir()
-	root := DataRoot{RootDir: rootDir, GlobalDBPath: filepath.Join(rootDir, "globalStorage", "state.vscdb"), WorkspaceStorageDir: filepath.Join(rootDir, "workspaceStorage")}
+	root := DataRoot{
+		RootDir:             rootDir,
+		GlobalDBPath:        filepath.Join(rootDir, "globalStorage", "state.vscdb"),
+		WorkspaceStorageDir: filepath.Join(rootDir, "workspaceStorage"),
+	}
 	if err := os.MkdirAll(filepath.Dir(root.GlobalDBPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := os.Rename(createCursorStoreTestDatabase(t), root.GlobalDBPath); err != nil {
 		t.Fatal(err)
 	}
+
 	writeSharedComposerWorkspace(t, root, "workspace", `{"folder":"file:///tmp/project"}`)
-	entry := WorkspaceEntry{WorkspaceHash: "workspace", StateDBPath: filepath.Join(root.WorkspaceStorageDir, "workspace", "state.vscdb"), WorkspaceJSONPath: filepath.Join(root.WorkspaceStorageDir, "workspace", "workspace.json")}
+	entry := WorkspaceEntry{
+		WorkspaceHash:     "workspace",
+		StateDBPath:       filepath.Join(root.WorkspaceStorageDir, "workspace", "state.vscdb"),
+		WorkspaceJSONPath: filepath.Join(root.WorkspaceStorageDir, "workspace", "workspace.json"),
+	}
+
 	return root, entry
 }

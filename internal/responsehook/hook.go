@@ -27,13 +27,16 @@ func (h *Hook) MatchRequestResponse(
 	if h == nil || h.action == nil {
 		return noMatch(), nil
 	}
+
 	if request.Purpose == mitm.RequestPurposeCompaction {
 		return noMatch(), nil
 	}
+
 	adapter, ok := mitm.ResponseAdapterFor(request.Provider)
 	if !ok || !adapter.MatchesResponse(request) {
 		return noMatch(), nil
 	}
+
 	return mitm.RequestResponseHookMatch{
 		Matched: true,
 		Transformer: responseTransformer{
@@ -70,11 +73,16 @@ func (t responseTransformer) TransformResponse(
 		slog.WarnContext(
 			ctx,
 			"mitm.response_action.transform_failed",
-			"concern", "providers.mitm.wire",
-			"provider", t.request.Provider,
-			"err", err,
+			"concern",
+			"providers.mitm.wire",
+			"provider",
+			t.request.Provider,
+			"err",
+			err,
 		)
+
 		return transformed, fmt.Errorf("apply provider response adapter: %w", err)
 	}
+
 	return transformed, nil
 }

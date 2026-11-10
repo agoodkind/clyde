@@ -27,6 +27,7 @@ func RenderJSONWithOptions(messages []Message, opts ShapeOptions) ([]byte, error
 
 func renderConversationMessages(messages []ConversationTurn, startIndex int) string {
 	var b strings.Builder
+
 	for i, m := range messages {
 		ts := m.Timestamp.Format("2006-01-02 15:04")
 		role := "User"
@@ -39,20 +40,25 @@ func renderConversationMessages(messages []ConversationTurn, startIndex int) str
 		} else {
 			fmt.Fprintf(&b, "[%s] %s:\n", ts, role)
 		}
+
 		if m.Text != "" {
 			b.WriteString(m.Text)
 			b.WriteString("\n")
 		}
+
 		if m.Thinking != "" {
 			b.WriteString("[thinking]\n")
 			b.WriteString(m.Thinking)
 			b.WriteString("\n")
 		}
+
 		if placeholders := attachmentPlaceholders(m.Attachments); placeholders != "" {
 			b.WriteString(strings.TrimPrefix(placeholders, "\n"))
 			b.WriteString("\n")
 		}
+
 		b.WriteString("\n")
 	}
+
 	return b.String()
 }

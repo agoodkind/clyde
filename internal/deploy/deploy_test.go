@@ -16,12 +16,16 @@ func TestLoadConfigFromEnvUsesDefaults(t *testing.T) {
 	homeDir := t.TempDir()
 	t.Setenv("HOME", homeDir)
 
-	config, err := loadConfigFromEnv(platformDarwin, func(key string) (string, bool) {
-		if key == "HOME" {
-			return homeDir, true
-		}
-		return "", false
-	})
+	config, err := loadConfigFromEnv(
+		platformDarwin,
+		func(key string) (string, bool) {
+			if key == "HOME" {
+				return homeDir, true
+			}
+
+			return "", false
+		},
+	)
 	if err != nil {
 		t.Fatalf("LoadConfigFromEnv() error = %v", err)
 	}
@@ -29,9 +33,11 @@ func TestLoadConfigFromEnvUsesDefaults(t *testing.T) {
 	if config.InstallBin == "" {
 		t.Fatal("InstallBin is empty")
 	}
+
 	if config.LaunchdLabel != defaultLaunchdLabel {
 		t.Fatalf("LaunchdLabel = %q, want %q", config.LaunchdLabel, defaultLaunchdLabel)
 	}
+
 	wantPlist := filepath.Join(homeDir, "Library", "LaunchAgents", defaultLaunchdLabel+".plist")
 	if config.LaunchdPlist != wantPlist {
 		t.Fatalf("LaunchdPlist = %q, want %q", config.LaunchdPlist, wantPlist)
@@ -44,16 +50,47 @@ func TestRunDarwinConfigMismatchInstallsService(t *testing.T) {
 	fixture := newDeployFixture(t, platformDarwin)
 	fixture.fs.exists[fixture.config.LaunchdPlist] = true
 	fixture.fs.files[fixture.config.LaunchdPlist] = []byte("mismatch")
-	fixture.runner.setSuccess(command{name: "launchctl", args: []string{"enable", fixture.config.LaunchdDomain + "/" + fixture.config.LaunchdLabel}}, "")
-	fixture.runner.setSuccess(command{name: "launchctl", args: []string{"bootout", fixture.config.LaunchdDomain, fixture.config.LaunchdPlist}}, "")
-	fixture.runner.setSuccess(command{name: "launchctl", args: []string{"bootstrap", fixture.config.LaunchdDomain, fixture.config.LaunchdPlist}}, "")
-	fixture.runner.setSuccess(command{name: "launchctl", args: []string{"print", fixture.config.LaunchdDomain + "/" + fixture.config.LaunchdLabel}}, "loaded")
+	fixture.runner.setSuccess(
+		command{
+			name: "launchctl",
+			args: []string{
+				"enable",
+				fixture.config.LaunchdDomain + "/" + fixture.config.LaunchdLabel,
+			},
+		},
+		"",
+	)
+	fixture.runner.setSuccess(
+		command{
+			name: "launchctl",
+			args: []string{"bootout", fixture.config.LaunchdDomain, fixture.config.LaunchdPlist},
+		},
+		"",
+	)
+	fixture.runner.setSuccess(
+		command{
+			name: "launchctl",
+			args: []string{"bootstrap", fixture.config.LaunchdDomain, fixture.config.LaunchdPlist},
+		},
+		"",
+	)
+	fixture.runner.setSuccess(
+		command{
+			name: "launchctl",
+			args: []string{
+				"print",
+				fixture.config.LaunchdDomain + "/" + fixture.config.LaunchdLabel,
+			},
+		},
+		"loaded",
+	)
 
 	if err := run(context.Background(), fixture.config, fixture.deps()); err != nil {
 		t.Fatalf("Run() error = %v\nlogs:\n%s", err, fixture.logs.String())
 	}
 
-	fixture.assertLogContains(t,
+	fixture.assertLogContains(
+		t,
 		`deploy: event=branch.darwin.changed_service_config`,
 		`deploy: event=action.install_service.selected reason="changed_service_config" cause="config_mismatch_or_missing"`,
 		`deploy: event=main.done platform="Darwin" action="install_service" reason="changed_service_config" cause="config_mismatch_or_missing"`,
@@ -70,17 +107,48 @@ func TestRunDarwinFingerprintFailureRestartsService(t *testing.T) {
 	rendered := fixture.mustRenderTemplate(t, darwinTemplate, fixture.config.LaunchdLabel)
 	fixture.fs.exists[fixture.config.LaunchdPlist] = true
 	fixture.fs.files[fixture.config.LaunchdPlist] = rendered
-	fixture.runner.setSuccess(command{name: "launchctl", args: []string{"print", fixture.config.LaunchdDomain + "/" + fixture.config.LaunchdLabel}}, "loaded")
+	fixture.runner.setSuccess(
+		command{
+			name: "launchctl",
+			args: []string{
+				"print",
+				fixture.config.LaunchdDomain + "/" + fixture.config.LaunchdLabel,
+			},
+		},
+		"loaded",
+	)
 	fixture.compiledFingerprint = func() string { return "built-123" }
-	fixture.runningFingerprint = func(context.Context) (string, error) { return "", errors.New("running failed") }
-	fixture.runner.setSuccess(command{name: "launchctl", args: []string{"kickstart", "-k", fixture.config.LaunchdDomain + "/" + fixture.config.LaunchdLabel}}, "")
-	fixture.runner.setSuccess(command{name: "launchctl", args: []string{"print", fixture.config.LaunchdDomain + "/" + fixture.config.LaunchdLabel}}, "running")
+	fixture.runningFingerprint = func(context.Context) (string, error) {
+		return "", errors.New("running failed")
+	}
+	fixture.runner.setSuccess(
+		command{
+			name: "launchctl",
+			args: []string{
+				"kickstart",
+				"-k",
+				fixture.config.LaunchdDomain + "/" + fixture.config.LaunchdLabel,
+			},
+		},
+		"",
+	)
+	fixture.runner.setSuccess(
+		command{
+			name: "launchctl",
+			args: []string{
+				"print",
+				fixture.config.LaunchdDomain + "/" + fixture.config.LaunchdLabel,
+			},
+		},
+		"running",
+	)
 
 	if err := run(context.Background(), fixture.config, fixture.deps()); err != nil {
 		t.Fatalf("Run() error = %v\nlogs:\n%s", err, fixture.logs.String())
 	}
 
-	fixture.assertLogContains(t,
+	fixture.assertLogContains(
+		t,
 		`deploy: event=branch.stale_root_parent cause="running_fingerprint_failed"`,
 		`deploy: event=action.restart_service.selected reason="stale_root_parent" cause="running_fingerprint_failed"`,
 		`deploy: event=main.done platform="Darwin" action="restart_service" reason="stale_root_parent" cause="running_fingerprint_failed"`,
@@ -94,17 +162,39 @@ func TestRunDarwinMatchingFingerprintsReloadsDaemon(t *testing.T) {
 	rendered := fixture.mustRenderTemplate(t, darwinTemplate, fixture.config.LaunchdLabel)
 	fixture.fs.exists[fixture.config.LaunchdPlist] = true
 	fixture.fs.files[fixture.config.LaunchdPlist] = rendered
-	fixture.runner.setSuccess(command{name: "launchctl", args: []string{"print", fixture.config.LaunchdDomain + "/" + fixture.config.LaunchdLabel}}, "loaded")
+	fixture.runner.setSuccess(
+		command{
+			name: "launchctl",
+			args: []string{
+				"print",
+				fixture.config.LaunchdDomain + "/" + fixture.config.LaunchdLabel,
+			},
+		},
+		"loaded",
+	)
 	fixture.compiledFingerprint = func() string { return "same-fingerprint" }
 	fixture.runningFingerprint = func(context.Context) (string, error) { return "same-fingerprint", nil }
-	fixture.runner.setSuccess(command{name: fixture.config.InstallBin, args: []string{"daemon", "reload"}}, "reload ok")
-	fixture.runner.setSuccess(command{name: "launchctl", args: []string{"print", fixture.config.LaunchdDomain + "/" + fixture.config.LaunchdLabel}}, "running")
+	fixture.runner.setSuccess(
+		command{name: fixture.config.InstallBin, args: []string{"daemon", "reload"}},
+		"reload ok",
+	)
+	fixture.runner.setSuccess(
+		command{
+			name: "launchctl",
+			args: []string{
+				"print",
+				fixture.config.LaunchdDomain + "/" + fixture.config.LaunchdLabel,
+			},
+		},
+		"running",
+	)
 
 	if err := run(context.Background(), fixture.config, fixture.deps()); err != nil {
 		t.Fatalf("Run() error = %v\nlogs:\n%s", err, fixture.logs.String())
 	}
 
-	fixture.assertLogContains(t,
+	fixture.assertLogContains(
+		t,
 		`deploy: event=branch.worker_reload built_supervisor="same-fingerprint" running_supervisor="same-fingerprint"`,
 		`deploy: event=action.reload_daemon.selected reason="worker_reload" built_supervisor="same-fingerprint" running_supervisor="same-fingerprint"`,
 		`deploy: event=main.done platform="Darwin" action="reload_daemon" reason="worker_reload" cause=""`,
@@ -115,20 +205,47 @@ func TestRunLinuxInactiveInstallsService(t *testing.T) {
 	t.Parallel()
 
 	fixture := newDeployFixture(t, platformLinux)
-	rendered := fixture.mustRenderTemplate(t, linuxTemplate, strings.TrimSuffix(fixture.config.SystemdUnit, filepath.Ext(fixture.config.SystemdUnit)))
+	rendered := fixture.mustRenderTemplate(
+		t,
+		linuxTemplate,
+		strings.TrimSuffix(fixture.config.SystemdUnit, filepath.Ext(fixture.config.SystemdUnit)),
+	)
 	fixture.fs.exists[fixture.config.SystemdUserUnit] = true
 	fixture.fs.files[fixture.config.SystemdUserUnit] = rendered
-	fixture.runner.setFailure(command{name: "systemctl", args: []string{"--user", "is-active", "--quiet", fixture.config.SystemdUnit}}, 3, "")
-	fixture.runner.setSuccess(command{name: "systemctl", args: []string{"--user", "daemon-reload"}}, "")
-	fixture.runner.setSuccess(command{name: "systemctl", args: []string{"--user", "enable", fixture.config.SystemdUnit}}, "")
-	fixture.runner.setSuccess(command{name: "systemctl", args: []string{"--user", "restart", fixture.config.SystemdUnit}}, "")
-	fixture.runner.setSuccess(command{name: "systemctl", args: []string{"--user", "status", fixture.config.SystemdUnit, "--no-pager"}}, "active")
+	fixture.runner.setFailure(
+		command{
+			name: "systemctl",
+			args: []string{"--user", "is-active", "--quiet", fixture.config.SystemdUnit},
+		},
+		3,
+		"",
+	)
+	fixture.runner.setSuccess(
+		command{name: "systemctl", args: []string{"--user", "daemon-reload"}},
+		"",
+	)
+	fixture.runner.setSuccess(
+		command{name: "systemctl", args: []string{"--user", "enable", fixture.config.SystemdUnit}},
+		"",
+	)
+	fixture.runner.setSuccess(
+		command{name: "systemctl", args: []string{"--user", "restart", fixture.config.SystemdUnit}},
+		"",
+	)
+	fixture.runner.setSuccess(
+		command{
+			name: "systemctl",
+			args: []string{"--user", "status", fixture.config.SystemdUnit, "--no-pager"},
+		},
+		"active",
+	)
 
 	if err := run(context.Background(), fixture.config, fixture.deps()); err != nil {
 		t.Fatalf("Run() error = %v\nlogs:\n%s", err, fixture.logs.String())
 	}
 
-	fixture.assertLogContains(t,
+	fixture.assertLogContains(
+		t,
 		`deploy: event=linux.service_active.false unit="clyde-daemon.service" status="3"`,
 		`deploy: event=action.install_service.selected reason="inactive_service" cause="systemd_inactive"`,
 		`deploy: event=main.done platform="Linux" action="install_service" reason="inactive_service" cause="systemd_inactive"`,
@@ -152,11 +269,13 @@ func TestRunReloadOnlyRefusesOnDarwinConfigMismatch(t *testing.T) {
 	if err == nil {
 		t.Fatal("run() err = nil, want non-nil")
 	}
+
 	if !strings.Contains(err.Error(), "make deploy") {
 		t.Fatalf("err = %q, want make deploy hint", err.Error())
 	}
 
-	fixture.assertLogContains(t,
+	fixture.assertLogContains(
+		t,
 		`deploy: event=branch.darwin.changed_service_config`,
 		`deploy: event=action.refuse.selected reason="deploy_required" cause="config_mismatch_or_missing"`,
 		`deploy: event=main.failed platform="Darwin" action="refuse" reason="deploy_required" cause="config_mismatch_or_missing"`,
@@ -171,17 +290,39 @@ func TestRunReloadOnlyReloadsWhenStateIsValid(t *testing.T) {
 	rendered := fixture.mustRenderTemplate(t, darwinTemplate, fixture.config.LaunchdLabel)
 	fixture.fs.exists[fixture.config.LaunchdPlist] = true
 	fixture.fs.files[fixture.config.LaunchdPlist] = rendered
-	fixture.runner.setSuccess(command{name: "launchctl", args: []string{"print", fixture.config.LaunchdDomain + "/" + fixture.config.LaunchdLabel}}, "loaded")
+	fixture.runner.setSuccess(
+		command{
+			name: "launchctl",
+			args: []string{
+				"print",
+				fixture.config.LaunchdDomain + "/" + fixture.config.LaunchdLabel,
+			},
+		},
+		"loaded",
+	)
 	fixture.compiledFingerprint = func() string { return "same-fingerprint" }
 	fixture.runningFingerprint = func(context.Context) (string, error) { return "same-fingerprint", nil }
-	fixture.runner.setSuccess(command{name: fixture.config.InstallBin, args: []string{"daemon", "reload"}}, "reload ok")
-	fixture.runner.setSuccess(command{name: "launchctl", args: []string{"print", fixture.config.LaunchdDomain + "/" + fixture.config.LaunchdLabel}}, "running")
+	fixture.runner.setSuccess(
+		command{name: fixture.config.InstallBin, args: []string{"daemon", "reload"}},
+		"reload ok",
+	)
+	fixture.runner.setSuccess(
+		command{
+			name: "launchctl",
+			args: []string{
+				"print",
+				fixture.config.LaunchdDomain + "/" + fixture.config.LaunchdLabel,
+			},
+		},
+		"running",
+	)
 
 	if err := run(context.Background(), fixture.config, fixture.deps()); err != nil {
 		t.Fatalf("Run() error = %v\nlogs:\n%s", err, fixture.logs.String())
 	}
 
-	fixture.assertLogContains(t,
+	fixture.assertLogContains(
+		t,
 		`deploy: event=main.mode reload_only="true"`,
 		`deploy: event=branch.worker_reload built_supervisor="same-fingerprint" running_supervisor="same-fingerprint"`,
 		`deploy: event=action.reload_daemon.selected reason="worker_reload" built_supervisor="same-fingerprint" running_supervisor="same-fingerprint"`,
@@ -221,11 +362,23 @@ func newDeployFixture(t *testing.T, targetPlatform platform) *deployFixture {
 	case platformDarwin:
 		config.LaunchdLabel = defaultLaunchdLabel
 		config.LaunchdDomain = "gui/" + strconv.Itoa(os.Getuid())
-		config.LaunchdPlist = filepath.Join(homeDir, "Library", "LaunchAgents", defaultLaunchdLabel+".plist")
+		config.LaunchdPlist = filepath.Join(
+			homeDir,
+			"Library",
+			"LaunchAgents",
+			defaultLaunchdLabel+".plist",
+		)
 	case platformLinux:
 		config.SystemdUnit = defaultSystemdUnit
-		config.SystemdUserUnit = filepath.Join(homeDir, ".config", "systemd", "user", defaultSystemdUnit)
+		config.SystemdUserUnit = filepath.Join(
+			homeDir,
+			".config",
+			"systemd",
+			"user",
+			defaultSystemdUnit,
+		)
 	}
+
 	return &deployFixture{
 		t:                   t,
 		config:              config,
@@ -251,6 +404,7 @@ func (fixture *deployFixture) deps() dependencies {
 func (fixture *deployFixture) assertLogContains(t *testing.T, entries ...string) {
 	t.Helper()
 	body := fixture.logs.String()
+
 	for _, entry := range entries {
 		if !strings.Contains(body, entry) {
 			t.Fatalf("logs missing %q:\n%s", entry, body)
@@ -258,7 +412,11 @@ func (fixture *deployFixture) assertLogContains(t *testing.T, entries ...string)
 	}
 }
 
-func (fixture *deployFixture) mustRenderTemplate(t *testing.T, template string, label string) []byte {
+func (fixture *deployFixture) mustRenderTemplate(
+	t *testing.T,
+	template string,
+	label string,
+) []byte {
 	t.Helper()
 	current := executor{
 		config:  fixture.config,
@@ -269,6 +427,7 @@ func (fixture *deployFixture) mustRenderTemplate(t *testing.T, template string, 
 		stderr:  &bytes.Buffer{},
 		outcome: outcome{action: actionUnset, reason: "", cause: causeUnset},
 	}
+
 	return current.renderTemplate(template, label)
 }
 
@@ -291,6 +450,7 @@ func (fs *fakeFileSystem) readFile(path string) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("read missing file %s", path)
 	}
+
 	return append([]byte(nil), body...), nil
 }
 
@@ -299,12 +459,14 @@ func (fs *fakeFileSystem) writeFile(path string, body []byte, perm os.FileMode) 
 	fs.exists[path] = true
 	fs.files[path] = append([]byte(nil), body...)
 	fs.written[path] = append([]byte(nil), body...)
+
 	return nil
 }
 
 func (fs *fakeFileSystem) mkdirAll(path string, perm os.FileMode) error {
 	_ = perm
 	fs.exists[path] = true
+
 	return nil
 }
 
@@ -315,6 +477,7 @@ func (fs *fakeFileSystem) pathExists(path string) (bool, error) {
 func (fs *fakeFileSystem) remove(path string) error {
 	delete(fs.exists, path)
 	delete(fs.files, path)
+
 	return nil
 }
 
@@ -335,8 +498,13 @@ func (runner *fakeRunner) run(ctx context.Context, current command) commandResul
 	_ = ctx
 	result, ok := runner.results[current.display()]
 	if !ok {
-		return commandResult{output: "", exitCode: 127, err: fmt.Errorf("unexpected command %s", current.display())}
+		return commandResult{
+			output:   "",
+			exitCode: 127,
+			err:      fmt.Errorf("unexpected command %s", current.display()),
+		}
 	}
+
 	return result
 }
 
@@ -345,7 +513,11 @@ func (runner *fakeRunner) setSuccess(current command, output string) {
 }
 
 func (runner *fakeRunner) setFailure(current command, exitCode int, output string) {
-	runner.results[current.display()] = commandResult{output: output, exitCode: exitCode, err: fmt.Errorf("exit status %d", exitCode)}
+	runner.results[current.display()] = commandResult{
+		output:   output,
+		exitCode: exitCode,
+		err:      fmt.Errorf("exit status %d", exitCode),
+	}
 }
 
 type ioDiscard struct{}

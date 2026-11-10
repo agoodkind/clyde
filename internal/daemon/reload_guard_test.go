@@ -23,9 +23,11 @@ func TestReloadDaemonWorkerRejectsAlreadyReplaced(t *testing.T) {
 	if err == nil {
 		t.Fatalf("reload on an already-replaced worker must error, got resp %+v", resp)
 	}
+
 	if want := "already replaced"; !strings.Contains(err.Error(), want) {
 		t.Fatalf("error %q must mention %q", err.Error(), want)
 	}
+
 	if resp != nil {
 		t.Fatalf("rejected reload must return a nil response, got %+v", resp)
 	}

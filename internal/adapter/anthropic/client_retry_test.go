@@ -38,23 +38,30 @@ func (f *fakeOAuth) ForceRefresh(_ context.Context) (string, error) {
 func newRetryTestServer(t *testing.T, secondStatus int, authObserved *[]string) *httptest.Server {
 	t.Helper()
 	var requestCount atomic.Int64
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		*authObserved = append(*authObserved, r.Header.Get("Authorization"))
-		count := requestCount.Add(1)
-		if count == 1 {
-			w.WriteHeader(http.StatusUnauthorized)
-			_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
-			return
-		}
-		w.WriteHeader(secondStatus)
-		if secondStatus == http.StatusOK {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{}`))
-			return
-		}
-		_, _ = w.Write([]byte(`{"error":"still unauthorized"}`))
-	}))
+	srv := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			*authObserved = append(*authObserved, r.Header.Get("Authorization"))
+			count := requestCount.Add(1)
+			if count == 1 {
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+
+				return
+			}
+
+			w.WriteHeader(secondStatus)
+			if secondStatus == http.StatusOK {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{}`))
+
+				return
+			}
+
+			_, _ = w.Write([]byte(`{"error":"still unauthorized"}`))
+		}),
+	)
 	t.Cleanup(srv.Close)
+
 	return srv
 }
 
@@ -85,28 +92,38 @@ func TestDoRetriesOn401WithFreshToken(t *testing.T) {
 		},
 	}
 
-	resp, err := cli.do(context.Background(), Request{
-		Model:     "claude-test",
-		Messages:  []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}}},
-		MaxTokens: 10,
-	})
+	resp, err := cli.do(
+		context.Background(),
+		Request{
+			Model: "claude-test",
+			Messages: []Message{
+				{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}},
+			},
+			MaxTokens: 10,
+		},
+	)
 	if err != nil {
 		t.Fatalf("do: %v", err)
 	}
+
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
+
 	if got := oauth.recoverCalls.Load(); got != 1 {
 		t.Fatalf("recoverCalls = %d, want 1", got)
 	}
+
 	if len(auths) != 2 {
 		t.Fatalf("server observed %d requests, want 2", len(auths))
 	}
+
 	if auths[0] != "Bearer stale-token" {
 		t.Fatalf("first auth = %q, want Bearer stale-token", auths[0])
 	}
+
 	if auths[1] != "Bearer fresh-token" {
 		t.Fatalf("retry auth = %q, want Bearer fresh-token", auths[1])
 	}
@@ -139,26 +156,35 @@ func TestDoFallsThroughOnSecond401(t *testing.T) {
 		},
 	}
 
-	_, err := cli.do(context.Background(), Request{
-		Model:     "claude-test",
-		Messages:  []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}}},
-		MaxTokens: 10,
-	})
+	_, err := cli.do(
+		context.Background(),
+		Request{
+			Model: "claude-test",
+			Messages: []Message{
+				{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}},
+			},
+			MaxTokens: 10,
+		},
+	)
 	if err == nil {
 		t.Fatalf("expected upstream error, got nil")
 	}
+
 	// The second 401 must surface as a typed UpstreamError so the existing
 	// classifier maps it to upstream_auth_failed downstream.
 	ue, ok := AsUpstreamError(err)
 	if !ok {
 		t.Fatalf("err type = %T, want *UpstreamError", err)
 	}
+
 	if ue.Status != http.StatusUnauthorized {
 		t.Fatalf("UpstreamError.Status = %d, want 401", ue.Status)
 	}
+
 	if got := oauth.recoverCalls.Load(); got != 1 {
 		t.Fatalf("recoverCalls = %d, want 1", got)
 	}
+
 	// One initial + one retry; no third post.
 	if len(auths) != 2 {
 		t.Fatalf("server observed %d requests, want 2", len(auths))
@@ -195,29 +221,42 @@ func TestDoSkipsRetryWhenRecoverErrors(t *testing.T) {
 		},
 	}
 
-	_, err := cli.do(context.Background(), Request{
-		Model:     "claude-test",
-		Messages:  []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}}},
-		MaxTokens: 10,
-	})
+	_, err := cli.do(
+		context.Background(),
+		Request{
+			Model: "claude-test",
+			Messages: []Message{
+				{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}},
+			},
+			MaxTokens: 10,
+		},
+	)
 	if err == nil {
 		t.Fatalf("expected 401 error to propagate, got nil")
 	}
+
 	ue, ok := AsUpstreamError(err)
 	if !ok {
 		t.Fatalf("err type = %T, want *UpstreamError", err)
 	}
+
 	if ue.Status != http.StatusUnauthorized {
 		t.Fatalf("UpstreamError.Status = %d, want 401", ue.Status)
 	}
+
 	if got := oauth.recoverCalls.Load(); got != 1 {
 		t.Fatalf("recoverCalls = %d, want 1", got)
 	}
+
 	if len(auths) != 1 {
 		t.Fatalf("server observed %d requests, want 1 (no retry)", len(auths))
 	}
+
 	if !strings.Contains(ue.Message, "unauthorized") {
-		t.Fatalf("UpstreamError.Message = %q, want it to carry the original 401 body text", ue.Message)
+		t.Fatalf(
+			"UpstreamError.Message = %q, want it to carry the original 401 body text",
+			ue.Message,
+		)
 	}
 }
 
@@ -248,25 +287,37 @@ func TestDoSkipsRetryWhenTokenUnchanged(t *testing.T) {
 		},
 	}
 
-	_, err := cli.do(context.Background(), Request{
-		Model:     "claude-test",
-		Messages:  []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}}},
-		MaxTokens: 10,
-	})
+	_, err := cli.do(
+		context.Background(),
+		Request{
+			Model: "claude-test",
+			Messages: []Message{
+				{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}},
+			},
+			MaxTokens: 10,
+		},
+	)
 	if err == nil {
 		t.Fatalf("expected 401 to propagate when recover returns same token, got nil")
 	}
+
 	ue, ok := AsUpstreamError(err)
 	if !ok {
 		t.Fatalf("err type = %T, want *UpstreamError", err)
 	}
+
 	if ue.Status != http.StatusUnauthorized {
 		t.Fatalf("UpstreamError.Status = %d, want 401", ue.Status)
 	}
+
 	if len(auths) != 1 {
 		t.Fatalf("server observed %d requests, want 1 (no retry on unchanged token)", len(auths))
 	}
+
 	if !strings.Contains(ue.Message, "unauthorized") {
-		t.Fatalf("UpstreamError.Message = %q, want it to carry the original 401 body text", ue.Message)
+		t.Fatalf(
+			"UpstreamError.Message = %q, want it to carry the original 401 body text",
+			ue.Message,
+		)
 	}
 }

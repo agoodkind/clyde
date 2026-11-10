@@ -87,7 +87,16 @@ type Proxy struct {
 // (required-leg overrides and incomplete-policy) the MITM emitter applies. A
 // zero-value [config.LoggingRequest] yields default required legs and the warn
 // policy, matching the adapter's behavior.
-func NewProxy(cfg config.MITMConfig, logging config.LoggingRequest, log *slog.Logger, listeners []net.Listener, h3Conns []net.PacketConn, store *capture.Store, client string, group *livetrack.Group) (*Proxy, error) {
+func NewProxy(
+	cfg config.MITMConfig,
+	logging config.LoggingRequest,
+	log *slog.Logger,
+	listeners []net.Listener,
+	h3Conns []net.PacketConn,
+	store *capture.Store,
+	client string,
+	group *livetrack.Group,
+) (*Proxy, error) {
 	TunnelMeta{
 		ConnectHost:   "",
 		UpstreamAddr:  "",
@@ -97,29 +106,41 @@ func NewProxy(cfg config.MITMConfig, logging config.LoggingRequest, log *slog.Lo
 	if len(listeners) == 0 {
 		return nil, fmt.Errorf("mitm: at least one listener is required")
 	}
+
 	for index, listener := range listeners {
 		if listener == nil {
 			return nil, fmt.Errorf("mitm: listener %d is nil", index)
 		}
 	}
+
 	for index, conn := range h3Conns {
 		if conn == nil {
 			return nil, fmt.Errorf("mitm: h3 packet conn %d is nil", index)
 		}
 	}
+
 	if log == nil {
 		log = slog.Default()
 	}
+
 	log = slogger.WithConcern(log, slogger.ConcernProviderMITMLifecycle)
 	ca, err := loadOrCreateCertAuthority(cfg.CA.CertPath, cfg.CA.KeyPath, time.Now)
 	if err != nil {
 		log.Warn(
-			"mitm.tls.ca_load_failed", "concern", "providers.mitm.wire", "cert_path", cfg.CA.CertPath,
-			"key_path", cfg.CA.KeyPath,
-			"err", err,
+			"mitm.tls.ca_load_failed",
+			"concern",
+			"providers.mitm.wire",
+			"cert_path",
+			cfg.CA.CertPath,
+			"key_path",
+			cfg.CA.KeyPath,
+			"err",
+			err,
 		)
+
 		return nil, fmt.Errorf("load mitm ca: %w", err)
 	}
+
 	p := &Proxy{
 		log:             log.With("component", "mitm"),
 		httpClient:      http.DefaultClient,
@@ -134,19 +155,23 @@ func NewProxy(cfg config.MITMConfig, logging config.LoggingRequest, log *slog.Lo
 		),
 		store:  store,
 		client: client,
-		Tunnels: livetrack.Attach[TunnelMeta](group, livetrack.MemberSpec{
-			Phase:         livetrack.PhaseIngress,
-			QuietRelevant: true,
-			CancelNoWait:  false,
-		}, livetrack.Options[TunnelMeta]{
-			Component:     "mitm",
-			Concern:       slogger.ConcernProviderMITMLifecycle,
-			Log:           log,
-			PollEvery:     50 * time.Millisecond,
-			CloserGrace:   2 * time.Second,
-			ParallelClose: false,
-			Now:           nil,
-		}),
+		Tunnels: livetrack.Attach[TunnelMeta](
+			group,
+			livetrack.MemberSpec{
+				Phase:         livetrack.PhaseIngress,
+				QuietRelevant: true,
+				CancelNoWait:  false,
+			},
+			livetrack.Options[TunnelMeta]{
+				Component:     "mitm",
+				Concern:       slogger.ConcernProviderMITMLifecycle,
+				Log:           log,
+				PollEvery:     50 * time.Millisecond,
+				CloserGrace:   2 * time.Second,
+				ParallelClose: false,
+				Now:           nil,
+			},
+		),
 		mu:                   sync.RWMutex{},
 		cfg:                  cfg,
 		requestResponseHooks: nil,
@@ -164,6 +189,7 @@ func NewProxy(cfg config.MITMConfig, logging config.LoggingRequest, log *slog.Lo
 		Handler:           http.HandlerFunc(p.handle),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+
 	return p, nil
 }
 
@@ -176,6 +202,7 @@ func mitmEmitterOptions(request config.LoggingRequest) []logevent.EmitterOption 
 	if !ok {
 		policy = logevent.IncompletePolicyWarn
 	}
+
 	return []logevent.EmitterOption{
 		logevent.WithIncompletePolicy(policy),
 		logevent.WithTestingTB(nil),
@@ -191,31 +218,54 @@ func (p *Proxy) Serve(ctx context.Context) error {
 	if len(p.listeners) == 0 {
 		return fmt.Errorf("mitm: proxy has no listener")
 	}
+
 	p.log.InfoContext(
 		ctx,
-		"mitm.proxy.started", "concern", "providers.mitm.lifecycle", "base_url", p.base,
-		"capture_dir", p.cfg.CaptureDir,
-		"providers", p.cfg.Providers,
-		"client", p.client,
-		"sockets", len(p.listeners),
+		"mitm.proxy.started",
+		"concern",
+		"providers.mitm.lifecycle",
+		"base_url",
+		p.base,
+		"capture_dir",
+		p.cfg.CaptureDir,
+		"providers",
+		p.cfg.Providers,
+		"client",
+		p.client,
+		"sockets",
+		len(p.listeners),
 	)
 	errs := make(chan error, len(p.listeners))
 	var wg sync.WaitGroup
+
 	for _, listener := range p.listeners {
 		wg.Go(func() {
-			if err := p.server.Serve(newSniffListener(ctx, listener, p)); err != nil && err != http.ErrServerClosed {
-				p.log.ErrorContext(ctx, "mitm.proxy.serve_failed", "concern", "providers.mitm.wire", "addr", listener.Addr().String(), "err", err)
+			if err := p.server.Serve(newSniffListener(ctx, listener, p)); err != nil &&
+				err != http.ErrServerClosed {
+				p.log.ErrorContext(
+					ctx,
+					"mitm.proxy.serve_failed",
+					"concern",
+					"providers.mitm.wire",
+					"addr",
+					listener.Addr().String(),
+					"err",
+					err,
+				)
 				errs <- fmt.Errorf("mitm serve %s: %w", listener.Addr().String(), err)
 			}
 		})
 	}
+
 	wg.Wait()
 	close(errs)
+
 	for err := range errs {
 		if err != nil {
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -232,10 +282,20 @@ func (p *Proxy) ShutdownHTTP(ctx context.Context) error {
 	if p.server == nil {
 		return nil
 	}
+
 	if err := p.server.Shutdown(ctx); err != nil {
-		p.log.WarnContext(ctx, "mitm.proxy.http_shutdown_failed", "concern", "providers.mitm.wire", "err", err)
+		p.log.WarnContext(
+			ctx,
+			"mitm.proxy.http_shutdown_failed",
+			"concern",
+			"providers.mitm.wire",
+			"err",
+			err,
+		)
+
 		return fmt.Errorf("mitm shutdown: %w", err)
 	}
+
 	return nil
 }
 
@@ -254,19 +314,41 @@ func (p *Proxy) ShutdownQUIC(ctx context.Context) error {
 	var closeErrs []error
 	if h3Server != nil {
 		if err := h3Server.Shutdown(ctx); err != nil {
-			p.log.WarnContext(ctx, "mitm.proxy.quic_shutdown_failed", "concern", "providers.mitm.wire", "err", err)
+			p.log.WarnContext(
+				ctx,
+				"mitm.proxy.quic_shutdown_failed",
+				"concern",
+				"providers.mitm.wire",
+				"err",
+				err,
+			)
 			closeErrs = append(closeErrs, fmt.Errorf("shutdown h3 server: %w", err))
 		}
 	}
+
 	for _, conn := range p.h3Conns {
 		if conn == nil {
 			continue
 		}
+
 		if err := conn.Close(); err != nil {
-			p.log.WarnContext(ctx, "mitm.proxy.quic_packet_conn_close_failed", "concern", "providers.mitm.wire", "addr", conn.LocalAddr().String(), "err", err)
-			closeErrs = append(closeErrs, fmt.Errorf("close h3 packet conn %s: %w", conn.LocalAddr().String(), err))
+			p.log.WarnContext(
+				ctx,
+				"mitm.proxy.quic_packet_conn_close_failed",
+				"concern",
+				"providers.mitm.wire",
+				"addr",
+				conn.LocalAddr().String(),
+				"err",
+				err,
+			)
+			closeErrs = append(
+				closeErrs,
+				fmt.Errorf("close h3 packet conn %s: %w", conn.LocalAddr().String(), err),
+			)
 		}
 	}
+
 	return errors.Join(closeErrs...)
 }
 
@@ -278,18 +360,31 @@ func (p *Proxy) CloseQUICTransport() error {
 	if p.h3Transport == nil {
 		return nil
 	}
+
 	if err := p.h3Transport.Close(); err != nil {
 		wrapped := fmt.Errorf("close h3 upstream transport: %w", err)
-		p.log.Warn("mitm.quic.upstream_transport_close_failed", "concern", "providers.mitm.wire", "component", "mitm", "err", wrapped)
+		p.log.Warn(
+			"mitm.quic.upstream_transport_close_failed",
+			"concern",
+			"providers.mitm.wire",
+			"component",
+			"mitm",
+			"err",
+			wrapped,
+		)
+
 		return wrapped
 	}
+
 	p.h3Transport = nil
+
 	return nil
 }
 
 func (p *Proxy) config() config.MITMConfig {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
+
 	return p.cfg
 }
 
@@ -303,6 +398,7 @@ func (p *Proxy) ApplyConfig(newCfg config.MITMConfig) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.cfg = newCfg
+
 	return nil
 }
 
@@ -318,9 +414,11 @@ func (p *Proxy) captureBodyCap(cfg config.MITMConfig) int {
 	if !p.store.RecordingEnabled() {
 		return 0
 	}
+
 	if cfg.CaptureStore.MaxBodyBytes > 0 {
 		return cfg.CaptureStore.MaxBodyBytes
 	}
+
 	return defaultCaptureBodyCap
 }
 
@@ -349,21 +447,44 @@ type upstreamRequest struct {
 // Force-close from the registry's [mitmHTTPCloser] cancels upstreamCtx
 // directly. Genuine client disconnect surfaces via streamWithFlush's
 // failed write, which fires the deferred release in handle (CLYDE-324).
-func (p *Proxy) dispatchUpstream(upstreamCtx context.Context, w http.ResponseWriter, req upstreamRequest) (*http.Response, bool) {
+func (p *Proxy) dispatchUpstream(
+	upstreamCtx context.Context,
+	w http.ResponseWriter,
+	req upstreamRequest,
+) (*http.Response, bool) {
 	upstreamURL := req.upstream + req.path
-	upReq, err := http.NewRequestWithContext(upstreamCtx, req.method, upstreamURL, bytes.NewReader(req.body))
+	upReq, err := http.NewRequestWithContext(
+		upstreamCtx,
+		req.method,
+		upstreamURL,
+		bytes.NewReader(req.body),
+	)
 	if err != nil {
 		http.Error(w, "build upstream request", http.StatusInternalServerError)
 		return nil, false
 	}
+
 	copyHeaders(upReq.Header, req.header)
 	upReq.Host = ""
 	resp, err := p.httpClient.Do(upReq)
 	if err != nil {
-		p.log.WarnContext(upstreamCtx, "mitm.proxy.upstream_failed", "concern", "providers.mitm.errors", "provider", req.provider, "path", req.path, "err", err)
+		p.log.WarnContext(
+			upstreamCtx,
+			"mitm.proxy.upstream_failed",
+			"concern",
+			"providers.mitm.errors",
+			"provider",
+			req.provider,
+			"path",
+			req.path,
+			"err",
+			err,
+		)
 		http.Error(w, err.Error(), http.StatusBadGateway)
+
 		return nil, false
 	}
+
 	return resp, true
 }
 
@@ -385,60 +506,108 @@ func (p *Proxy) dispatchUpstream(upstreamCtx context.Context, w http.ResponseWri
 // which calls cancel) or by the deferred release at the end of the
 // handler. Genuine client disconnect surfaces via streamWithFlush's
 // failed write, which fires the deferred release naturally.
-func (p *Proxy) registerPlainHTTP(ctx context.Context, cancel context.CancelFunc, w http.ResponseWriter, r *http.Request, upstream string) (*livetrack.Session[TunnelMeta], func(string), bool) {
-	reqSess, registerErr := p.Tunnels.Register(ctx, "mitm.http", TunnelMeta{
-		ConnectHost:   r.Host,
-		UpstreamAddr:  upstream,
-		CaptureFile:   "",
-		KeepaliveSeen: false,
-	}, &mitmHTTPCloser{cancel: cancel})
+func (p *Proxy) registerPlainHTTP(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	w http.ResponseWriter,
+	r *http.Request,
+	upstream string,
+) (*livetrack.Session[TunnelMeta], func(string), bool) {
+	reqSess, registerErr := p.Tunnels.Register(
+		ctx,
+		"mitm.http",
+		TunnelMeta{
+			ConnectHost:   r.Host,
+			UpstreamAddr:  upstream,
+			CaptureFile:   "",
+			KeepaliveSeen: false,
+		},
+		&mitmHTTPCloser{cancel: cancel},
+	)
 	if registerErr != nil {
 		cancel()
-		p.log.WarnContext(ctx, "mitm.http.register_rejected", "concern", "providers.mitm.wire", "path", r.URL.Path, "err", registerErr)
+		p.log.WarnContext(
+			ctx,
+			"mitm.http.register_rejected",
+			"concern",
+			"providers.mitm.wire",
+			"path",
+			r.URL.Path,
+			"err",
+			registerErr,
+		)
 		http.Error(w, "service draining", http.StatusServiceUnavailable)
+
 		return nil, nil, false
 	}
+
 	release := func(reason string) {
 		p.Tunnels.Release(ctx, reqSess, reason)
 		cancel()
 	}
+
 	return reqSess, release, true
 }
 
-func (p *Proxy) recordPlainHTTPReadFailure(r *http.Request, cfg config.MITMConfig, provider, upstreamURL string, started time.Time, err error) {
-	p.recordHTTPFailure(r, http.Header{}, buildHTTPFailureCaptureInput(
-		cfg,
-		provider,
-		upstreamURL,
-		nil,
-		emptyCaptureBodyIndex(),
-		emptyCaptureBodyIndex(),
-		clock.Since(started),
-		http.StatusBadRequest,
-	), httpFailureRecord{
-		includePayload:      false,
-		includeUpstreamSend: false,
-		errorCode:           "request_read_failed",
-		errorMessage:        err.Error(),
-	})
+func (p *Proxy) recordPlainHTTPReadFailure(
+	r *http.Request,
+	cfg config.MITMConfig,
+	provider string,
+	upstreamURL string,
+	started time.Time,
+	err error,
+) {
+	p.recordHTTPFailure(
+		r,
+		http.Header{},
+		buildHTTPFailureCaptureInput(
+			cfg,
+			provider,
+			upstreamURL,
+			nil,
+			emptyCaptureBodyIndex(),
+			emptyCaptureBodyIndex(),
+			clock.Since(started),
+			http.StatusBadRequest,
+		),
+		httpFailureRecord{
+			includePayload:      false,
+			includeUpstreamSend: false,
+			errorCode:           "request_read_failed",
+			errorMessage:        err.Error(),
+		},
+	)
 }
 
-func (p *Proxy) recordPlainHTTPDispatchFailure(r *http.Request, cfg config.MITMConfig, provider, upstreamURL string, body []byte, requestIndex captureBodyIndex, started time.Time) {
-	p.recordHTTPFailure(r, http.Header{}, buildHTTPFailureCaptureInput(
-		cfg,
-		provider,
-		upstreamURL,
-		body,
-		requestIndex,
-		emptyCaptureBodyIndex(),
-		clock.Since(started),
-		http.StatusBadGateway,
-	), httpFailureRecord{
-		includePayload:      true,
-		includeUpstreamSend: true,
-		errorCode:           "upstream_dispatch_failed",
-		errorMessage:        "upstream dispatch failed",
-	})
+func (p *Proxy) recordPlainHTTPDispatchFailure(
+	r *http.Request,
+	cfg config.MITMConfig,
+	provider string,
+	upstreamURL string,
+	body []byte,
+	requestIndex captureBodyIndex,
+	started time.Time,
+) {
+	p.recordHTTPFailure(
+		r,
+		http.Header{},
+		buildHTTPFailureCaptureInput(
+			cfg,
+			provider,
+			upstreamURL,
+			body,
+			requestIndex,
+			emptyCaptureBodyIndex(),
+			clock.Since(started),
+			http.StatusBadGateway,
+		),
+		httpFailureRecord{
+			includePayload:      true,
+			includeUpstreamSend: true,
+			errorCode:           "upstream_dispatch_failed",
+			errorMessage:        "upstream dispatch failed",
+		},
+	)
 }
 
 func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
@@ -448,15 +617,18 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 		p.handleConnect(w, r)
 		return
 	}
+
 	provider, upstream := classifyPlainRequest(r.URL)
 	if provider == "" {
 		http.Error(w, "unsupported mitm route", http.StatusNotFound)
 		return
 	}
+
 	if isWebsocketUpgrade(r) {
 		p.handleWebsocket(w, r, provider, upstream)
 		return
 	}
+
 	// CLYDE-324: upstream context shares request-scoped values with
 	// r.Context() (trace ids, etc.) via [context.WithoutCancel] but
 	// breaks the cancel chain so stdlib [http.Server] lifecycle changes
@@ -465,21 +637,32 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	// installed in registerPlainHTTP; the deferred release also
 	// cancels at handler return.
 	upstreamCtx, upstreamCancel := context.WithCancel(context.WithoutCancel(r.Context()))
-	plainHTTPSession, releasePlainHTTP, ok := p.registerPlainHTTP(upstreamCtx, upstreamCancel, w, r, upstream)
+	plainHTTPSession, releasePlainHTTP, ok := p.registerPlainHTTP(
+		upstreamCtx,
+		upstreamCancel,
+		w,
+		r,
+		upstream,
+	)
 	if !ok {
 		return
 	}
+
 	defer releasePlainHTTP("mitm.http.completed")
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		p.recordPlainHTTPReadFailure(r, cfg, provider, upstream+r.URL.RequestURI(), started, err)
 		http.Error(w, "read request body", http.StatusBadRequest)
+
 		return
 	}
+
 	_ = r.Body.Close()
 
-	transformer, reqTransformer, err := p.matchRequestResponseHook(newRequestResponseHookRequest(provider, r.Host, r, newStaticRequestResponseHookBody(body)))
+	transformer, reqTransformer, err := p.matchRequestResponseHook(
+		newRequestResponseHookRequest(provider, r.Host, r, newStaticRequestResponseHookBody(body)),
+	)
 	if err != nil {
 		// A hook is an optional enhancement, so a match failure must not abort the
 		// client request; forward it with no transformer. matchRequestResponseHook
@@ -487,29 +670,57 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 		transformer = nil
 		reqTransformer = nil
 	}
+
 	// Apply any request-body rewrite before indexing, dispatching, and capturing so
 	// all three see the forwarded (possibly trimmed) body. Fail-open leaves body as-is.
 	body, _ = p.transformRequestBody(upstreamCtx, reqTransformer, body)
 	requestBodyIndex := newCaptureBodyIndexFromSummary(summarizeBody(body))
-	resp, ok := p.dispatchUpstream(upstreamCtx, w, upstreamRequest{
-		method:   r.Method,
-		path:     r.URL.RequestURI(),
-		header:   r.Header,
-		body:     body,
-		provider: provider,
-		upstream: upstream,
-	})
+	resp, ok := p.dispatchUpstream(
+		upstreamCtx,
+		w,
+		upstreamRequest{
+			method:   r.Method,
+			path:     r.URL.RequestURI(),
+			header:   r.Header,
+			body:     body,
+			provider: provider,
+			upstream: upstream,
+		},
+	)
 	if !ok {
-		p.recordPlainHTTPDispatchFailure(r, cfg, provider, upstream+r.URL.RequestURI(), body, requestBodyIndex, started)
+		p.recordPlainHTTPDispatchFailure(
+			r,
+			cfg,
+			provider,
+			upstream+r.URL.RequestURI(),
+			body,
+			requestBodyIndex,
+			started,
+		)
+
 		return
 	}
+
 	defer func() { _ = resp.Body.Close() }()
 	streamResp, err := p.applyResponseHook(upstreamCtx, transformer, resp)
 	if err != nil {
-		p.log.WarnContext(upstreamCtx, "mitm.proxy.response_hook_transform_failed", "concern", "providers.mitm.wire", "provider", provider, "path", r.URL.Path, "err", err)
+		p.log.WarnContext(
+			upstreamCtx,
+			"mitm.proxy.response_hook_transform_failed",
+			"concern",
+			"providers.mitm.wire",
+			"provider",
+			provider,
+			"path",
+			r.URL.Path,
+			"err",
+			err,
+		)
 		http.Error(w, "response hook failed", http.StatusBadGateway)
+
 		return
 	}
+
 	// Close the transformed body only when the hook produced a new response; when
 	// no transform ran applyResponseHook returns resp unchanged, so the defer
 	// above already covers it and a second close would double-close.
@@ -528,18 +739,33 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	copyErr := streamWithFlush(counter, captureBuffer, streamResp.Body, flusher, plainHTTPSession)
 	duration := clock.Since(started)
 	if copyErr != nil {
-		p.log.Warn("mitm.proxy.copy_failed", "concern", "providers.mitm.wire", "provider", provider, "path", r.URL.Path, "err", copyErr)
+		p.log.Warn(
+			"mitm.proxy.copy_failed",
+			"concern",
+			"providers.mitm.wire",
+			"provider",
+			provider,
+			"path",
+			r.URL.Path,
+			"err",
+			copyErr,
+		)
 	}
-	p.finalizePlainHTTPCapture(r, streamResp, plainHTTPCaptureFinalize{
-		cfg:              cfg,
-		provider:         provider,
-		upstream:         upstream,
-		requestBody:      body,
-		capture:          captureBuffer,
-		responseBytes:    counter.bytesWritten,
-		requestBodyIndex: requestBodyIndex,
-		duration:         duration,
-	})
+
+	p.finalizePlainHTTPCapture(
+		r,
+		streamResp,
+		plainHTTPCaptureFinalize{
+			cfg:              cfg,
+			provider:         provider,
+			upstream:         upstream,
+			requestBody:      body,
+			capture:          captureBuffer,
+			responseBytes:    counter.bytesWritten,
+			requestBodyIndex: requestBodyIndex,
+			duration:         duration,
+		},
+	)
 }
 
 // plainHTTPCaptureFinalize bundles the post-stream state the plain-HTTP forward
@@ -561,60 +787,94 @@ type plainHTTPCaptureFinalize struct {
 // HTTP capture leg, persists the exchange to the SQLite capture store, appends
 // the drift-capture record for native upstreams, and debounces a baseline
 // refresh.
-func (p *Proxy) finalizePlainHTTPCapture(r *http.Request, resp *http.Response, fin plainHTTPCaptureFinalize) {
-	captureBody, decoded := decodeForCapture(fin.capture.Bytes(), resp.Header.Get("Content-Encoding"))
+func (p *Proxy) finalizePlainHTTPCapture(
+	r *http.Request,
+	resp *http.Response,
+	fin plainHTTPCaptureFinalize,
+) {
+	captureBody, decoded := decodeForCapture(
+		fin.capture.Bytes(),
+		resp.Header.Get("Content-Encoding"),
+	)
 	if decoded {
 		p.log.Debug(
-			"mitm.capture.decoded", "concern", "providers.mitm.wire", "provider", fin.provider,
-			"path", r.URL.Path,
-			"encoding", resp.Header.Get("Content-Encoding"),
-			"raw_bytes", len(fin.capture.Bytes()),
-			"decoded_bytes", len(captureBody),
+			"mitm.capture.decoded",
+			"concern",
+			"providers.mitm.wire",
+			"provider",
+			fin.provider,
+			"path",
+			r.URL.Path,
+			"encoding",
+			resp.Header.Get("Content-Encoding"),
+			"raw_bytes",
+			len(fin.capture.Bytes()),
+			"decoded_bytes",
+			len(captureBody),
 		)
 	}
+
 	responseBodyIndex := newCaptureBodyIndexFromSummary(summarizeBody(captureBody))
 	responseBodyLen := fin.responseBytes
 
 	p.log.Info(
-		"mitm.capture.completed", "concern", "providers.mitm.wire", "provider", fin.provider,
-		"path", r.URL.Path,
-		"status", resp.StatusCode,
-		"duration_ms", fin.duration.Milliseconds(),
+		"mitm.capture.completed",
+		"concern",
+		"providers.mitm.wire",
+		"provider",
+		fin.provider,
+		"path",
+		r.URL.Path,
+		"status",
+		resp.StatusCode,
+		"duration_ms",
+		fin.duration.Milliseconds(),
 	)
 	upstreamURL := fin.upstream + r.URL.RequestURI()
-	p.recordHTTPCapture(r, resp.Header, httpCaptureRecordInput{
-		config:         fin.cfg,
-		provider:       fin.provider,
-		upstreamURL:    upstreamURL,
-		requestBody:    fin.requestBody,
-		responseBody:   captureBody,
-		requestIndex:   fin.requestBodyIndex,
-		responseIndex:  responseBodyIndex,
-		responseLen:    responseBodyLen,
-		duration:       fin.duration,
-		responseStatus: resp.StatusCode,
-		clientFacet:    nil,
-	})
-	p.recordCaptureStore(r, resp.Header, captureStoreInput{
-		provider:        fin.provider,
-		host:            r.Host,
-		method:          r.Method,
-		path:            r.URL.Path,
-		status:          resp.StatusCode,
-		requestBody:     fin.requestBody,
-		responseBody:    captureBody,
-		duration:        fin.duration,
-		captureRules:    fin.cfg.CaptureRules,
-		hasCaptureRules: true,
-	})
-	p.recordDriftCapture(fin.cfg, driftCaptureInput{
-		provider:    fin.provider,
-		method:      r.Method,
-		path:        r.URL.Path,
-		upstreamURL: upstreamURL,
-		header:      r.Header,
-		body:        fin.requestBody,
-	})
+	p.recordHTTPCapture(
+		r,
+		resp.Header,
+		httpCaptureRecordInput{
+			config:         fin.cfg,
+			provider:       fin.provider,
+			upstreamURL:    upstreamURL,
+			requestBody:    fin.requestBody,
+			responseBody:   captureBody,
+			requestIndex:   fin.requestBodyIndex,
+			responseIndex:  responseBodyIndex,
+			responseLen:    responseBodyLen,
+			duration:       fin.duration,
+			responseStatus: resp.StatusCode,
+			clientFacet:    nil,
+		},
+	)
+	p.recordCaptureStore(
+		r,
+		resp.Header,
+		captureStoreInput{
+			provider:        fin.provider,
+			host:            r.Host,
+			method:          r.Method,
+			path:            r.URL.Path,
+			status:          resp.StatusCode,
+			requestBody:     fin.requestBody,
+			responseBody:    captureBody,
+			duration:        fin.duration,
+			captureRules:    fin.cfg.CaptureRules,
+			hasCaptureRules: true,
+		},
+	)
+	p.recordDriftCapture(
+		fin.cfg,
+		driftCaptureInput{
+			provider:    fin.provider,
+			method:      r.Method,
+			path:        r.URL.Path,
+			upstreamURL: upstreamURL,
+			header:      r.Header,
+			body:        fin.requestBody,
+		},
+	)
 	queueBaselineRefresh(r.Context(), p.store, fin.cfg, fin.provider, p.log)
 }
 
@@ -636,24 +896,33 @@ type captureStoreInput struct {
 }
 
 // recordCaptureStore saves exchanges only while diagnostic recording is active.
-func (p *Proxy) recordCaptureStore(r *http.Request, responseHeader http.Header, in captureStoreInput) {
+func (p *Proxy) recordCaptureStore(
+	r *http.Request,
+	responseHeader http.Header,
+	in captureStoreInput,
+) {
 	if !p.store.RecordingEnabled() {
 		return
 	}
+
 	contrib := extractIdentityContribution(r.Host, r.URL.Path, r.Header)
 	identity := mitmRequestIdentity(r.Header, contrib)
 	captureRules := in.captureRules
 	if !in.hasCaptureRules {
 		captureRules = p.config().CaptureRules
 	}
-	concern := resolveCaptureConcern(captureRules, captureConcernInput{
-		Provider:            in.provider,
-		Host:                in.host,
-		Method:              in.method,
-		Path:                in.path,
-		RequestContentType:  r.Header.Get("Content-Type"),
-		ResponseContentType: responseHeader.Get("Content-Type"),
-	})
+
+	concern := resolveCaptureConcern(
+		captureRules,
+		captureConcernInput{
+			Provider:            in.provider,
+			Host:                in.host,
+			Method:              in.method,
+			Path:                in.path,
+			RequestContentType:  r.Header.Get("Content-Type"),
+			ResponseContentType: responseHeader.Get("Content-Type"),
+		},
+	)
 	// Headers win. Only when the provider sent no conversation header does the
 	// body get consulted, and only for providers that carry the id in the body.
 	if strings.TrimSpace(contrib.ConversationID) == "" {
@@ -673,6 +942,7 @@ func (p *Proxy) recordCaptureStore(r *http.Request, responseHeader http.Header, 
 			}
 		}
 	}
+
 	conversationID, conversationSource := captureConversationFields(in.provider, contrib)
 	var decodedRequest *capture.DecodedBody
 	if decoder, ok := captureDecoderFor(in.provider, in.host); ok {
@@ -689,6 +959,7 @@ func (p *Proxy) recordCaptureStore(r *http.Request, responseHeader http.Header, 
 			decodedRequest = &decoded
 		}
 	}
+
 	p.store.Record(capture.Record{
 		Timestamp:          clock.Now(),
 		Client:             p.client,
@@ -738,6 +1009,7 @@ func forwardResponseHeaders(dst http.Header, src http.Header) {
 			hopByHopKeepAlive, hopByHopProxyConnection, hopByHopUpgrade, hopByHopTE, hopByHopTrailer:
 			continue
 		}
+
 		for _, value := range values {
 			dst.Add(key, value)
 		}
@@ -788,10 +1060,15 @@ func newCaptureBodyIndexFromSummary(summary captureBodySummary) captureBodyIndex
 	if err != nil {
 		raw = json.RawMessage(`null`)
 	}
+
 	return captureBodyIndex{raw: raw}
 }
 
-func (p *Proxy) recordHTTPCapture(r *http.Request, responseHeader http.Header, input httpCaptureRecordInput) {
+func (p *Proxy) recordHTTPCapture(
+	r *http.Request,
+	responseHeader http.Header,
+	input httpCaptureRecordInput,
+) {
 	recorder := p.beginHTTPLogRecorder(r, &input)
 	ctx := r.Context()
 	p.emitHTTPLogLeg(ctx, recorder, logevent.LegMITMIngress, logevent.PhaseStarted, input)
@@ -816,6 +1093,7 @@ func bodyTypeForCapture(body []byte) string {
 	if len(trimmed) == 0 {
 		return "empty"
 	}
+
 	switch trimmed[0] {
 	case '{':
 		var decoded map[string]json.RawMessage
@@ -828,10 +1106,12 @@ func bodyTypeForCapture(body []byte) string {
 			return "json_array"
 		}
 	}
+
 	var scalar json.RawMessage
 	if err := json.Unmarshal(trimmed, &scalar); err != nil {
 		return "bytes"
 	}
+
 	return "json_scalar"
 }
 
@@ -840,11 +1120,14 @@ func bodyKeysForCapture(body []byte) []string {
 	if err := json.Unmarshal(bytes.TrimSpace(body), &decoded); err != nil {
 		return nil
 	}
+
 	keys := make([]string, 0, len(decoded))
 	for key := range decoded {
 		keys = append(keys, key)
 	}
+
 	slices.Sort(keys)
+
 	return keys
 }
 
@@ -861,6 +1144,7 @@ func summarizeBody(body []byte) captureBodySummary {
 		Model:    "",
 		ArrayLen: 0,
 	}
+
 	return summarizeJSON(body, summary)
 }
 
@@ -869,26 +1153,32 @@ func summarizeJSON(body []byte, summary captureBodySummary) captureBodySummary {
 	if trimmed == "" {
 		return summary
 	}
+
 	if summary.BodyType == "bytes" {
 		// Non-JSON bodies carry no field set to summarize, and the raw bytes are
 		// never inlined into a summary; the full body lives only in the SQLite
 		// capture store.
 		return summary
 	}
+
 	if summary.BodyType == "json_array" {
 		var values []json.RawMessage
 		if err := json.Unmarshal(body, &values); err == nil {
 			summary.ArrayLen = len(values)
 		}
+
 		return summary
 	}
+
 	if summary.BodyType != "json_object" {
 		return summary
 	}
+
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(body, &fields); err != nil {
 		return summary
 	}
+
 	summary.Keys = bodyKeysForCapture(body)
 	summary.Messages = rawFieldArrayLen(fields, "messages")
 	summary.Input = rawFieldArrayLen(fields, "input")
@@ -900,6 +1190,7 @@ func summarizeJSON(body []byte, summary captureBodySummary) captureBodySummary {
 	}); err == nil {
 		summary.Model = features.ModelID
 	}
+
 	return summary
 }
 
@@ -908,10 +1199,12 @@ func rawFieldArrayLen(fields map[string]json.RawMessage, key string) int {
 	if !ok {
 		return 0
 	}
+
 	var values []json.RawMessage
 	if err := json.Unmarshal(raw, &values); err != nil {
 		return 0
 	}
+
 	return len(values)
 }
 
@@ -920,10 +1213,12 @@ func rawFieldString(fields map[string]json.RawMessage, key string) string {
 	if !ok {
 		return ""
 	}
+
 	var value string
 	if err := json.Unmarshal(raw, &value); err != nil {
 		return ""
 	}
+
 	return value
 }
 
@@ -936,13 +1231,16 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 	if b.limit <= 0 {
 		return len(p), nil
 	}
+
 	remain := b.limit - b.buf.Len()
 	if remain > 0 {
 		if len(p) > remain {
 			p = p[:remain]
 		}
+
 		_, _ = b.buf.Write(p)
 	}
+
 	return len(p), nil
 }
 
@@ -963,27 +1261,45 @@ func (b *limitedBuffer) Bytes() []byte {
 // wedged keepalive sessions. The session is the per-request livetrack
 // handle returned by registerPlainHTTP; callers from outside the
 // plain-HTTP path (tests, refactors) may pass nil.
-func streamWithFlush(client io.Writer, capture io.Writer, src io.Reader, flusher http.Flusher, session *livetrack.Session[TunnelMeta]) error {
+func streamWithFlush(
+	client io.Writer,
+	capture io.Writer,
+	src io.Reader,
+	flusher http.Flusher,
+	session *livetrack.Session[TunnelMeta],
+) error {
 	buf := make([]byte, 32*1024)
+
 	for {
 		n, err := src.Read(buf)
 		if n > 0 {
 			chunk := buf[:n]
 			if _, werr := client.Write(chunk); werr != nil {
-				slog.Warn("mitm.stream.client_write_failed", "concern", "providers.mitm.wire", "err", werr)
+				slog.Warn(
+					"mitm.stream.client_write_failed",
+					"concern",
+					"providers.mitm.wire",
+					"err",
+					werr,
+				)
+
 				return fmt.Errorf("stream client write: %w", werr)
 			}
+
 			_, _ = capture.Write(chunk)
 			if flusher != nil {
 				flusher.Flush()
 			}
+
 			if session != nil {
 				session.Touch()
 			}
 		}
+
 		if err == io.EOF {
 			return nil
 		}
+
 		if err != nil {
 			return fmt.Errorf("stream upstream read: %w", err)
 		}

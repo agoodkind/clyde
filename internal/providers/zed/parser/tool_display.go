@@ -25,12 +25,15 @@ func toolDisplayText(_ string, input transcript.ToolInputJSON) (string, string) 
 	if input.Len() == 0 {
 		return "", ""
 	}
+
 	var parsed zedToolDisplayInput
 	if err := json.Unmarshal(input.Raw, &parsed); err != nil {
 		return "", ""
 	}
+
 	if command := strings.TrimSpace(parsed.Command); command != "" {
 		return command, "bash"
 	}
+
 	return firstNonEmptyString(parsed.Path, parsed.Regex, parsed.Query), ""
 }

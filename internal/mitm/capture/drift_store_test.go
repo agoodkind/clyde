@@ -19,16 +19,21 @@ func waitForShapeCount(t *testing.T, store *retentionTestStore, upstream string,
 	if err != nil {
 		t.Fatalf("open shape verifier: %v", err)
 	}
+
 	defer func() { _ = db.Close() }()
 	deadline := time.Now().Add(2 * time.Second)
+
 	for {
 		var n int
-		if scanErr := db.QueryRow(testCountUpstreamShapesSQL, upstream).Scan(&n); scanErr == nil && n >= want {
+		if scanErr := db.QueryRow(testCountUpstreamShapesSQL, upstream).Scan(&n); scanErr == nil &&
+			n >= want {
 			return
 		}
+
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for %d drift_shapes rows for upstream %q", want, upstream)
 		}
+
 		time.Sleep(5 * time.Millisecond)
 	}
 }
@@ -38,7 +43,13 @@ func waitForShapeCount(t *testing.T, store *retentionTestStore, upstream string,
 // commits asynchronously, so waiting only for the row to exist (waitForShapeCount)
 // races the later dedup upserts; a test asserting the final seen_count must wait
 // for that count, not just the row.
-func waitForShapeSeenCount(t *testing.T, store *retentionTestStore, upstream, fingerprint string, want int) {
+func waitForShapeSeenCount(
+	t *testing.T,
+	store *retentionTestStore,
+	upstream string,
+	fingerprint string,
+	want int,
+) {
 	t.Helper()
 	// Keep the busy timeout well under the poll deadline: a locked query returns
 	// quickly and the loop retries, rather than blocking past the deadline.
@@ -46,32 +57,43 @@ func waitForShapeSeenCount(t *testing.T, store *retentionTestStore, upstream, fi
 	if err != nil {
 		t.Fatalf("open shape verifier: %v", err)
 	}
+
 	defer func() { _ = db.Close() }()
 	deadline := time.Now().Add(2 * time.Second)
+
 	for {
 		var seen sql.NullInt64
 		scanErr := db.QueryRow(testShapeSeenCountSQL, upstream, fingerprint).Scan(&seen)
 		if scanErr == nil && seen.Valid && int(seen.Int64) >= want {
 			return
 		}
+
 		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for seen_count>=%d for upstream %q fingerprint %q", want, upstream, fingerprint)
+			t.Fatalf(
+				"timed out waiting for seen_count>=%d for upstream %q fingerprint %q",
+				want,
+				upstream,
+				fingerprint,
+			)
 		}
+
 		time.Sleep(5 * time.Millisecond)
 	}
 }
 
 func sampleShape(upstream, fingerprint string, ts time.Time) capture.DriftShape {
 	return capture.DriftShape{
-		Timestamp:          ts,
-		Provider:           "claude",
-		Upstream:           upstream,
-		Fingerprint:        fingerprint,
-		Method:             "POST",
-		Path:               "/v1/messages",
-		URL:                "https://api.anthropic.com/v1/messages",
-		RequestHeaders:     map[string]string{"user-agent": "claude-cli/2.1.0"},
-		RequestBody:        json.RawMessage(`{"body_type":"json_object","keys":["messages","model"]}`),
+		Timestamp:      ts,
+		Provider:       "claude",
+		Upstream:       upstream,
+		Fingerprint:    fingerprint,
+		Method:         "POST",
+		Path:           "/v1/messages",
+		URL:            "https://api.anthropic.com/v1/messages",
+		RequestHeaders: map[string]string{"user-agent": "claude-cli/2.1.0"},
+		RequestBody: json.RawMessage(
+			`{"body_type":"json_object","keys":["messages","model"]}`,
+		),
 		BillingAttestation: "cch-token",
 		RequestFeatures:    json.RawMessage(`{"model_id":"claude-sonnet"}`),
 	}
@@ -93,9 +115,11 @@ func TestRecordShapeDedupBumpsSeenCount(t *testing.T) {
 	if err := db.QueryRow(testShapeDedupCountsSQL).Scan(&rows, &seen); err != nil {
 		t.Fatalf("scan shape: %v", err)
 	}
+
 	if rows != 1 {
 		t.Fatalf("drift_shapes rows=%d want 1 (dedup)", rows)
 	}
+
 	// Three identical fingerprints: first insert sets seen_count=1, two upserts
 	// bump it to 3.
 	if seen != 3 {
@@ -115,6 +139,7 @@ func TestRecordShapeDistinctFingerprintAddsRow(t *testing.T) {
 	if err := db.QueryRow(testCountClaudeShapesSQL).Scan(&rows); err != nil {
 		t.Fatalf("scan: %v", err)
 	}
+
 	if rows != 2 {
 		t.Fatalf("drift_shapes rows=%d want 2 (distinct fingerprints)", rows)
 	}
@@ -134,12 +159,15 @@ func TestShapesForUpstreamReturnsSeenCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ShapesForUpstream: %v", err)
 	}
+
 	if len(shapes) != 1 {
 		t.Fatalf("shapes=%d want 1", len(shapes))
 	}
+
 	if shapes[0].SeenCount != 2 {
 		t.Fatalf("SeenCount=%d want 2", shapes[0].SeenCount)
 	}
+
 	if shapes[0].BillingAttestation != "cch-token" {
 		t.Fatalf("BillingAttestation=%q want cch-token", shapes[0].BillingAttestation)
 	}
@@ -155,16 +183,30 @@ func TestPutBaselineUpsertsAndDedupsDiffs(t *testing.T) {
 		Upstream:  "claude-code",
 		Snapshot:  json.RawMessage(`{"upstream":{"name":"claude-code"},"flavors":[]}`),
 		Diffs: []capture.BaselineDiff{
-			{Upstream: "claude-code", Flavor: "claude-cli", Category: "header_extra", Field: "x-new", Before: "", After: "", Reason: "extra", FirstSeen: ts, LastSeen: ts, SeenCount: 1},
+			{
+				Upstream:  "claude-code",
+				Flavor:    "claude-cli",
+				Category:  "header_extra",
+				Field:     "x-new",
+				Before:    "",
+				After:     "",
+				Reason:    "extra",
+				FirstSeen: ts,
+				LastSeen:  ts,
+				SeenCount: 1,
+			},
 		},
 	}
 	if err := store.PutBaseline(ctx, change); err != nil {
 		t.Fatalf("PutBaseline: %v", err)
 	}
+
 	// Second baseline with the same diff bumps seen_count, not a new row; the
 	// baselines row is upserted in place.
 	change.Timestamp = ts.Add(time.Hour)
-	change.Snapshot = json.RawMessage(`{"upstream":{"name":"claude-code","version":"v2"},"flavors":[]}`)
+	change.Snapshot = json.RawMessage(
+		`{"upstream":{"name":"claude-code","version":"v2"},"flavors":[]}`,
+	)
 	change.Diffs[0].LastSeen = change.Timestamp
 	if err := store.PutBaseline(ctx, change); err != nil {
 		t.Fatalf("PutBaseline second: %v", err)
@@ -175,16 +217,20 @@ func TestPutBaselineUpsertsAndDedupsDiffs(t *testing.T) {
 	if err := db.QueryRow(testCountClaudeBaselinesSQL).Scan(&baselineRows); err != nil {
 		t.Fatalf("count baselines: %v", err)
 	}
+
 	if baselineRows != 1 {
 		t.Fatalf("baselines rows=%d want 1 (upsert in place)", baselineRows)
 	}
+
 	var diffRows, diffSeen int
 	if err := db.QueryRow(testBaselineDiffCountsSQL).Scan(&diffRows, &diffSeen); err != nil {
 		t.Fatalf("count diffs: %v", err)
 	}
+
 	if diffRows != 1 {
 		t.Fatalf("baseline_diffs rows=%d want 1 (dedup)", diffRows)
 	}
+
 	if diffSeen != 2 {
 		t.Fatalf("baseline_diffs seen_count=%d want 2", diffSeen)
 	}
@@ -198,25 +244,34 @@ func TestCurrentBaselineAndUpdatedAt(t *testing.T) {
 	if _, ok, err := store.CurrentBaseline(ctx, "claude-code"); err != nil || ok {
 		t.Fatalf("CurrentBaseline empty: ok=%v err=%v want ok=false", ok, err)
 	}
-	if updatedAt, err := store.CurrentBaselineUpdatedAt(ctx, "claude-code"); err != nil || updatedAt != 0 {
+
+	if updatedAt, err := store.CurrentBaselineUpdatedAt(ctx, "claude-code"); err != nil ||
+		updatedAt != 0 {
 		t.Fatalf("CurrentBaselineUpdatedAt empty=%d err=%v want 0", updatedAt, err)
 	}
 
 	snap := json.RawMessage(`{"upstream":{"name":"claude-code"},"flavors":[]}`)
-	if err := store.PutBaseline(ctx, capture.BaselineChange{Timestamp: ts, Upstream: "claude-code", Snapshot: snap, Diffs: nil}); err != nil {
+	if err := store.PutBaseline(
+		ctx,
+		capture.BaselineChange{Timestamp: ts, Upstream: "claude-code", Snapshot: snap, Diffs: nil},
+	); err != nil {
 		t.Fatalf("PutBaseline: %v", err)
 	}
+
 	raw, ok, err := store.CurrentBaseline(ctx, "claude-code")
 	if err != nil || !ok {
 		t.Fatalf("CurrentBaseline: ok=%v err=%v want ok=true", ok, err)
 	}
+
 	if string(raw) != string(snap) {
 		t.Fatalf("CurrentBaseline=%q want %q", string(raw), string(snap))
 	}
+
 	updatedAt, err := store.CurrentBaselineUpdatedAt(ctx, "claude-code")
 	if err != nil {
 		t.Fatalf("CurrentBaselineUpdatedAt: %v", err)
 	}
+
 	if updatedAt != ts.UnixNano() {
 		t.Fatalf("updated_at=%d want %d", updatedAt, ts.UnixNano())
 	}
@@ -224,10 +279,16 @@ func TestCurrentBaselineAndUpdatedAt(t *testing.T) {
 
 func TestRecordCheckInsertsRow(t *testing.T) {
 	store := openRetentionStore(t, capture.Config{})
-	store.RecordCheck(capture.DriftCheck{Timestamp: time.Unix(1700000000, 0), Upstream: "claude-code", Diverged: true, Summary: "drift"})
+	store.RecordCheck(capture.DriftCheck{
+		Timestamp: time.Unix(1700000000, 0),
+		Upstream:  "claude-code",
+		Diverged:  true,
+		Summary:   "drift",
+	})
 
 	db := openRetentionVerifier(t, store.path)
 	deadline := time.Now().Add(2 * time.Second)
+
 	for {
 		var n, diverged int
 		err := db.QueryRow(testDriftCheckCountsSQL).Scan(&n, &diverged)
@@ -235,11 +296,14 @@ func TestRecordCheckInsertsRow(t *testing.T) {
 			if diverged != 1 {
 				t.Fatalf("drift_checks diverged=%d want 1", diverged)
 			}
+
 			return
 		}
+
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for drift_checks row")
 		}
+
 		time.Sleep(5 * time.Millisecond)
 	}
 }

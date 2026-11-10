@@ -41,6 +41,7 @@ func TestSetupWritesConcernLogToHardCodedNestedTree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetupWithPolicy: %v", err)
 	}
+
 	t.Cleanup(func() { _ = closer.Close() })
 
 	For(ConcernAdapterModelsCatalog).Info("adapter.models.listed", "model_count", 42)
@@ -52,9 +53,11 @@ func TestSetupWritesConcernLogToHardCodedNestedTree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read concern log %s: %v", modelsPath, err)
 	}
+
 	if !strings.Contains(string(modelsLog), `"msg":"adapter.models.listed"`) {
 		t.Fatalf("concern log missing models event: %s", modelsLog)
 	}
+
 	if strings.Contains(string(modelsLog), "unconcerned.event") {
 		t.Fatalf("concern log should not include unconcerned event: %s", modelsLog)
 	}
@@ -63,7 +66,9 @@ func TestSetupWritesConcernLogToHardCodedNestedTree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read unified log: %v", err)
 	}
-	if !strings.Contains(string(unifiedLog), "adapter.models.listed") || !strings.Contains(string(unifiedLog), "unconcerned.event") {
+
+	if !strings.Contains(string(unifiedLog), "adapter.models.listed") ||
+		!strings.Contains(string(unifiedLog), "unconcerned.event") {
 		t.Fatalf("unified log should keep both events: %s", unifiedLog)
 	}
 }
@@ -76,6 +81,7 @@ func TestSetupRoutesExistingEventNamesWhenConcernIsExplicit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetupWithPolicy: %v", err)
 	}
+
 	t.Cleanup(func() { _ = closer.Close() })
 
 	For(ConcernMCPServerContext).Warn("mcp.context.load_failed", "path", "/tmp/nope")
@@ -83,9 +89,21 @@ func TestSetupRoutesExistingEventNamesWhenConcernIsExplicit(t *testing.T) {
 	For(ConcernMCPServerRequest).Debug("mcp.requests.started", "tool", "needle")
 	_ = closer.Close()
 
-	assertLogContains(t, filepath.Join(root, "logs", "mcp", "server", "context.jsonl"), "mcp.context.load_failed")
-	assertLogContains(t, filepath.Join(root, "logs", "daemon", "workers", "reload.jsonl"), "daemon.workers.reload.started")
-	assertLogContains(t, filepath.Join(root, "logs", "mcp", "server", "requests.jsonl"), "mcp.requests.started")
+	assertLogContains(
+		t,
+		filepath.Join(root, "logs", "mcp", "server", "context.jsonl"),
+		"mcp.context.load_failed",
+	)
+	assertLogContains(
+		t,
+		filepath.Join(root, "logs", "daemon", "workers", "reload.jsonl"),
+		"daemon.workers.reload.started",
+	)
+	assertLogContains(
+		t,
+		filepath.Join(root, "logs", "mcp", "server", "requests.jsonl"),
+		"mcp.requests.started",
+	)
 }
 
 func TestConcernLoggerResolvesDefaultAfterSetup(t *testing.T) {
@@ -99,6 +117,7 @@ func TestConcernLoggerResolvesDefaultAfterSetup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetupWithPolicy: %v", err)
 	}
+
 	t.Cleanup(func() { _ = closer.Close() })
 
 	early.Logger().Info("mcp.context.lazy_logger", "conversation_id", "demo")
@@ -108,13 +127,20 @@ func TestConcernLoggerResolvesDefaultAfterSetup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read unified log: %v", err)
 	}
+
 	if strings.Contains(string(unifiedLog), `"msg":"INFO mcp.context.lazy_logger`) {
 		t.Fatalf("lazy concern logger used bootstrap text logger: %s", unifiedLog)
 	}
+
 	if !strings.Contains(string(unifiedLog), `"msg":"mcp.context.lazy_logger"`) {
 		t.Fatalf("unified log missing lazy logger event: %s", unifiedLog)
 	}
-	assertLogContains(t, filepath.Join(root, "logs", "mcp", "server", "context.jsonl"), "mcp.context.lazy_logger")
+
+	assertLogContains(
+		t,
+		filepath.Join(root, "logs", "mcp", "server", "context.jsonl"),
+		"mcp.context.lazy_logger",
+	)
 }
 
 func TestSetupInjectsContextCorrelationAttrs(t *testing.T) {
@@ -126,6 +152,7 @@ func TestSetupInjectsContextCorrelationAttrs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetupWithPolicy: %v", err)
 	}
+
 	t.Cleanup(func() { _ = closer.Close() })
 
 	corr := correlation.Context{
@@ -146,21 +173,27 @@ func TestSetupInjectsContextCorrelationAttrs(t *testing.T) {
 	if event.Message != "daemon.rpc.started" {
 		t.Fatalf("message = %q", event.Message)
 	}
+
 	if event.RequestID != "explicit-req" {
 		t.Fatalf("request_id = %q, want explicit-req", event.RequestID)
 	}
+
 	if event.TraceID != string(corr.TraceID) {
 		t.Fatalf("trace_id = %q, want %q", event.TraceID, corr.TraceID)
 	}
+
 	if event.SpanID != string(corr.SpanID) {
 		t.Fatalf("span_id = %q, want %q", event.SpanID, corr.SpanID)
 	}
+
 	if event.ParentSpanID != string(corr.ParentSpanID) {
 		t.Fatalf("parent_span_id = %q, want %q", event.ParentSpanID, corr.ParentSpanID)
 	}
+
 	if event.CursorRequestID != "cursor-req" {
 		t.Fatalf("cursor_request_id = %q, want cursor-req", event.CursorRequestID)
 	}
+
 	if event.CursorConversationID != "cursor-conv" {
 		t.Fatalf("cursor_conversation_id = %q, want cursor-conv", event.CursorConversationID)
 	}
@@ -174,6 +207,7 @@ func TestSetupInjectsCorrelationAttrsIntoConcernLogWithoutOverwritingExplicitAtt
 	if err != nil {
 		t.Fatalf("SetupWithPolicy: %v", err)
 	}
+
 	t.Cleanup(func() { _ = closer.Close() })
 
 	corr := correlation.Context{
@@ -188,10 +222,13 @@ func TestSetupInjectsCorrelationAttrsIntoConcernLogWithoutOverwritingExplicitAtt
 	corr = clydeingress.WithUpstreamRequestID(corr, "upstream-req")
 	corr = clydeingress.WithUpstreamResponseID(corr, "upstream-resp")
 	ctx := correlation.WithContext(context.Background(), corr)
-	For(ConcernDaemonWorkersReload).InfoContext(ctx,
+	For(ConcernDaemonWorkersReload).InfoContext(
+		ctx,
 		"daemon.workers.reload.started",
-		"trace_id", "explicit-trace",
-		"span_id", "explicit-span",
+		"trace_id",
+		"explicit-trace",
+		"span_id",
+		"explicit-span",
 	)
 	_ = closer.Close()
 
@@ -199,24 +236,31 @@ func TestSetupInjectsCorrelationAttrsIntoConcernLogWithoutOverwritingExplicitAtt
 	if event.Message != "daemon.workers.reload.started" {
 		t.Fatalf("message = %q", event.Message)
 	}
+
 	if event.TraceID != "explicit-trace" {
 		t.Fatalf("trace_id = %q, want explicit-trace", event.TraceID)
 	}
+
 	if event.SpanID != "explicit-span" {
 		t.Fatalf("span_id = %q, want explicit-span", event.SpanID)
 	}
+
 	if event.ParentSpanID != string(corr.ParentSpanID) {
 		t.Fatalf("parent_span_id = %q, want %q", event.ParentSpanID, corr.ParentSpanID)
 	}
+
 	if event.RequestID != corr.RequestID {
 		t.Fatalf("request_id = %q, want %q", event.RequestID, corr.RequestID)
 	}
+
 	if event.CursorGenerationID != "cursor-gen" {
 		t.Fatalf("cursor_generation_id = %q, want cursor-gen", event.CursorGenerationID)
 	}
+
 	if event.UpstreamRequestID != "upstream-req" {
 		t.Fatalf("upstream_request_id = %q, want upstream-req", event.UpstreamRequestID)
 	}
+
 	if event.UpstreamResponseID != "upstream-resp" {
 		t.Fatalf("upstream_response_id = %q, want upstream-resp", event.UpstreamResponseID)
 	}
@@ -238,14 +282,23 @@ func TestSetupWithPolicyAppliesPerConcernLevel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetupWithPolicy: %v", err)
 	}
+
 	t.Cleanup(func() { _ = closer.Close() })
 
 	For(ConcernAdapterModelsCatalog).Debug("adapter.models.debug_event")
 	For(ConcernDaemonWorkersReload).Debug("daemon.workers.reload.debug_event")
 	_ = closer.Close()
 
-	assertLogContains(t, filepath.Join(root, "logs", "adapter", "models", "catalog.jsonl"), "adapter.models.debug_event")
-	assertLogMissing(t, filepath.Join(root, "logs", "daemon", "workers", "reload.jsonl"), "daemon.workers.reload.debug_event")
+	assertLogContains(
+		t,
+		filepath.Join(root, "logs", "adapter", "models", "catalog.jsonl"),
+		"adapter.models.debug_event",
+	)
+	assertLogMissing(
+		t,
+		filepath.Join(root, "logs", "daemon", "workers", "reload.jsonl"),
+		"daemon.workers.reload.debug_event",
+	)
 	assertLogMissing(t, filepath.Join(root, "clyde-daemon.jsonl"), "adapter.models.debug_event")
 }
 
@@ -268,18 +321,30 @@ func TestSetupWithPolicyAppliesSharedRotationToConcernFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetupWithPolicy: %v", err)
 	}
+
 	t.Cleanup(func() { _ = closer.Close() })
 
 	payload := strings.Repeat("x", 8192)
+
 	for i := range 300 {
-		For(ConcernAdapterModelsCatalog).Info("adapter.models.large_event", "index", i, "payload", payload)
+		For(ConcernAdapterModelsCatalog).Info(
+			"adapter.models.large_event",
+			"index",
+			i,
+			"payload",
+			payload,
+		)
 	}
+
 	_ = closer.Close()
 
-	concernLogs, err := filepath.Glob(filepath.Join(root, "logs", "adapter", "models", "catalog*.jsonl*"))
+	concernLogs, err := filepath.Glob(
+		filepath.Join(root, "logs", "adapter", "models", "catalog*.jsonl*"),
+	)
 	if err != nil {
 		t.Fatalf("glob concern logs: %v", err)
 	}
+
 	concernLogs = filterLockFiles(concernLogs)
 	if len(concernLogs) < 2 {
 		t.Fatalf("shared concern rotation did not create backups: %v", concernLogs)
@@ -303,18 +368,30 @@ func TestSetupWithPolicyKeepsConcernFilesUnrotatedWhenRotationDisabled(t *testin
 	if err != nil {
 		t.Fatalf("SetupWithPolicy: %v", err)
 	}
+
 	t.Cleanup(func() { _ = closer.Close() })
 
 	payload := strings.Repeat("x", 8192)
+
 	for i := range 300 {
-		For(ConcernAdapterModelsCatalog).Info("adapter.models.large_event", "index", i, "payload", payload)
+		For(ConcernAdapterModelsCatalog).Info(
+			"adapter.models.large_event",
+			"index",
+			i,
+			"payload",
+			payload,
+		)
 	}
+
 	_ = closer.Close()
 
-	concernLogs, err := filepath.Glob(filepath.Join(root, "logs", "adapter", "models", "catalog*.jsonl*"))
+	concernLogs, err := filepath.Glob(
+		filepath.Join(root, "logs", "adapter", "models", "catalog*.jsonl*"),
+	)
 	if err != nil {
 		t.Fatalf("glob concern logs: %v", err)
 	}
+
 	concernLogs = filterLockFiles(concernLogs)
 	if len(concernLogs) != 1 {
 		t.Fatalf("disabled rotation should keep a single concern file, got: %v", concernLogs)
@@ -345,11 +422,20 @@ func TestSetupWithPolicyPreservesDefaultLevelAndTranscriptSummary(t *testing.T) 
 	if err != nil {
 		t.Fatalf("SetupWithPolicy: %v", err)
 	}
+
 	t.Cleanup(func() { _ = closer.Close() })
 
 	slog.Debug("daemon.debug_default_filtered")
 	slog.Info("daemon.info_default_kept")
-	slog.Info("logging.request.leg", "chat_key", "chat-defaults", "request_id", "req-defaults", "body", "secret-body")
+	slog.Info(
+		"logging.request.leg",
+		"chat_key",
+		"chat-defaults",
+		"request_id",
+		"req-defaults",
+		"body",
+		"secret-body",
+	)
 	_ = closer.Close()
 
 	assertLogContains(t, unified, "daemon.info_default_kept")
@@ -368,9 +454,16 @@ func TestSetupWithPolicyWritesInventoryIndexSink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetupWithPolicy: %v", err)
 	}
+
 	t.Cleanup(func() { _ = closer.Close() })
 
-	slog.Info("logging.request.leg", "request_id", "req-inventory", "sinks", []logevent.SinkName{logevent.SinkProcess, logevent.SinkInventory})
+	slog.Info(
+		"logging.request.leg",
+		"request_id",
+		"req-inventory",
+		"sinks",
+		[]logevent.SinkName{logevent.SinkProcess, logevent.SinkInventory},
+	)
 	slog.Info("daemon.info_without_inventory", "request_id", "req-skip")
 	_ = closer.Close()
 
@@ -403,14 +496,17 @@ func TestInventoryIndexHandlerReusesRotatingWriter(t *testing.T) {
 	for i := range eventCount {
 		logger.Info(
 			"logging.request.leg",
-			"request_id", fmt.Sprintf("req-rotated-%d", i),
-			"sinks", []logevent.SinkName{logevent.SinkInventory},
+			"request_id",
+			fmt.Sprintf("req-rotated-%d", i),
+			"sinks",
+			[]logevent.SinkName{logevent.SinkInventory},
 		)
 	}
 
 	if got := writerFactory.createdCount(); got != 1 {
 		t.Fatalf("writer create count = %d, want 1", got)
 	}
+
 	writer := writerFactory.onlyWriter(t)
 	if got := writer.writeCount(); got != eventCount {
 		t.Fatalf("writer write count = %d, want %d", got, eventCount)
@@ -439,28 +535,36 @@ func TestInventoryIndexHandlerCloseClosesCachedWriterOnce(t *testing.T) {
 
 	logger.Info(
 		"logging.request.leg",
-		"request_id", "req-before-close",
-		"sinks", []logevent.SinkName{logevent.SinkInventory},
+		"request_id",
+		"req-before-close",
+		"sinks",
+		[]logevent.SinkName{logevent.SinkInventory},
 	)
 	writer := writerFactory.onlyWriter(t)
 
 	if err := inventoryHandler.Close(); err != nil {
 		t.Fatalf("first Close: %v", err)
 	}
+
 	if err := inventoryHandler.Close(); err != nil {
 		t.Fatalf("second Close: %v", err)
 	}
+
 	if got := writer.closeCount(); got != 1 {
 		t.Fatalf("writer close count = %d, want 1", got)
 	}
+
 	logger.Info(
 		"logging.request.leg",
-		"request_id", "req-after-close",
-		"sinks", []logevent.SinkName{logevent.SinkInventory},
+		"request_id",
+		"req-after-close",
+		"sinks",
+		[]logevent.SinkName{logevent.SinkInventory},
 	)
 	if got := writer.writeCount(); got != 1 {
 		t.Fatalf("writer write count after close = %d, want 1", got)
 	}
+
 	if inventoryHandler.Enabled(context.Background(), slog.LevelInfo) {
 		t.Fatal("closed inventory handler should not be enabled")
 	}
@@ -491,37 +595,57 @@ func TestInventoryIndexHandlerWritesValidJSONLUnderConcurrentOverlap(t *testing.
 	var wg sync.WaitGroup
 	const writers = 8
 	const perWriter = 50
+
 	for i := 0; i < writers; i++ {
 		wg.Add(2)
 		go func(workerID int) {
 			defer wg.Done()
+
 			for j := 0; j < perWriter; j++ {
 				logger1.Info(
 					"logging.request.leg",
-					"component", "mitm",
-					"request_id", fmt.Sprintf("req-a-%d-%d", workerID, j),
-					"provider", "cursor",
-					"surface", string(logevent.SurfaceMITMIDE),
-					"leg", string(logevent.LegMITMForward),
-					"sinks", []logevent.SinkName{logevent.SinkProcess, logevent.SinkInventory},
+					"component",
+					"mitm",
+					"request_id",
+					fmt.Sprintf("req-a-%d-%d", workerID, j),
+					"provider",
+					"cursor",
+					"surface",
+					string(logevent.SurfaceMITMIDE),
+					"leg",
+					string(logevent.LegMITMForward),
+					"sinks",
+					[]logevent.SinkName{logevent.SinkProcess, logevent.SinkInventory},
 				)
 			}
-		}(i)
+		}(
+			i,
+		)
 		go func(workerID int) {
 			defer wg.Done()
+
 			for j := 0; j < perWriter; j++ {
 				logger2.Info(
 					"logging.request.leg",
-					"component", "mitm",
-					"request_id", fmt.Sprintf("req-b-%d-%d", workerID, j),
-					"provider", "claude",
-					"surface", string(logevent.SurfaceMITMIDE),
-					"leg", string(logevent.LegMITMCaptureIndex),
-					"sinks", []logevent.SinkName{logevent.SinkConcern, logevent.SinkInventory},
+					"component",
+					"mitm",
+					"request_id",
+					fmt.Sprintf("req-b-%d-%d", workerID, j),
+					"provider",
+					"claude",
+					"surface",
+					string(logevent.SurfaceMITMIDE),
+					"leg",
+					string(logevent.LegMITMCaptureIndex),
+					"sinks",
+					[]logevent.SinkName{logevent.SinkConcern, logevent.SinkInventory},
 				)
 			}
-		}(i)
+		}(
+			i,
+		)
 	}
+
 	wg.Wait()
 
 	inventoryPath := filepath.Join(root, "logs", "inventory", "events.jsonl")
@@ -529,21 +653,26 @@ func TestInventoryIndexHandlerWritesValidJSONLUnderConcurrentOverlap(t *testing.
 	if err != nil {
 		t.Fatalf("read inventory index: %v", err)
 	}
+
 	lines := strings.Split(strings.TrimSpace(string(content)), "\n")
 	wantLines := writers * perWriter * 2
 	if len(lines) != wantLines {
 		t.Fatalf("inventory line count = %d, want %d", len(lines), wantLines)
 	}
+
 	for index, line := range lines {
 		if !strings.HasPrefix(line, "{") {
 			t.Fatalf("line %d does not start with '{': %q", index+1, line)
 		}
+
 		if strings.Count(line, `"concern":`) > 1 {
 			t.Fatalf("line %d has duplicated concern attrs: %s", index+1, line)
 		}
+
 		if strings.Count(line, `"component":`) > 1 {
 			t.Fatalf("line %d has duplicated component attrs: %s", index+1, line)
 		}
+
 		var decoded map[string]json.RawMessage
 		if err := json.Unmarshal([]byte(line), &decoded); err != nil {
 			t.Fatalf("line %d invalid json: %v\n%s", index+1, err, line)
@@ -557,18 +686,24 @@ type countingInventoryWriterFactory struct {
 	writers     []*countingInventoryWriter
 }
 
-func (f *countingInventoryWriterFactory) newWriter(_ string, _ gklog.RotationConfig, _ bool) (io.WriteCloser, error) {
+func (f *countingInventoryWriterFactory) newWriter(
+	_ string,
+	_ gklog.RotationConfig,
+	_ bool,
+) (io.WriteCloser, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	writer := &countingInventoryWriter{}
 	f.createCount++
 	f.writers = append(f.writers, writer)
+
 	return writer, nil
 }
 
 func (f *countingInventoryWriterFactory) createdCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
 	return f.createCount
 }
 
@@ -579,6 +714,7 @@ func (f *countingInventoryWriterFactory) onlyWriter(t *testing.T) *countingInven
 	if len(f.writers) != 1 {
 		t.Fatalf("writer count = %d, want 1", len(f.writers))
 	}
+
 	return f.writers[0]
 }
 
@@ -595,7 +731,9 @@ func (w *countingInventoryWriter) Write(record []byte) (int, error) {
 	if w.closed {
 		return 0, fmt.Errorf("write after close")
 	}
+
 	w.writes++
+
 	return len(record), nil
 }
 
@@ -605,20 +743,24 @@ func (w *countingInventoryWriter) Close() error {
 	if w.closed {
 		return nil
 	}
+
 	w.closed = true
 	w.closes++
+
 	return nil
 }
 
 func (w *countingInventoryWriter) writeCount() int {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
 	return w.writes
 }
 
 func (w *countingInventoryWriter) closeCount() int {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
 	return w.closes
 }
 
@@ -628,6 +770,7 @@ func assertLogContains(t *testing.T, path string, needle string) {
 	if err != nil {
 		t.Fatalf("read log %s: %v", path, err)
 	}
+
 	if !strings.Contains(string(content), needle) {
 		t.Fatalf("log %s missing %q: %s", path, needle, content)
 	}
@@ -640,8 +783,10 @@ func assertLogMissing(t *testing.T, path string, needle string) {
 		if os.IsNotExist(err) {
 			return
 		}
+
 		t.Fatalf("read log %s: %v", path, err)
 	}
+
 	if strings.Contains(string(content), needle) {
 		t.Fatalf("log %s should not contain %q: %s", path, needle, content)
 	}
@@ -675,8 +820,10 @@ func filterLockFiles(paths []string) []string {
 		if strings.HasSuffix(path, ".lock") {
 			continue
 		}
+
 		filtered = append(filtered, path)
 	}
+
 	return filtered
 }
 
@@ -699,10 +846,12 @@ func readSingleEvent(t *testing.T, path string) logEvent {
 	if err != nil {
 		t.Fatalf("read log %s: %v", path, err)
 	}
+
 	line := strings.TrimSpace(string(content))
 	var event logEvent
 	if err := json.Unmarshal([]byte(line), &event); err != nil {
 		t.Fatalf("unmarshal log event: %v content=%s", err, content)
 	}
+
 	return event
 }

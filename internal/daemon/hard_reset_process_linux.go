@@ -17,7 +17,15 @@ import (
 func resetProcessDetails(pid int) (_ resetProcess, err error) {
 	defer func() {
 		if err != nil && !os.IsNotExist(err) {
-			slog.Warn("daemon.hard_reset.process_details_failed", "concern", "process.daemon.lifecycle", "pid", pid, "err", err)
+			slog.Warn(
+				"daemon.hard_reset.process_details_failed",
+				"concern",
+				"process.daemon.lifecycle",
+				"pid",
+				pid,
+				"err",
+				err,
+			)
 		}
 	}()
 	root := filepath.Join("/proc", strconv.Itoa(pid))
@@ -60,7 +68,13 @@ func resetProcessDetails(pid int) (_ resetProcess, err error) {
 	if err != nil {
 		return resetProcess{}, fmt.Errorf("read reset process environment %d: %w", pid, err)
 	}
-	result := resetProcess{PID: pid, Started: started, Executable: strings.TrimSuffix(executable, " (deleted)"), Arguments: strings.Split(strings.TrimSuffix(string(arguments), "\x00"), "\x00"), SupervisorSocket: ""}
+	result := resetProcess{
+		PID:              pid,
+		Started:          started,
+		Executable:       strings.TrimSuffix(executable, " (deleted)"),
+		Arguments:        strings.Split(strings.TrimSuffix(string(arguments), "\x00"), "\x00"),
+		SupervisorSocket: "",
+	}
 	for entry := range strings.SplitSeq(string(environment), "\x00") {
 		if value, ok := strings.CutPrefix(entry, daemonsupervisor.EnvSupervisorSocket+"="); ok {
 			result.SupervisorSocket = value
@@ -73,7 +87,15 @@ func resetProcessStart(pid int) (string, error) {
 	status, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "stat"))
 	if err != nil {
 		if !os.IsNotExist(err) {
-			slog.Warn("daemon.hard_reset.process_stat_failed", "concern", "process.daemon.lifecycle", "pid", pid, "err", err)
+			slog.Warn(
+				"daemon.hard_reset.process_stat_failed",
+				"concern",
+				"process.daemon.lifecycle",
+				"pid",
+				pid,
+				"err",
+				err,
+			)
 		}
 		return "", fmt.Errorf("read reset process start %d: %w", pid, err)
 	}
@@ -95,7 +117,15 @@ func resetProcessOwnedStart(pid int) (string, error) {
 	root := filepath.Join("/proc", strconv.Itoa(pid))
 	info, err := os.Stat(root)
 	if err != nil {
-		slog.Warn("daemon.hard_reset.process_ownership_check_failed", "concern", "process.daemon.lifecycle", "pid", pid, "err", err)
+		slog.Warn(
+			"daemon.hard_reset.process_ownership_check_failed",
+			"concern",
+			"process.daemon.lifecycle",
+			"pid",
+			pid,
+			"err",
+			err,
+		)
 		return "", fmt.Errorf("check reset process %d ownership: %w", pid, err)
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
@@ -108,7 +138,15 @@ func resetProcessOwnedStart(pid int) (string, error) {
 	}
 	info, err = os.Stat(root)
 	if err != nil {
-		slog.Warn("daemon.hard_reset.process_ownership_recheck_failed", "concern", "process.daemon.lifecycle", "pid", pid, "err", err)
+		slog.Warn(
+			"daemon.hard_reset.process_ownership_recheck_failed",
+			"concern",
+			"process.daemon.lifecycle",
+			"pid",
+			pid,
+			"err",
+			err,
+		)
 		return "", fmt.Errorf("recheck reset process %d ownership: %w", pid, err)
 	}
 	stat, ok = info.Sys().(*syscall.Stat_t)

@@ -36,6 +36,7 @@ func TestShellQuoteQuotesEmptyString(t *testing.T) {
 	if got := shellQuote(""); got != "''" {
 		t.Fatalf("shellQuote() = %q, want ''", got)
 	}
+
 	if isShellBareWord("") {
 		t.Fatal("isShellBareWord(\"\") = true, want false")
 	}

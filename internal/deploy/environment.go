@@ -18,6 +18,7 @@ func systemdUnitPath(cfg config, unit string) string {
 			}
 		}
 	}
+
 	return filepath.Join(root, "systemd", "user", unit)
 }
 
@@ -28,30 +29,45 @@ func rootEnvironment(lookup func(string) (string, bool)) []field {
 	if lookup == nil {
 		return result
 	}
+
 	for _, key := range []string{
-		"XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR",
-		"TMPDIR", "CODEX_HOME", "CODEX_SQLITE_HOME", "CLAUDE_CONFIG_DIR",
-		"CLYDE_CURSOR_DATA_DIRS", "CLYDE_ZED_DATA_DIRS",
-		"CLYDE_ANTHROPIC_LOG_PATH", "CLYDE_CODEX_LOG_PATH", "CLYDE_SLOG_PATH",
+		"XDG_CONFIG_HOME",
+		"XDG_STATE_HOME",
+		"XDG_CACHE_HOME",
+		"XDG_RUNTIME_DIR",
+		"TMPDIR",
+		"CODEX_HOME",
+		"CODEX_SQLITE_HOME",
+		"CLAUDE_CONFIG_DIR",
+		"CLYDE_CURSOR_DATA_DIRS",
+		"CLYDE_ZED_DATA_DIRS",
+		"CLYDE_ANTHROPIC_LOG_PATH",
+		"CLYDE_CODEX_LOG_PATH",
+		"CLYDE_SLOG_PATH",
 	} {
 		if value, ok := lookup(key); ok {
 			result = append(result, field{Key: key, Value: value})
 		}
 	}
+
 	return result
 }
 
 func (executor *executor) renderRootEnvironment() string {
 	var result strings.Builder
+
 	for _, variable := range executor.config.Environment {
 		if executor.config.Platform == platformDarwin {
 			var value bytes.Buffer
 			_ = xml.EscapeText(&value, []byte(variable.Value))
-			result.WriteString("        <key>" + variable.Key + "</key>\n        <string>" + value.String() + "</string>\n")
+			result.WriteString(
+				"        <key>" + variable.Key + "</key>\n        <string>" + value.String() + "</string>\n",
+			)
 		} else {
 			value := strings.ReplaceAll(variable.Value, "%", "%%")
 			result.WriteString("Environment=" + strconv.Quote(variable.Key+"="+value) + "\n")
 		}
 	}
+
 	return strings.TrimSuffix(result.String(), "\n")
 }

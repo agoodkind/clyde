@@ -67,7 +67,13 @@ func (p Param[I]) flagName() string {
 }
 
 // StringParam declares a free-text input.
-func StringParam[I Input](canonical, description, def string, required bool, set func(*I, string)) Param[I] {
+func StringParam[I Input](
+	canonical string,
+	description string,
+	def string,
+	required bool,
+	set func(*I, string),
+) Param[I] {
 	return Param[I]{
 		Canonical:       canonical,
 		Kind:            KindString,
@@ -133,7 +139,12 @@ func BoolParam[I Input](canonical, description string, def bool, set func(*I, bo
 }
 
 // FloatParam declares a decimal-number input.
-func FloatParam[I Input](canonical, description string, def float64, set func(*I, float64)) Param[I] {
+func FloatParam[I Input](
+	canonical string,
+	description string,
+	def float64,
+	set func(*I, float64),
+) Param[I] {
 	return Param[I]{
 		Canonical:       canonical,
 		Kind:            KindFloat,
@@ -156,7 +167,13 @@ func FloatParam[I Input](canonical, description string, def float64, set func(*I
 
 // EnumParam declares a string constrained to values. The terminal rejects an
 // unknown word; the MCP tool falls back to def. Both front ends share values.
-func EnumParam[I Input](canonical, description, def string, values []string, set func(*I, string)) Param[I] {
+func EnumParam[I Input](
+	canonical string,
+	description string,
+	def string,
+	values []string,
+	set func(*I, string),
+) Param[I] {
 	return Param[I]{
 		Canonical:       canonical,
 		Kind:            KindEnum,
@@ -180,7 +197,12 @@ func EnumParam[I Input](canonical, description, def string, values []string, set
 // StringSliceParam declares a repeatable, comma-aware list of free-text
 // strings. The terminal accepts repeated flags and comma-separated values; the
 // MCP tool renders an optional array-of-string property.
-func StringSliceParam[I Input](canonical, description string, def []string, set func(*I, []string)) Param[I] {
+func StringSliceParam[I Input](
+	canonical string,
+	description string,
+	def []string,
+	set func(*I, []string),
+) Param[I] {
 	return Param[I]{
 		Canonical:       canonical,
 		Kind:            KindStringList,
@@ -205,7 +227,13 @@ func StringSliceParam[I Input](canonical, description string, def []string, set 
 // terminal renders a repeatable, comma-aware flag that rejects an element
 // outside values; the MCP tool renders a required-or-optional array-of-enum
 // property. Both front ends share the same allowed set.
-func EnumListParam[I Input](canonical, description string, values []string, required bool, set func(*I, []string)) Param[I] {
+func EnumListParam[I Input](
+	canonical string,
+	description string,
+	values []string,
+	required bool,
+	set func(*I, []string),
+) Param[I] {
 	return Param[I]{
 		Canonical:       canonical,
 		Kind:            KindEnumList,
@@ -263,6 +291,7 @@ func (a Arg[I]) placeholder() string {
 	if !a.Required {
 		return "[" + placeholder + "]"
 	}
+
 	return placeholder
 }
 

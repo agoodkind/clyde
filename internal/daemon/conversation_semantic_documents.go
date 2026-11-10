@@ -27,6 +27,7 @@ func SemanticProjectionHash(docs []semsearch.SemDoc) string {
 		hasher.Write(length[:])
 		hasher.Write([]byte(value))
 	}
+
 	for _, doc := range docs {
 		writeField(doc.ConversationID)
 		writeField(doc.ParentConversationID)
@@ -39,6 +40,7 @@ func SemanticProjectionHash(docs []semsearch.SemDoc) string {
 		writeField(doc.Text)
 		writeField(doc.Thinking)
 		writeField(strconv.Itoa(len(doc.Tools)))
+
 		for _, tool := range doc.Tools {
 			writeField(tool.Name)
 			writeField(tool.Display)
@@ -49,9 +51,11 @@ func SemanticProjectionHash(docs []semsearch.SemDoc) string {
 			if tool.TimestampUnix != nil {
 				writeField(strconv.FormatInt(*tool.TimestampUnix, 10))
 			}
+
 			writeField(strconv.FormatBool(tool.TimestampUnknown))
 		}
 	}
+
 	return hex.EncodeToString(hasher.Sum(nil))
 }
 
@@ -112,7 +116,9 @@ func BuildSemanticConversationDocuments(
 	if derivedParentID, ok := conversation.ParentConversationID(record); ok {
 		parentConversationID = derivedParentID
 	}
+
 	loadRules := conversation.LoadRulesTag(kinds)
+
 	built := SemanticConversationDocuments{
 		Docs:             make([]semsearch.SemDoc, 0, len(messages)),
 		PolicySkipped:    0,
@@ -121,9 +127,15 @@ func BuildSemanticConversationDocuments(
 	}
 	for i, message := range messages {
 		if i > int(maxSemanticMessageIndex) {
-			return SemanticConversationDocuments{Docs: nil, PolicySkipped: 0, InjectedStripped: 0, SystemStripped: 0},
+			return SemanticConversationDocuments{
+					Docs:             nil,
+					PolicySkipped:    0,
+					InjectedStripped: 0,
+					SystemStripped:   0,
+				},
 				fmt.Errorf("message index %d exceeds semantic search int32 limit", i)
 		}
+
 		// A control record is the harness talking to itself rather than
 		// anything a person wrote or read, so embedding it spends the same
 		// work as a real message and returns a result nobody searched for.
@@ -139,6 +151,7 @@ func BuildSemanticConversationDocuments(
 			built.PolicySkipped++
 			continue
 		}
+
 		text := ""
 		if kinds.Has(conversation.ContentKindChat) {
 			// Replace invalid UTF-8 so the protobuf upsert never fails to marshal
@@ -161,29 +174,36 @@ func BuildSemanticConversationDocuments(
 				text = ""
 			}
 		}
+
 		thinking := ""
 		if kinds.Has(conversation.ContentKindThinking) {
 			thinking = strings.ToValidUTF8(message.Thinking, "")
 		}
+
 		tools := semanticToolCalls(message.Tools, kinds)
 		if text == "" && thinking == "" && len(tools) == 0 {
 			built.PolicySkipped++
 			continue
 		}
-		built.Docs = append(built.Docs, semsearch.SemDoc{
-			ConversationID:       record.ID,
-			ParentConversationID: parentConversationID,
-			MessageIndex:         int32(i),
-			Role:                 message.Role,
-			TimestampUnix:        message.Timestamp.Unix(),
-			Text:                 text,
-			Tools:                tools,
-			Thinking:             thinking,
-			WorkspaceRoot:        record.WorkspaceRoot,
-			Archived:             record.Archived,
-			LoadRules:            loadRules,
-		})
+
+		built.Docs = append(
+			built.Docs,
+			semsearch.SemDoc{
+				ConversationID:       record.ID,
+				ParentConversationID: parentConversationID,
+				MessageIndex:         int32(i),
+				Role:                 message.Role,
+				TimestampUnix:        message.Timestamp.Unix(),
+				Text:                 text,
+				Tools:                tools,
+				Thinking:             thinking,
+				WorkspaceRoot:        record.WorkspaceRoot,
+				Archived:             record.Archived,
+				LoadRules:            loadRules,
+			},
+		)
 	}
+
 	return built, nil
 }
 
@@ -196,13 +216,17 @@ func BuildSemanticConversationDocuments(
 // no tool kind drops the calls entirely.
 //
 // The projection stays structured so the engine can store each call separately.
-func semanticToolCalls(tools []transcript.ToolCall, kinds conversation.ContentKindSet) []semsearch.SemToolCall {
+func semanticToolCalls(
+	tools []transcript.ToolCall,
+	kinds conversation.ContentKindSet,
+) []semsearch.SemToolCall {
 	summariesOnly := kinds.Has(conversation.ContentKindToolSummaries)
 	withArguments := kinds.Has(conversation.ContentKindToolCalls)
 	withOutput := kinds.Has(conversation.ContentKindToolOutputs)
 	if !summariesOnly && !withArguments && !withOutput {
 		return nil
 	}
+
 	out := make([]semsearch.SemToolCall, 0, len(tools))
 	for _, tool := range tools {
 		projected := semsearch.SemToolCall{
@@ -218,6 +242,7 @@ func semanticToolCalls(tools []transcript.ToolCall, kinds conversation.ContentKi
 			stamp := tool.Timestamp.Unix()
 			projected.TimestampUnix = &stamp
 		}
+
 		if withArguments || withOutput {
 			// The provider's parser rendered what the user saw and named the
 			// language it is written in. Re-deriving either here would put
@@ -226,10 +251,13 @@ func semanticToolCalls(tools []transcript.ToolCall, kinds conversation.ContentKi
 			projected.Display = strings.ToValidUTF8(tool.Display, "")
 			projected.LangHint = tool.DisplayLang
 		}
+
 		if withOutput {
 			projected.Output = tool.Output
 		}
+
 		out = append(out, projected)
 	}
+
 	return out
 }

@@ -29,6 +29,7 @@ func directOAuthConfig() config.AdapterConfig {
 	cfg.Codex.Enabled = true
 	cfg.Codex.AuthFile = "~/.codex/auth.json"
 	addTestCodexModel(&cfg)
+
 	return cfg
 }
 
@@ -38,14 +39,19 @@ func directOAuthConfig() config.AdapterConfig {
 // instance-registry contract the dispatcher's Lookup depends on.
 func TestServerRegistersAnthropicAndCodexProviders(t *testing.T) {
 	t.Parallel()
-	srv, _ := newLoggingServer(t, config.LoggingConfig{}, func(cfg *config.AdapterConfig) {
-		*cfg = directOAuthConfig()
-	})
+	srv, _ := newLoggingServer(
+		t,
+		config.LoggingConfig{},
+		func(cfg *config.AdapterConfig) {
+			*cfg = directOAuthConfig()
+		},
+	)
 
 	ids := srv.providerRegistry.IDs()
 	if !slices.Contains(ids, adapterresolver.ProviderAnthropic) {
 		t.Fatalf("registry IDs %v missing ProviderAnthropic", ids)
 	}
+
 	if !slices.Contains(ids, adapterresolver.ProviderCodex) {
 		t.Fatalf("registry IDs %v missing ProviderCodex", ids)
 	}
@@ -58,25 +64,35 @@ func TestDispatchUnknownBackendReturnsUnsupportedBackend(t *testing.T) {
 	t.Parallel()
 	srv, _ := newLoggingServer(t, config.LoggingConfig{})
 
-	if ids := srv.providerRegistry.IDs(); !slices.Equal(ids, []adapterresolver.ProviderID{adapterresolver.ProviderAnthropic}) {
+	if ids := srv.providerRegistry.IDs(); !slices.Equal(
+		ids,
+		[]adapterresolver.ProviderID{adapterresolver.ProviderAnthropic},
+	) {
 		t.Fatalf("provider registry = %v, want anthropic only", ids)
 	}
 
 	unknownBackend := adaptermodel.BackendID("mystery")
-	out, status := dispatchToErrorEnvelope(t, srv, dispatchArgs{
-		alias:    "mystery-model",
-		provider: unknownBackend,
-	})
+	out, status := dispatchToErrorEnvelope(
+		t,
+		srv,
+		dispatchArgs{
+			alias:    "mystery-model",
+			provider: unknownBackend,
+		},
+	)
 
 	if status != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", status, http.StatusBadRequest)
 	}
+
 	if out.Error.Type != "invalid_request_error" {
 		t.Fatalf("error type = %q, want invalid_request_error", out.Error.Type)
 	}
+
 	if out.Error.Code != "unsupported_backend" {
 		t.Fatalf("error code = %q, want unsupported_backend", out.Error.Code)
 	}
+
 	if !strings.Contains(out.Error.Message, "unsupported backend") {
 		t.Fatalf("error message = %q, want it to mention unsupported backend", out.Error.Message)
 	}
@@ -91,21 +107,30 @@ func TestDispatchKnownBackendWithoutRegisteredProviderReturnsUpstreamUnavailable
 	t.Parallel()
 	srv, _ := newLoggingServer(t, config.LoggingConfig{})
 
-	if ids := srv.providerRegistry.IDs(); !slices.Equal(ids, []adapterresolver.ProviderID{adapterresolver.ProviderAnthropic}) {
+	if ids := srv.providerRegistry.IDs(); !slices.Equal(
+		ids,
+		[]adapterresolver.ProviderID{adapterresolver.ProviderAnthropic},
+	) {
 		t.Fatalf("provider registry = %v, want anthropic only", ids)
 	}
 
-	out, status := dispatchToErrorEnvelope(t, srv, dispatchArgs{
-		alias:    "gpt-5.4",
-		provider: adapterresolver.ProviderCodex,
-	})
+	out, status := dispatchToErrorEnvelope(
+		t,
+		srv,
+		dispatchArgs{
+			alias:    "gpt-5.4",
+			provider: adapterresolver.ProviderCodex,
+		},
+	)
 
 	if status != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", status, http.StatusBadRequest)
 	}
+
 	if out.Error.Type != "invalid_request_error" {
 		t.Fatalf("error type = %q, want invalid_request_error", out.Error.Type)
 	}
+
 	if out.Error.Code != "upstream_unavailable" {
 		t.Fatalf("error code = %q, want upstream_unavailable", out.Error.Code)
 	}
@@ -127,7 +152,11 @@ type dispatchArgs struct {
 // request and decodes the rendered OpenAI error envelope. The request is
 // posted to /v1/chat/completions so the OpenAI route family's renderer is
 // selected by the error boundary.
-func dispatchToErrorEnvelope(t *testing.T, srv *Server, args dispatchArgs) (adapteropenai.ErrorResponse, int) {
+func dispatchToErrorEnvelope(
+	t *testing.T,
+	srv *Server,
+	args dispatchArgs,
+) (adapteropenai.ErrorResponse, int) {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{}`))
 	rec := httptest.NewRecorder()
@@ -150,5 +179,6 @@ func dispatchToErrorEnvelope(t *testing.T, srv *Server, args dispatchArgs) (adap
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatalf("unmarshal error envelope: %v; body=%s", err, rec.Body.String())
 	}
+
 	return out, rec.Code
 }

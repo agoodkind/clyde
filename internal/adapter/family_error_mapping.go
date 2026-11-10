@@ -53,13 +53,18 @@ func newBoundaryRegistry() *boundaryRegistry {
 // Register stores the mapper and renderer for a family. Implements
 // errcontract.BoundaryRegistrar so provider packages can call
 // Register without importing the adapter package's family enum.
-func (r *boundaryRegistry) Register(family errcontract.RouteFamily, mapper errcontract.UpstreamErrorMapper, renderer errcontract.ErrorRenderer) {
+func (r *boundaryRegistry) Register(
+	family errcontract.RouteFamily,
+	mapper errcontract.UpstreamErrorMapper,
+	renderer errcontract.ErrorRenderer,
+) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	key := adapterRouteFamily(family)
 	if mapper != nil {
 		r.mappers[key] = mapper
 	}
+
 	if renderer != nil {
 		r.renderers[key] = renderer
 	}
@@ -68,7 +73,10 @@ func (r *boundaryRegistry) Register(family errcontract.RouteFamily, mapper errco
 // RegisterStreamErrorRenderer stores the native stream error renderer
 // for a family. It intentionally covers error events only; normal
 // success stream chunks stay on their existing renderer path.
-func (r *boundaryRegistry) RegisterStreamErrorRenderer(family errcontract.RouteFamily, renderer errcontract.StreamErrorRenderer) {
+func (r *boundaryRegistry) RegisterStreamErrorRenderer(
+	family errcontract.RouteFamily,
+	renderer errcontract.StreamErrorRenderer,
+) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if renderer != nil {
@@ -77,27 +85,36 @@ func (r *boundaryRegistry) RegisterStreamErrorRenderer(family errcontract.RouteF
 }
 
 // upstreamMapper returns the registered mapper for a family.
-func (r *boundaryRegistry) upstreamMapper(family adapterRouteFamily) (errcontract.UpstreamErrorMapper, bool) {
+func (r *boundaryRegistry) upstreamMapper(
+	family adapterRouteFamily,
+) (errcontract.UpstreamErrorMapper, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	m, ok := r.mappers[family]
+
 	return m, ok
 }
 
 // errorRenderer returns the registered renderer for a family.
-func (r *boundaryRegistry) errorRenderer(family adapterRouteFamily) (errcontract.ErrorRenderer, bool) {
+func (r *boundaryRegistry) errorRenderer(
+	family adapterRouteFamily,
+) (errcontract.ErrorRenderer, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	rd, ok := r.renderers[family]
+
 	return rd, ok
 }
 
 // streamErrorRenderer returns the registered stream error renderer
 // for a family.
-func (r *boundaryRegistry) streamErrorRenderer(family adapterRouteFamily) (errcontract.StreamErrorRenderer, bool) {
+func (r *boundaryRegistry) streamErrorRenderer(
+	family adapterRouteFamily,
+) (errcontract.StreamErrorRenderer, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	rd, ok := r.streamErrorRenderers[family]
+
 	return rd, ok
 }
 
@@ -108,6 +125,7 @@ func (r *boundaryRegistry) snapshotRenderers() map[adapterRouteFamily]errcontrac
 	defer r.mu.RUnlock()
 	out := make(map[adapterRouteFamily]errcontract.ErrorRenderer, len(r.renderers))
 	maps.Copy(out, r.renderers)
+
 	return out
 }
 
@@ -118,6 +136,7 @@ func (r *boundaryRegistry) snapshotStreamErrorRenderers() map[adapterRouteFamily
 	defer r.mu.RUnlock()
 	out := make(map[adapterRouteFamily]errcontract.StreamErrorRenderer, len(r.streamErrorRenderers))
 	maps.Copy(out, r.streamErrorRenderers)
+
 	return out
 }
 
@@ -157,7 +176,9 @@ func mapUpstreamForFamily(
 	if !ok {
 		return upstreamCatchAllAdapterError(provider, upstreamStatus, upstreamCode, upstreamMessage)
 	}
+
 	mapping := mapper.Map(provider, upstreamStatus, codeClass, upstreamCode, upstreamMessage)
+
 	return adapterErrorFromMapping(family, provider, upstreamStatus, mapping)
 }
 
@@ -170,7 +191,12 @@ func mapUpstreamForFamily(
 // longer carries a provider wire type: each family renderer re-derives
 // its own envelope `error.type` from the neutral Class, so the wire
 // string never lives on the generic struct.
-func adapterErrorFromMapping(_ adapterRouteFamily, provider string, upstreamStatus int, mapping errcontract.UpstreamMapping) *adapterError {
+func adapterErrorFromMapping(
+	_ adapterRouteFamily,
+	provider string,
+	upstreamStatus int,
+	mapping errcontract.UpstreamMapping,
+) *adapterError {
 	return &adapterError{
 		Class:             classForMappedCode(mapping.Info.Code),
 		HTTPStatus:        mapping.HTTPStatus,
@@ -192,8 +218,14 @@ func adapterErrorFromMapping(_ adapterRouteFamily, provider string, upstreamStat
 // family mapper is registered. The shape is the conservative
 // invalid_request envelope with every known upstream field folded
 // into error.message so the chat transcript carries the diagnostic.
-func upstreamCatchAllAdapterError(provider string, upstreamStatus int, upstreamCode, upstreamMessage string) *adapterError {
+func upstreamCatchAllAdapterError(
+	provider string,
+	upstreamStatus int,
+	upstreamCode string,
+	upstreamMessage string,
+) *adapterError {
 	folded := upstreamFallbackMessage(provider, upstreamStatus, upstreamCode, upstreamMessage)
+
 	return &adapterError{
 		Class:             adapterErrorUpstreamFailed,
 		HTTPStatus:        http.StatusBadRequest,
@@ -233,29 +265,40 @@ func classForMappedCode(code string) adapterErrorClass {
 	if class, ok := adapterErrorClassByMappedCode[strings.TrimSpace(code)]; ok {
 		return class
 	}
+
 	return adapterErrorUpstreamFailed
 }
 
 // upstreamFallbackMessage folds every available upstream field into a
 // single string. The boundary uses this for the catch-all and for
 // adapterError instances built outside the mapper path.
-func upstreamFallbackMessage(provider string, upstreamStatus int, upstreamCode, upstreamMessage string) string {
+func upstreamFallbackMessage(
+	provider string,
+	upstreamStatus int,
+	upstreamCode string,
+	upstreamMessage string,
+) string {
 	parts := []string{}
 	if provider != "" {
 		parts = append(parts, "provider="+provider)
 	}
+
 	if upstreamStatus > 0 {
 		parts = append(parts, "upstream_status="+strconv.Itoa(upstreamStatus))
 	}
+
 	if upstreamCode != "" {
 		parts = append(parts, "upstream_code="+upstreamCode)
 	}
+
 	if upstreamMessage != "" {
 		parts = append(parts, "upstream_message="+upstreamMessage)
 	}
+
 	if len(parts) == 0 {
 		return "upstream call failed without diagnostic detail"
 	}
+
 	return "upstream call failed: " + strings.Join(parts, " ")
 }
 
@@ -279,9 +322,11 @@ func applyFamilyShape(family adapterRouteFamily, aerr *adapterError) *adapterErr
 	if aerr == nil {
 		return nil
 	}
+
 	if family != adapterRouteOpenAI {
 		return aerr
 	}
+
 	// auth_failed, method_not_allowed, and internal are local
 	// adapter-side rejections, not upstream failures; their status and
 	// renderer-derived envelope type are already client-correct, so the
@@ -289,9 +334,11 @@ func applyFamilyShape(family adapterRouteFamily, aerr *adapterError) *adapterErr
 	if aerr.Class == adapterErrorInternal {
 		return aerr
 	}
+
 	if aerr.Class == adapterErrorAuthFailed || aerr.Class == adapterErrorMethodNotAllowed {
 		return aerr
 	}
+
 	// baseline_missing is a local configuration failure: the daemon-owned
 	// MITM wire baseline is absent or invalid, so there is no upstream
 	// call to fold. Its HTTP 503 and operator-actionable message must
@@ -300,6 +347,7 @@ func applyFamilyShape(family adapterRouteFamily, aerr *adapterError) *adapterErr
 	if aerr.Class == adapterErrorBaselineMissing {
 		return aerr
 	}
+
 	// Anything already on HTTP 400 whose class is not the rate-limit
 	// class renders as invalid_request_error under the OpenAI renderer's
 	// class-to-type map, so it is already Cursor-safe. The rate-limit
@@ -307,10 +355,12 @@ func applyFamilyShape(family adapterRouteFamily, aerr *adapterError) *adapterErr
 	if aerr.HTTPStatus == http.StatusBadRequest && aerr.Class != adapterErrorRateLimited {
 		return aerr
 	}
+
 	folded := aerr.Message
 	if folded == "" {
 		folded = upstreamFallbackMessage(aerr.Provider, aerr.UpstreamStatus, aerr.Code, "")
 	}
+
 	aerr.HTTPStatus = http.StatusBadRequest
 	// Normalize the neutral class to upstream_failed so the renderer
 	// derives invalid_request_error. An already-typed upstream_* class
@@ -318,10 +368,13 @@ func applyFamilyShape(family adapterRouteFamily, aerr *adapterError) *adapterErr
 	if !strings.HasPrefix(string(aerr.Class), "upstream_") {
 		aerr.Class = adapterErrorUpstreamFailed
 	}
+
 	if aerr.Code == "" || aerr.Code == "server_error" {
 		aerr.Code = "upstream_failed"
 	}
+
 	aerr.Message = folded
+
 	return aerr
 }
 
@@ -344,13 +397,16 @@ func applyDocumentedShape(aerr *adapterError) *adapterError {
 	if aerr == nil {
 		return nil
 	}
+
 	if status := documentedUpstreamStatus(aerr); status > 0 {
 		aerr.HTTPStatus = status
 		return aerr
 	}
+
 	if status, ok := documentedStatusByClass[aerr.Class]; ok {
 		aerr.HTTPStatus = status
 	}
+
 	return aerr
 }
 
@@ -360,6 +416,7 @@ func documentedUpstreamStatus(aerr *adapterError) int {
 	if !adapterErrorFromUpstream(aerr) {
 		return 0
 	}
+
 	status := aerr.UpstreamStatus
 	switch {
 	case status >= http.StatusBadRequest && status < http.StatusInternalServerError:
@@ -383,5 +440,6 @@ func adapterErrorFromUpstream(aerr *adapterError) bool {
 	if strings.HasPrefix(string(aerr.Class), "upstream_") {
 		return true
 	}
+
 	return aerr.Class == adapterErrorInvalidRequest && aerr.UpstreamStatus > 0
 }

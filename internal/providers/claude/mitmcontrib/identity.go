@@ -27,6 +27,7 @@ func extractIdentity(headers http.Header) mitm.IdentityContribution {
 		contrib.ConversationID = sessionID
 		contrib.ConversationSource = conversationSourceHeader
 	}
+
 	return contrib
 }
 
@@ -36,5 +37,6 @@ func firstHeader(h http.Header, keys ...string) string {
 			return value
 		}
 	}
+
 	return ""
 }

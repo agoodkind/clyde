@@ -41,6 +41,7 @@ func DecodeLegacyChatDataJSON(data []byte) (LegacyChatData, error) {
 	if err := json.Unmarshal(data, &chatData); err != nil {
 		return LegacyChatData{}, CursorJSONDecodeError{Description: "legacy chat data", Err: err}
 	}
+
 	return chatData, nil
 }
 
@@ -52,9 +53,18 @@ func ReadLegacyChatData(ctx context.Context, workspaceDB *sql.DB) (LegacyChatDat
 	value, found, err := ReadKVValue(ctx, workspaceDB, KVTableItemTable, legacyChatDataKey)
 	if err != nil {
 		logger := discoveryReadLogger(ctx)
-		logger.WarnContext(ctx, "providers.cursor.store.legacy_chat_read_failed", "concern", concern, "err", err)
+		logger.WarnContext(
+			ctx,
+			"providers.cursor.store.legacy_chat_read_failed",
+			"concern",
+			concern,
+			"err",
+			err,
+		)
+
 		return emptyData, false, fmt.Errorf("read cursor legacy chat data: %w", err)
 	}
+
 	if !found {
 		return emptyData, false, nil
 	}
@@ -62,8 +72,17 @@ func ReadLegacyChatData(ctx context.Context, workspaceDB *sql.DB) (LegacyChatDat
 	chatData, err := DecodeLegacyChatDataJSON(value)
 	if err != nil {
 		logger := discoveryReadLogger(ctx)
-		logger.WarnContext(ctx, "providers.cursor.store.legacy_chat_decode_failed", "concern", concern, "err", err)
+		logger.WarnContext(
+			ctx,
+			"providers.cursor.store.legacy_chat_decode_failed",
+			"concern",
+			concern,
+			"err",
+			err,
+		)
+
 		return emptyData, false, fmt.Errorf("decode cursor legacy chat data: %w", err)
 	}
+
 	return chatData, true, nil
 }

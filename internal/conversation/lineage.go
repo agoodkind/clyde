@@ -41,16 +41,19 @@ func (lineage *Lineage) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return fmt.Errorf("decode conversation lineage: %w", err)
 	}
+
 	parentProvider, err := decodeRecordProvider(wire.ParentProvider)
 	if err != nil {
 		return fmt.Errorf("decode conversation lineage parent provider: %w", err)
 	}
+
 	*lineage = Lineage{
 		Kind:              wire.Kind,
 		ParentProvider:    parentProvider,
 		ParentNativeID:    wire.ParentNativeID,
 		ParentMessageUUID: wire.ParentMessageUUID,
 	}
+
 	return nil
 }
 
@@ -69,9 +72,11 @@ func ParentConversationID(record Record) (string, bool) {
 	if record.Lineage == nil {
 		return "", false
 	}
+
 	if record.Lineage.ParentNativeID == "" {
 		return "", false
 	}
+
 	return DerivedID(record.Lineage.ParentProvider, record.Lineage.ParentNativeID, ""), true
 }
 
@@ -86,17 +91,21 @@ func ResolveForkParent(ctx context.Context, idx *Index, record Record) (Record, 
 	if idx == nil {
 		return emptyRecord(), false, nil
 	}
+
 	if record.Lineage == nil || record.Lineage.Kind != ConversationLineageKindFork {
 		return emptyRecord(), false, nil
 	}
+
 	parentID, ok := ParentConversationID(record)
 	if !ok {
 		return emptyRecord(), false, nil
 	}
+
 	parent, found := idx.RecordByID(parentID)
 	if !found {
 		return emptyRecord(), false, nil
 	}
+
 	return parent, true, nil
 }
 

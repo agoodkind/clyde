@@ -53,47 +53,69 @@ type withheldRequest struct {
 }
 
 // searchCompletedRecords returns each distinct search_completed record logged at or after since under the state roots. Records with the same trace ID and time in two log files count once.
-func searchCompletedRecords(t *testing.T, stateRoots []string, since time.Time) []withheldSearchRecord {
+func searchCompletedRecords(
+	t *testing.T,
+	stateRoots []string,
+	since time.Time,
+) []withheldSearchRecord {
 	t.Helper()
 	records := []withheldSearchRecord{}
 	seen := map[string]bool{}
 	for _, stateRoot := range stateRoots {
-		walkErr := filepath.WalkDir(stateRoot, func(path string, entry fs.DirEntry, err error) error {
-			if err != nil {
-				if errors.Is(err, fs.ErrNotExist) {
+		walkErr := filepath.WalkDir(
+			stateRoot,
+			func(path string, entry fs.DirEntry, err error) error {
+				if err != nil {
+					if errors.Is(err, fs.ErrNotExist) {
+						return nil
+					}
+					return err
+				}
+				if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
 					return nil
 				}
-				return err
-			}
-			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+				content, readErr := os.ReadFile(path)
+				if readErr != nil {
+					return readErr
+				}
+				for line := range strings.Lines(string(content)) {
+					if !strings.Contains(line, withheldSearchEvent) {
+						continue
+					}
+					var record struct {
+						Time       time.Time `json:"time"`
+						Message    string    `json:"msg"`
+						TraceID    string    `json:"trace_id"`
+						Candidates int       `json:"candidates"`
+						Hits       int       `json:"hits"`
+					}
+					if decodeErr := json.Unmarshal([]byte(line), &record); decodeErr != nil {
+						return fmt.Errorf(
+							"decode %s record in %s: %w",
+							withheldSearchEvent,
+							path,
+							decodeErr,
+						)
+					}
+					call := record.TraceID + " " + record.Time.Format(time.RFC3339Nano)
+					if record.Message == withheldSearchEvent && !record.Time.Before(since) &&
+						!seen[call] {
+						seen[call] = true
+						records = append(
+							records,
+							withheldSearchRecord{
+								path:       path,
+								traceID:    record.TraceID,
+								time:       record.Time,
+								candidates: record.Candidates,
+								hits:       record.Hits,
+							},
+						)
+					}
+				}
 				return nil
-			}
-			content, readErr := os.ReadFile(path)
-			if readErr != nil {
-				return readErr
-			}
-			for line := range strings.Lines(string(content)) {
-				if !strings.Contains(line, withheldSearchEvent) {
-					continue
-				}
-				var record struct {
-					Time       time.Time `json:"time"`
-					Message    string    `json:"msg"`
-					TraceID    string    `json:"trace_id"`
-					Candidates int       `json:"candidates"`
-					Hits       int       `json:"hits"`
-				}
-				if decodeErr := json.Unmarshal([]byte(line), &record); decodeErr != nil {
-					return fmt.Errorf("decode %s record in %s: %w", withheldSearchEvent, path, decodeErr)
-				}
-				call := record.TraceID + " " + record.Time.Format(time.RFC3339Nano)
-				if record.Message == withheldSearchEvent && !record.Time.Before(since) && !seen[call] {
-					seen[call] = true
-					records = append(records, withheldSearchRecord{path: path, traceID: record.TraceID, time: record.Time, candidates: record.Candidates, hits: record.Hits})
-				}
-			}
-			return nil
-		})
+			},
+		)
 		if walkErr != nil {
 			t.Fatalf("read daemon logs under %s: %v", stateRoot, walkErr)
 		}
@@ -102,11 +124,21 @@ func searchCompletedRecords(t *testing.T, stateRoots []string, since time.Time) 
 }
 
 // timedWithheldSearch runs one search and appends its start time, end time, label, and expected engine call count to requests.
-func timedWithheldSearch(t *testing.T, surface localProofSurface, request localProofSearchRequest, label string, calls int, requests *[]withheldRequest) localProofSearchOutput {
+func timedWithheldSearch(
+	t *testing.T,
+	surface localProofSurface,
+	request localProofSearchRequest,
+	label string,
+	calls int,
+	requests *[]withheldRequest,
+) localProofSearchOutput {
 	t.Helper()
 	start := time.Now()
 	result := mustLocalProofSearch(t, surface, request)
-	*requests = append(*requests, withheldRequest{label: label, start: start, end: time.Now(), calls: calls})
+	*requests = append(
+		*requests,
+		withheldRequest{label: label, start: start, end: time.Now(), calls: calls},
+	)
 	return result
 }
 
@@ -118,11 +150,20 @@ func assertWithheldCalls(t *testing.T, records []withheldSearchRecord, requests 
 		traces[position] = map[string]int{}
 	}
 	for _, record := range records {
-		position := slices.IndexFunc(requests, func(request withheldRequest) bool {
-			return !record.time.Before(request.start) && !record.time.After(request.end)
-		})
+		position := slices.IndexFunc(
+			requests,
+			func(request withheldRequest) bool {
+				return !record.time.Before(request.start) && !record.time.After(request.end)
+			},
+		)
 		if position < 0 {
-			t.Errorf("%s record at %s with trace %s falls outside every completed request (%s)", withheldSearchEvent, record.time.Format(time.RFC3339Nano), record.traceID, record.path)
+			t.Errorf(
+				"%s record at %s with trace %s falls outside every completed request (%s)",
+				withheldSearchEvent,
+				record.time.Format(time.RFC3339Nano),
+				record.traceID,
+				record.path,
+			)
 			continue
 		}
 		traces[position][record.traceID]++
@@ -132,12 +173,25 @@ func assertWithheldCalls(t *testing.T, records []withheldSearchRecord, requests 
 			continue
 		}
 		if len(traces[position]) != 1 {
-			t.Errorf("%s logged %s records under %d traces, want 1: %v", request.label, withheldSearchEvent, len(traces[position]), traces[position])
+			t.Errorf(
+				"%s logged %s records under %d traces, want 1: %v",
+				request.label,
+				withheldSearchEvent,
+				len(traces[position]),
+				traces[position],
+			)
 			continue
 		}
 		for traceID, count := range traces[position] {
 			if count != request.calls {
-				t.Errorf("%s logged %d %s records under trace %s, want %d", request.label, count, withheldSearchEvent, traceID, request.calls)
+				t.Errorf(
+					"%s logged %d %s records under trace %s, want %d",
+					request.label,
+					count,
+					withheldSearchEvent,
+					traceID,
+					request.calls,
+				)
 			}
 		}
 	}
@@ -153,16 +207,38 @@ func TestMilvusSearchSkipsFirstRetryForWithheldHits(t *testing.T) {
 	if baseURL == "" {
 		baseURL = deletedSourceEmbeddingDefault
 	}
-	settingsPath := writeSandboxSemanticSettings(t, fmt.Sprintf(withheldSettings, address, baseURL, deletedSourceEmbeddingModel, deletedSourceEmbeddingDim))
+	settingsPath := writeSandboxSemanticSettings(
+		t,
+		fmt.Sprintf(
+			withheldSettings,
+			address,
+			baseURL,
+			deletedSourceEmbeddingModel,
+			deletedSourceEmbeddingDim,
+		),
+	)
 	binaryPath := buildClydeCLI(t)
 	home := writeLocalProofHome(t)
-	sandboxDaemon := startLocalProofDaemon(t, binaryPath, home, "--keep", "--ingestion-enabled", "--search-enabled", "--semantic-settings", settingsPath)
+	sandboxDaemon := startLocalProofDaemon(
+		t,
+		binaryPath,
+		home,
+		"--keep",
+		"--ingestion-enabled",
+		"--search-enabled",
+		"--semantic-settings",
+		settingsPath,
+	)
 	// The sandbox keeps its logs after the daemon exits. Cleanup stops the daemon, then deletes the kept root only if it is a sandbox temp directory.
 	t.Cleanup(func() {
 		sandboxDaemon.stop()
 		base := sandboxDaemon.roots.Base
-		if !sandbox.UnderTempRoot(base) || !strings.HasPrefix(filepath.Base(base), sandbox.RootPattern) {
-			t.Errorf("kept sandbox root %s is not a sandbox temp directory; leaving it in place", base)
+		if !sandbox.UnderTempRoot(base) ||
+			!strings.HasPrefix(filepath.Base(base), sandbox.RootPattern) {
+			t.Errorf(
+				"kept sandbox root %s is not a sandbox temp directory; leaving it in place",
+				base,
+			)
 			return
 		}
 		if err := os.RemoveAll(base); err != nil {
@@ -172,31 +248,82 @@ func TestMilvusSearchSkipsFirstRetryForWithheldHits(t *testing.T) {
 	waitForProofRowsFrom(t, sandboxDaemon, localProofSourceSemantic)
 
 	stateRoots := []string{filepath.Join(home, ".local", "state"), sandboxDaemon.roots.State}
-	request := localProofSearchRequest{Query: withheldQuery, Limit: withheldLimit, Offset: 0, IncludeArchived: false}
+	request := localProofSearchRequest{
+		Query:           withheldQuery,
+		Limit:           withheldLimit,
+		Offset:          0,
+		IncludeArchived: false,
+	}
 	archivedRequest := request
 	archivedRequest.IncludeArchived = true
 	requests := []withheldRequest{}
 	for _, surface := range sandboxDaemon.surfaces() {
-		archived := timedWithheldSearch(t, surface, archivedRequest, surface.name+" with archived conversations", withheldAnyCalls, &requests)
+		archived := timedWithheldSearch(
+			t,
+			surface,
+			archivedRequest,
+			surface.name+" with archived conversations",
+			withheldAnyCalls,
+			&requests,
+		)
 		if len(archived.Matches) != withheldLimit || !archived.Matches[0].Conversation.Archived {
-			t.Fatalf("%s with archived conversations returned %v, want the archived rollout first", surface.name, localProofMatchKeys(archived.Matches))
+			t.Fatalf(
+				"%s with archived conversations returned %v, want the archived rollout first",
+				surface.name,
+				localProofMatchKeys(archived.Matches),
+			)
 		}
 		result := timedWithheldSearch(t, surface, request, surface.name, 1, &requests)
 		if result.Source != localProofSourceSemantic || len(result.Matches) != withheldLimit {
-			t.Fatalf("%s returned source %q and %d matches, want %q and %d", surface.name, result.Source, len(result.Matches), localProofSourceSemantic, withheldLimit)
+			t.Fatalf(
+				"%s returned source %q and %d matches, want %q and %d",
+				surface.name,
+				result.Source,
+				len(result.Matches),
+				localProofSourceSemantic,
+				withheldLimit,
+			)
 		}
-		if slices.ContainsFunc(result.Matches, func(match localProofMatch) bool { return match.Conversation.Archived }) {
-			t.Fatalf("%s returned an archived match without include-archived: %v", surface.name, localProofMatchKeys(result.Matches))
+		if slices.ContainsFunc(
+			result.Matches,
+			func(match localProofMatch) bool { return match.Conversation.Archived },
+		) {
+			t.Fatalf(
+				"%s returned an archived match without include-archived: %v",
+				surface.name,
+				localProofMatchKeys(result.Matches),
+			)
 		}
 		for _, after := range []string{withheldDatedAfter, withheldEpochAfter} {
 			datedRequest := request
 			datedRequest.After = after
-			dated := timedWithheldSearch(t, surface, datedRequest, surface.name+" with --after "+after, withheldDatedCalls, &requests)
-			if !slices.Equal(localProofMatchKeys(dated.Matches), localProofMatchKeys(result.Matches)) {
-				t.Fatalf("%s with --after %s returned %v, want %v", surface.name, after, localProofMatchKeys(dated.Matches), localProofMatchKeys(result.Matches))
+			dated := timedWithheldSearch(
+				t,
+				surface,
+				datedRequest,
+				surface.name+" with --after "+after,
+				withheldDatedCalls,
+				&requests,
+			)
+			if !slices.Equal(
+				localProofMatchKeys(dated.Matches),
+				localProofMatchKeys(result.Matches),
+			) {
+				t.Fatalf(
+					"%s with --after %s returned %v, want %v",
+					surface.name,
+					after,
+					localProofMatchKeys(dated.Matches),
+					localProofMatchKeys(result.Matches),
+				)
 			}
 		}
-		t.Logf("%s returned %v; with archived conversations it returned %v", surface.name, localProofMatchKeys(result.Matches), localProofMatchKeys(archived.Matches))
+		t.Logf(
+			"%s returned %v; with archived conversations it returned %v",
+			surface.name,
+			localProofMatchKeys(result.Matches),
+			localProofMatchKeys(archived.Matches),
+		)
 	}
 	sandboxDaemon.stop()
 	records := searchCompletedRecords(t, stateRoots, requests[0].start)

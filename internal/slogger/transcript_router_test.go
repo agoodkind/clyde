@@ -25,6 +25,7 @@ func newTestRouter(t *testing.T, poolCap int) (*TranscriptRouter, string) {
 			t.Logf("router close err: %v", err)
 		}
 	})
+
 	return r, root
 }
 
@@ -40,7 +41,10 @@ func handleRecord(t *testing.T, r *TranscriptRouter, msg string, attrs ...slog.A
 func TestTranscriptRouterDropsNonAllowlistedMsg(t *testing.T) {
 	t.Parallel()
 	r, root := newTestRouter(t, 0)
-	handleRecord(t, r, "adapter.unrelated.event",
+	handleRecord(
+		t,
+		r,
+		"adapter.unrelated.event",
 		slog.String("chat_key", "abc"),
 		slog.String("request_id", "req-1"),
 	)
@@ -53,9 +57,7 @@ func TestTranscriptRouterDropsNonAllowlistedMsg(t *testing.T) {
 func TestTranscriptRouterDropsRecordWithoutChatKey(t *testing.T) {
 	t.Parallel()
 	r, root := newTestRouter(t, 0)
-	handleRecord(t, r, "logging.request.leg",
-		slog.String("request_id", "req-1"),
-	)
+	handleRecord(t, r, "logging.request.leg", slog.String("request_id", "req-1"))
 	entries, _ := os.ReadDir(root)
 	if len(entries) != 0 {
 		t.Fatalf("record without chat_key created files: %v", entries)
@@ -65,7 +67,10 @@ func TestTranscriptRouterDropsRecordWithoutChatKey(t *testing.T) {
 func TestTranscriptRouterSanitizesPathTraversal(t *testing.T) {
 	t.Parallel()
 	r, root := newTestRouter(t, 0)
-	handleRecord(t, r, "logging.request.leg",
+	handleRecord(
+		t,
+		r,
+		"logging.request.leg",
 		slog.String("chat_key", "../../etc/passwd"),
 		slog.String("request_id", "req-1"),
 	)
@@ -74,6 +79,7 @@ func TestTranscriptRouterSanitizesPathTraversal(t *testing.T) {
 	if _, err := os.Stat(chatFile); err != nil {
 		t.Fatalf("expected sanitized chat file, stat err: %v", err)
 	}
+
 	if _, err := os.Stat(filepath.Join(root, "..", "etc", "passwd")); err == nil {
 		t.Fatalf("traversal escaped root")
 	}
@@ -82,7 +88,10 @@ func TestTranscriptRouterSanitizesPathTraversal(t *testing.T) {
 func TestTranscriptRouterStripsLegacyBodyFields(t *testing.T) {
 	t.Parallel()
 	r, root := newTestRouter(t, 0)
-	handleRecord(t, r, "logging.request.leg",
+	handleRecord(
+		t,
+		r,
+		"logging.request.leg",
 		slog.String("chat_key", "k1"),
 		slog.String("request_id", "req-1"),
 		slog.String("body", "secret"),
@@ -93,19 +102,24 @@ func TestTranscriptRouterStripsLegacyBodyFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read transcript: %v", err)
 	}
+
 	if strings.Contains(string(data), "secret") {
 		t.Fatalf("fixed transcript policy leaked body: %s", data)
 	}
+
 	var decoded map[string]json.RawMessage
 	if err := json.Unmarshal(data[:len(data)-1], &decoded); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
+
 	if _, present := decoded["body"]; present {
 		t.Fatalf("body field not stripped: %s", data)
 	}
+
 	if _, present := decoded["body_b64"]; present {
 		t.Fatalf("body_b64 field not stripped: %s", data)
 	}
+
 	if _, present := decoded["model"]; !present {
 		t.Fatalf("model field stripped unexpectedly: %s", data)
 	}
@@ -114,7 +128,10 @@ func TestTranscriptRouterStripsLegacyBodyFields(t *testing.T) {
 func TestTranscriptRouterAlwaysStripsBodyFields(t *testing.T) {
 	t.Parallel()
 	r, root := newTestRouter(t, 0)
-	handleRecord(t, r, "logging.request.leg",
+	handleRecord(
+		t,
+		r,
+		"logging.request.leg",
 		slog.String("chat_key", "k1"),
 		slog.String("request_id", "req-1"),
 		slog.String("body", "raw-body"),
@@ -123,6 +140,7 @@ func TestTranscriptRouterAlwaysStripsBodyFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
+
 	if strings.Contains(string(data), "raw-body") {
 		t.Fatalf("fixed transcript policy leaked body: %s", data)
 	}
@@ -131,18 +149,24 @@ func TestTranscriptRouterAlwaysStripsBodyFields(t *testing.T) {
 func TestTranscriptRouterLRUEviction(t *testing.T) {
 	t.Parallel()
 	r, root := newTestRouter(t, 2)
+
 	for i, key := range []string{"a", "b", "c"} {
-		handleRecord(t, r, "logging.request.leg",
+		handleRecord(
+			t,
+			r,
+			"logging.request.leg",
 			slog.String("chat_key", key),
 			slog.String("request_id", "req-"+string(rune('0'+i))),
 		)
 	}
+
 	r.state.mu.Lock()
 	cacheSize := len(r.state.cache)
 	r.state.mu.Unlock()
 	if cacheSize != 2 {
 		t.Fatalf("cache should be capped at 2, got %d", cacheSize)
 	}
+
 	// All three files exist on disk; eviction only closes the LRU handle.
 	for _, key := range []string{"a", "b", "c"} {
 		if _, err := os.Stat(filepath.Join(root, key+".jsonl")); err != nil {
@@ -157,29 +181,39 @@ func TestTranscriptRouterConcurrentWriters(t *testing.T) {
 	var wg sync.WaitGroup
 	const writers = 16
 	const perWriter = 25
+
 	for w := 0; w < writers; w++ {
 		wg.Add(1)
 		go func(wid int) {
 			defer wg.Done()
+
 			for i := 0; i < perWriter; i++ {
-				handleRecord(t, r, "logging.request.leg",
+				handleRecord(
+					t,
+					r,
+					"logging.request.leg",
 					slog.String("chat_key", "shared"),
 					slog.String("request_id", "req-shared"),
 					slog.Int("writer", wid),
 					slog.Int("seq", i),
 				)
 			}
-		}(w)
+		}(
+			w,
+		)
 	}
+
 	wg.Wait()
 	data, err := os.ReadFile(filepath.Join(root, "shared.jsonl"))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
+
 	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
 	if len(lines) != writers*perWriter {
 		t.Fatalf("expected %d lines, got %d", writers*perWriter, len(lines))
 	}
+
 	for i, line := range lines {
 		var decoded map[string]json.RawMessage
 		if err := json.Unmarshal([]byte(line), &decoded); err != nil {
@@ -190,6 +224,7 @@ func TestTranscriptRouterConcurrentWriters(t *testing.T) {
 
 func TestSanitizeChatKey(t *testing.T) {
 	t.Parallel()
+
 	cases := map[string]string{
 		"":                  "",
 		"   ":               "",

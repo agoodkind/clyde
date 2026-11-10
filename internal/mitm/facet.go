@@ -36,24 +36,31 @@ func (f Facet) FacetAttrs() []slog.Attr {
 	if f.Concern != "" {
 		attrs = append(attrs, slog.String("concern", f.Concern))
 	}
+
 	if f.Transport != "" {
 		attrs = append(attrs, slog.String("transport", f.Transport))
 	}
+
 	if f.Direction != "" {
 		attrs = append(attrs, slog.String("direction", f.Direction))
 	}
+
 	if f.Sequence > 0 {
 		attrs = append(attrs, slog.Int("sequence", f.Sequence))
 	}
+
 	if f.CloseReason != "" {
 		attrs = append(attrs, slog.String("close_reason", f.CloseReason))
 	}
+
 	if f.RequestContentType != "" {
 		attrs = append(attrs, slog.String("request_content_type", f.RequestContentType))
 	}
+
 	if f.ResponseContentType != "" {
 		attrs = append(attrs, slog.String("response_content_type", f.ResponseContentType))
 	}
+
 	return attrs
 }
 

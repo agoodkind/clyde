@@ -34,6 +34,7 @@ func normalizeAnthropicLogRotation(rotation FileLogRotationConfig) FileLogRotati
 		MaxAgeDays: rotation.MaxAgeDays,
 		Compress:   rotation.Compress,
 	})
+
 	return FileLogRotationConfig{
 		MaxSizeMB:  normalized.MaxSizeMB,
 		MaxBackups: normalized.MaxBackups,
@@ -44,6 +45,7 @@ func normalizeAnthropicLogRotation(rotation FileLogRotationConfig) FileLogRotati
 
 func (c FileLogRotationConfig) toGKLog() gklog.RotationConfig {
 	c = normalizeAnthropicLogRotation(c)
+
 	return gklog.RotationConfig{
 		MaxSizeMB:  c.MaxSizeMB,
 		MaxBackups: c.MaxBackups,
@@ -64,16 +66,20 @@ type rateLimitAttr struct {
 // rateLimitAttrs extracts vendor rate-limit headers as typed pairs for logging.
 func rateLimitAttrs(h http.Header) []rateLimitAttr {
 	attrs := make([]rateLimitAttr, 0, 8)
+
 	for key, values := range h {
 		lower := strings.ToLower(key)
 		if !strings.HasPrefix(lower, "anthropic-ratelimit-") {
 			continue
 		}
+
 		if len(values) == 0 {
 			continue
 		}
+
 		attrs = append(attrs, rateLimitAttr{Name: lower, Value: values[0]})
 	}
+
 	return attrs
 }
 
@@ -100,6 +106,7 @@ func ConfigureAnthropicFileLogger(rotation FileLogRotationConfig) {
 	if fileLogger != nil {
 		return
 	}
+
 	fileLoggerRotation = normalizeAnthropicLogRotation(rotation)
 }
 
@@ -111,6 +118,7 @@ func LogPath() string {
 	if p := os.Getenv("CLYDE_ANTHROPIC_LOG_PATH"); p != "" {
 		return p
 	}
+
 	return filepath.Join(config.DefaultStateDir(), "anthropic.jsonl")
 }
 
@@ -122,12 +130,15 @@ func dedicatedLogger() *slog.Logger {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return
 		}
+
 		handler := gklog.FileJSON(path, slog.LevelDebug, fileLoggerRotation.toGKLog())
 		if closer, ok := handler.(io.Closer); ok {
 			fileLoggerCloser = closer
 		}
+
 		fileLogger = slog.New(handler)
 	})
+
 	return fileLogger
 }
 
@@ -166,27 +177,35 @@ func (e responseEvent) toSlogAttrs() []slog.Attr {
 	if e.Subcomponent != "" {
 		attrs = append(attrs, slog.String("subcomponent", e.Subcomponent))
 	}
+
 	if e.Model != "" {
 		attrs = append(attrs, slog.String("model", e.Model))
 	}
+
 	if e.Status != 0 {
 		attrs = append(attrs, slog.Int("status", e.Status))
 	}
+
 	if e.RequestID != "" {
 		attrs = append(attrs, slog.String("request_id", e.RequestID))
 	}
+
 	attrs = append(attrs, slog.Int("request_bytes", e.RequestBytes))
 	attrs = append(attrs, slog.Int("response_bytes", e.ResponseBytes))
+
 	attrs = append(attrs, slog.Int64("duration_ms", e.DurationMs))
 	for _, r := range e.RateLimits {
 		attrs = append(attrs, slog.String(r.Name, r.Value))
 	}
+
 	if e.RetryAfter != "" {
 		attrs = append(attrs, slog.String("retry_after", e.RetryAfter))
 	}
+
 	if e.Err != "" {
 		attrs = append(attrs, slog.String("err", e.Err))
 	}
+
 	return attrs
 }
 
@@ -196,7 +215,10 @@ func (e responseEvent) toSlogAttrs() []slog.Attr {
 // injected at the wrapper boundary so the per-concern router routes
 // every Anthropic response event into the request file.
 func logResponse(ctx context.Context, level slog.Level, event string, e responseEvent) {
-	attrs := append([]slog.Attr{slog.String("concern", "adapter.providers.anthropic.request")}, e.toSlogAttrs()...)
+	attrs := append(
+		[]slog.Attr{slog.String("concern", "adapter.providers.anthropic.request")},
+		e.toSlogAttrs()...,
+	)
 	slog.Default().LogAttrs(ctx, level, event, attrs...)
 	if l := dedicatedLogger(); l != nil {
 		l.LogAttrs(ctx, level, event, attrs...)

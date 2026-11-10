@@ -148,24 +148,52 @@ func (content *ToolUseResultContent) UnmarshalJSON(data []byte) error {
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
 		return nil
 	}
+
 	switch trimmed[0] {
 	case '"':
 		if err := json.Unmarshal(trimmed, &content.Text); err != nil {
-			slog.Debug("providers.claude.parser.tool_use_result_content_text_failed", "concern", concern, "component", "claude", "err", err)
+			slog.Debug(
+				"providers.claude.parser.tool_use_result_content_text_failed",
+				"concern",
+				concern,
+				"component",
+				"claude",
+				"err",
+				err,
+			)
 			content.Decode = FieldDecodePartial
 			content.Raw = append(json.RawMessage(nil), data...)
 		}
+
 		return nil
 	case '[':
 		if err := json.Unmarshal(trimmed, &content.Blocks); err != nil {
-			slog.Debug("providers.claude.parser.tool_use_result_content_blocks_failed", "concern", concern, "component", "claude", "err", err)
+			slog.Debug(
+				"providers.claude.parser.tool_use_result_content_blocks_failed",
+				"concern",
+				concern,
+				"component",
+				"claude",
+				"err",
+				err,
+			)
 			content.Decode = FieldDecodePartial
 			content.Raw = append(json.RawMessage(nil), data...)
 		}
+
 		return nil
 	default:
-		slog.Debug("providers.claude.parser.tool_use_result_content_unsupported", "concern", concern, "component", "claude", "shape", string(trimmed[:1]))
+		slog.Debug(
+			"providers.claude.parser.tool_use_result_content_unsupported",
+			"concern",
+			concern,
+			"component",
+			"claude",
+			"shape",
+			string(trimmed[:1]),
+		)
 		content.Raw = append(json.RawMessage(nil), data...)
+
 		return nil
 	}
 }
@@ -208,6 +236,7 @@ func (content *ToolUseResultContent) SearchableText() (string, FieldDecode) {
 				lines = append(lines, block.Text)
 			}
 		}
+
 		return strings.Join(lines, "\n"), content.Decode
 	default:
 		return string(content.Raw), content.Decode
@@ -241,36 +270,75 @@ func (result *ToolUseResult) UnmarshalJSON(data []byte) error {
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
 		return nil
 	}
+
 	result.Raw = append(json.RawMessage(nil), data...)
 	switch trimmed[0] {
 	case '"':
 		result.Kind = ToolUseResultKindText
 		if err := json.Unmarshal(trimmed, &result.Text); err != nil {
-			slog.Debug("providers.claude.parser.tool_use_result_text_failed", "concern", concern, "component", "claude", "err", err)
+			slog.Debug(
+				"providers.claude.parser.tool_use_result_text_failed",
+				"concern",
+				concern,
+				"component",
+				"claude",
+				"err",
+				err,
+			)
 			result.Decode = FieldDecodePartial
 		}
+
 		return nil
 	case '{':
 		result.Kind = ToolUseResultKindDetail
 		var detail ToolUseResultDetail
 		if err := json.Unmarshal(trimmed, &detail); err != nil {
-			slog.Debug("providers.claude.parser.tool_use_result_detail_failed", "concern", concern, "component", "claude", "err", err)
+			slog.Debug(
+				"providers.claude.parser.tool_use_result_detail_failed",
+				"concern",
+				concern,
+				"component",
+				"claude",
+				"err",
+				err,
+			)
 			result.Decode = FieldDecodePartial
 		}
+
 		result.Detail = &detail
+
 		return nil
 	case '[':
 		result.Kind = ToolUseResultKindBlocks
 		var blocks []ToolUseResultBlock
 		if err := json.Unmarshal(trimmed, &blocks); err != nil {
-			slog.Debug("providers.claude.parser.tool_use_result_blocks_failed", "concern", concern, "component", "claude", "err", err)
+			slog.Debug(
+				"providers.claude.parser.tool_use_result_blocks_failed",
+				"concern",
+				concern,
+				"component",
+				"claude",
+				"err",
+				err,
+			)
 			result.Decode = FieldDecodePartial
 		}
+
 		result.Blocks = blocks
+
 		return nil
 	default:
-		slog.Debug("providers.claude.parser.tool_use_result_unsupported", "concern", concern, "component", "claude", "shape", string(trimmed[:1]))
+		slog.Debug(
+			"providers.claude.parser.tool_use_result_unsupported",
+			"concern",
+			concern,
+			"component",
+			"claude",
+			"shape",
+			string(trimmed[:1]),
+		)
 		result.Kind = ToolUseResultKindUnsupported
+
 		return nil
 	}
 }
