@@ -387,7 +387,6 @@ func readChangedGlobalDiscovery(
 	refreshPath := selection.refreshPath
 	newRows := selection.newRows
 	changedComposerIDs := selection.changedComposerIDs
-	selectors := selection.selectors
 	selectorQueries := selection.selectorQueries
 	selectorErr := selection.err
 	if selectorErr == nil {
@@ -427,42 +426,13 @@ func readChangedGlobalDiscovery(
 		return cached.data, signature, nil, true
 	}
 
-	var stocks map[string]ComposerBubbleStock
-	var stockStats composerStockRefreshStats
-	stockErr := selectorErr
-	if stockErr == nil {
-		projectionStarted := clock.Now()
-		if refreshPath == bubbleRefreshPathFull {
-			stocks, selectors, stockStats, stockErr = refreshComposerBubbleStocksInSnapshot(
-				ctx,
-				snapshot,
-				selectors,
-				cached.data.Stocks,
-				cached.data.selectors,
-			)
-		} else {
-			stocks, stockStats, stockErr = refreshChangedComposerBubbleStocks(
-				ctx,
-				snapshot,
-				changedComposerIDs,
-				selectors,
-				cached.data.Stocks,
-			)
-		}
-
-		if stockErr == nil {
-			stockStats.selectorQueries = selectorQueries
-			logComposerStockRefresh(
-				ctx,
-				refreshPath,
-				newRows,
-				len(changedComposerIDs),
-				selectorDuration,
-				clock.Since(projectionStarted),
-				stockStats,
-			)
-		}
-	}
+	stocks, selectors, stockErr := refreshSelectedComposerStocks(
+		ctx,
+		snapshot,
+		cached,
+		selection,
+		selectorDuration,
+	)
 
 	snapshot.rollback()
 	data := refreshGlobalDatabase(ctx, db, cached.data, inventory, stocks, selectors, stockErr)
@@ -480,6 +450,54 @@ func readChangedGlobalDiscovery(
 	}
 
 	return data, signature, refreshErr, false
+}
+
+func refreshSelectedComposerStocks(
+	ctx context.Context,
+	snapshot readSnapshot,
+	cached *globalCacheEntry,
+	selection bubbleRefreshSelection,
+	selectorDuration time.Duration,
+) (map[string]ComposerBubbleStock, map[string]composerBubbleSelector, error) {
+	selectors := selection.selectors
+	var stocks map[string]ComposerBubbleStock
+	var stockStats composerStockRefreshStats
+	stockErr := selection.err
+	if stockErr == nil {
+		projectionStarted := clock.Now()
+		if selection.refreshPath == bubbleRefreshPathFull {
+			stocks, selectors, stockStats, stockErr = refreshComposerBubbleStocksInSnapshot(
+				ctx,
+				snapshot,
+				selectors,
+				cached.data.Stocks,
+				cached.data.selectors,
+			)
+		} else {
+			stocks, stockStats, stockErr = refreshChangedComposerBubbleStocks(
+				ctx,
+				snapshot,
+				selection.changedComposerIDs,
+				selectors,
+				cached.data.Stocks,
+			)
+		}
+
+		if stockErr == nil {
+			stockStats.selectorQueries = selection.selectorQueries
+			logComposerStockRefresh(
+				ctx,
+				selection.refreshPath,
+				selection.newRows,
+				len(selection.changedComposerIDs),
+				selectorDuration,
+				clock.Since(projectionStarted),
+				stockStats,
+			)
+		}
+	}
+
+	return stocks, selectors, stockErr
 }
 
 type bubbleRefreshSelection struct {
