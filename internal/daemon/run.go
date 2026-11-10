@@ -202,24 +202,7 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 	// while the distiller still reads the daemon log.
 	metricsWorker := startMetricsRollupWorker(ctx, log, runtime.group)
 
-	grpcServer := grpc.NewServer(
-		grpc.MaxRecvMsgSize(controlMaxMessageBytes),
-		grpc.MaxSendMsgSize(controlMaxMessageBytes),
-	)
-	clydev1.RegisterClydeServiceServer(
-		grpcServer,
-		newControlServer(
-			cfg,
-			log,
-			stats,
-			conversationIndex,
-			runtime.searchFreshness,
-			grpcServer,
-			runtime,
-			exportTokens,
-		),
-	)
-	registerConversationContextService(grpcServer, conversationIndex)
+	grpcServer := newDaemonGRPCServer(cfg, log, stats, conversationIndex, runtime, exportTokens)
 	grpcDone := make(chan error, 1)
 	go func() {
 		defer func() {
@@ -255,20 +238,7 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 		return fmt.Errorf("signal daemon readiness: %w", err)
 	}
 
-	log.InfoContext(
-		ctx,
-		"daemon.worker.ready",
-		"concern",
-		"process.daemon.lifecycle",
-		"component",
-		"daemon",
-		"adapter_enabled",
-		cfg.Adapter.Enabled,
-		"mitm_enabled",
-		cfg.MITM.EnabledDefault,
-		"conversation_semantic_enabled",
-		runtime.semantic != nil,
-	)
+	logDaemonWorkerReady(ctx, log, cfg, runtime)
 	// Start the config watcher only after readiness so a config edit landing
 	// during boot cannot trigger a reload before this worker is the
 	// established generation.
@@ -293,6 +263,58 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 
 		return nil
 	}
+}
+
+func newDaemonGRPCServer(
+	cfg *config.Config,
+	log *slog.Logger,
+	stats *providerStatsRecorder,
+	conversationIndex *conversation.Index,
+	runtime *runtimeServices,
+	exportTokens exportTokenConfig,
+) *grpc.Server {
+	grpcServer := grpc.NewServer(
+		grpc.MaxRecvMsgSize(controlMaxMessageBytes),
+		grpc.MaxSendMsgSize(controlMaxMessageBytes),
+	)
+	clydev1.RegisterClydeServiceServer(
+		grpcServer,
+		newControlServer(
+			cfg,
+			log,
+			stats,
+			conversationIndex,
+			runtime.searchFreshness,
+			grpcServer,
+			runtime,
+			exportTokens,
+		),
+	)
+	registerConversationContextService(grpcServer, conversationIndex)
+
+	return grpcServer
+}
+
+func logDaemonWorkerReady(
+	ctx context.Context,
+	log *slog.Logger,
+	cfg *config.Config,
+	runtime *runtimeServices,
+) {
+	log.InfoContext(
+		ctx,
+		"daemon.worker.ready",
+		"concern",
+		"process.daemon.lifecycle",
+		"component",
+		"daemon",
+		"adapter_enabled",
+		cfg.Adapter.Enabled,
+		"mitm_enabled",
+		cfg.MITM.EnabledDefault,
+		"conversation_semantic_enabled",
+		runtime.semantic != nil,
+	)
 }
 
 func registerConversationContextService(grpcServer *grpc.Server, index *conversation.Index) {
