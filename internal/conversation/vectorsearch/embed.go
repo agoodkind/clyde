@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"goodkind.io/lm-semantic-search/collection"
+	"goodkind.io/lm-semantic-search/embedding"
 )
 
 // Embedding limits. A model that Clyde does not recognize gets the smallest
@@ -361,14 +362,7 @@ func (c *Client) vectorsFor(
 		)
 	}
 
-	skipped := make(map[int]skipInfo, len(result.Skipped))
-	for _, skip := range result.Skipped {
-		skipped[skip.Index] = skipInfo{
-			reason:      string(skip.Reason),
-			maxTokens:   skip.MaxTokens.Value,
-			maxReported: skip.MaxTokens.Reported,
-		}
-	}
+	skipped := indexSkipped(result.Skipped)
 
 	rejected := make([]rejection, 0)
 
@@ -414,6 +408,19 @@ func (c *Client) vectorsFor(
 	}
 
 	return vectors, rejected, nil
+}
+
+func indexSkipped(inputs []embedding.SkippedInput) map[int]skipInfo {
+	skipped := make(map[int]skipInfo, len(inputs))
+	for _, skip := range inputs {
+		skipped[skip.Index] = skipInfo{
+			reason:      string(skip.Reason),
+			maxTokens:   skip.MaxTokens.Value,
+			maxReported: skip.MaxTokens.Reported,
+		}
+	}
+
+	return skipped
 }
 
 // splitByteFloor converts the token limit of a rejection to the smallest content
