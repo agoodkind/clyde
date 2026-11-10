@@ -326,11 +326,7 @@ func writeAndParseWebsocketRequest(
 	}
 
 	synthetic := streamWebsocketAsSyntheticSSE(conn, capCfg)
-	parseOpts := SSEParseOptions{
-		DropEncryptedContent:      cfg.RoundTripEncrypted == RoundTripEncryptedDrop,
-		DeclaredTools:             payload.Tools,
-		NativePatchRepresentation: cfg.NativePatchRepresentation,
-	}
+	parseOpts := websocketFrameParseOptions(cfg, payload)
 	responseStarted := false
 	result, err := ParseSSEEventsWithOptions(
 		ctx,
@@ -794,65 +790,7 @@ func runWebsocketWithCache(
 		}
 	}
 
-	logWebsocketPrepared(
-		ctx,
-		cfg,
-		payload,
-		TransportTelemetry{
-			WebsocketConnectionReuse: hit,
-			RequestID:                "",
-			CursorRequestID:          "",
-			Correlation: correlation.
-				Context{
-				TraceID:            "",
-				SpanID:             "",
-				ParentSpanID:       "",
-				RequestID:          "",
-				IdentityAttributes: nil,
-			},
-
-			Alias:                  "",
-			UpstreamModel:          "",
-			Transport:              "",
-			ServiceTier:            "",
-			PromptCacheKey:         "",
-			ClientMetadata:         nil,
-			InputCount:             0,
-			ToolCount:              0,
-			NativeShellCount:       0,
-			NativeCustomCount:      0,
-			FunctionToolCount:      0,
-			WebsocketWarmup:        false,
-			WebsocketPrewarmUsed:   false,
-			WebsocketPrewarmFailed: false,
-			PreviousResponseID:     "",
-			TurnStatePresent:       false,
-			FallbackToHTTP:         false,
-			ContextWindowError:     false,
-		},
-	)
-	log.InfoContext(
-		ctx,
-		"adapter.codex.frame.sent",
-		"concern",
-		"adapter.providers.codex.request",
-		"component",
-		"adapter",
-		"subcomponent",
-		"codex",
-		"conversation_id",
-		conv,
-		"request_id",
-		cfg.RequestID,
-		"prev_response_id",
-		payload.PreviousResponseID,
-		"delta_input_count",
-		len(payload.Input),
-		"full_input_count",
-		len(fullInput),
-		"is_warmup",
-		false,
-	)
+	logCachedWebsocketFrame(ctx, cfg, payload, hit, log, conv, fullInput)
 
 	result, responseStarted, err := writeAndParseWebsocketRequest(
 		ctx,
@@ -1039,19 +977,7 @@ func openSessionAndWarmup(
 	}
 
 	now := clock.Now()
-	session := &WebsocketSession{
-		Conn:               conn,
-		ConversationID:     conv,
-		Model:              payload.Model,
-		PromptCacheKey:     payload.PromptCacheKey,
-		LastResponseID:     warmupResult.ResponseID,
-		OpenedAt:           now,
-		LastUsed:           now,
-		LastInputItems:     nil,
-		FrameCount:         0,
-		Closed:             false,
-		InvalidationReason: "",
-	}
+	session := warmedWebsocketSession(conn, conv, payload, warmupResult, now)
 	if log != nil {
 		log.InfoContext(
 			ctx,
@@ -1091,4 +1017,37 @@ func websocketSessionCompatible(session *WebsocketSession, payload ResponseCreat
 	}
 
 	return true
+}
+
+func websocketFrameParseOptions(
+	cfg WebsocketTransportConfig,
+	payload ResponseCreateWsRequest,
+) SSEParseOptions {
+	return SSEParseOptions{
+		DropEncryptedContent:      cfg.RoundTripEncrypted == RoundTripEncryptedDrop,
+		DeclaredTools:             payload.Tools,
+		NativePatchRepresentation: cfg.NativePatchRepresentation,
+	}
+}
+
+func warmedWebsocketSession(
+	conn *websocket.Conn,
+	conv string,
+	payload ResponseCreateWsRequest,
+	warmupResult RunResult,
+	now time.Time,
+) *WebsocketSession {
+	return &WebsocketSession{
+		Conn:               conn,
+		ConversationID:     conv,
+		Model:              payload.Model,
+		PromptCacheKey:     payload.PromptCacheKey,
+		LastResponseID:     warmupResult.ResponseID,
+		OpenedAt:           now,
+		LastUsed:           now,
+		LastInputItems:     nil,
+		FrameCount:         0,
+		Closed:             false,
+		InvalidationReason: "",
+	}
 }
