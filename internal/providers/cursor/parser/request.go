@@ -400,6 +400,18 @@ func resolveRequestIDFromGenerationRing(
 	// almost never does, because selecting a window of chats is the whole point of
 	// the narrowing. Membership is not reachability, and a miss over a window is
 	// not evidence about the chats outside it.
+	reason := generationMissReason(ctx, root, db, requestID, carriers)
+
+	return reason, missingRequestMatch(reason), nil
+}
+
+func generationMissReason(
+	ctx context.Context,
+	root cursorstore.DataRoot,
+	database *sql.DB,
+	requestID string,
+	carriers *requestCarriers,
+) conversation.RequestNotFoundReason {
 	reason := conversation.RequestNotFoundReasonNoMatchingConversation
 	if carriers.unread > 0 {
 		slog.WarnContext(
@@ -433,7 +445,7 @@ func resolveRequestIDFromGenerationRing(
 		reason = conversation.RequestNotFoundReasonInconclusive
 	}
 
-	coverage, err := cursorstore.ReadComposerHeaderCoverage(ctx, db)
+	coverage, err := cursorstore.ReadComposerHeaderCoverage(ctx, database)
 	if err != nil {
 		slog.WarnContext(
 			ctx,
@@ -468,7 +480,7 @@ func resolveRequestIDFromGenerationRing(
 		reason = conversation.RequestNotFoundReasonInconclusive
 	}
 
-	return reason, missingRequestMatch(reason), nil
+	return reason
 }
 
 // requestCarriers accumulates what a search for one request id established across
