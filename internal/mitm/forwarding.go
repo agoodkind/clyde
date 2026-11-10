@@ -2,6 +2,7 @@ package mitm
 
 import (
 	"bytes"
+	"io"
 	"net/http"
 	"time"
 
@@ -60,4 +61,51 @@ func (p *Proxy) forwardPlainHTTPResponse(
 			duration:         duration,
 		},
 	)
+}
+
+func (p *Proxy) readPlainHTTPRequestBody(
+	writer http.ResponseWriter,
+	request *http.Request,
+	cfg config.MITMConfig,
+	provider string,
+	upstream string,
+	started time.Time,
+) ([]byte, bool) {
+	body, err := io.ReadAll(request.Body)
+	if err != nil {
+		p.recordPlainHTTPReadFailure(
+			request,
+			cfg,
+			provider,
+			upstream+request.URL.RequestURI(),
+			started,
+			err,
+		)
+		http.Error(writer, "read request body", http.StatusBadRequest)
+
+		return nil, false
+	}
+
+	_ = request.Body.Close()
+
+	return body, true
+}
+
+func plainHTTPDispatchInput(
+	request *http.Request,
+	body []byte,
+	provider string,
+	upstream string,
+) (captureBodyIndex, upstreamRequest) {
+	requestBodyIndex := newCaptureBodyIndexFromSummary(summarizeBody(body))
+	input := upstreamRequest{
+		method:   request.Method,
+		path:     request.URL.RequestURI(),
+		header:   request.Header,
+		body:     body,
+		provider: provider,
+		upstream: upstream,
+	}
+
+	return requestBodyIndex, input
 }

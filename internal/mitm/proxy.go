@@ -657,15 +657,10 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 
 	defer releasePlainHTTP("mitm.http.completed")
 
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		p.recordPlainHTTPReadFailure(r, cfg, provider, upstream+r.URL.RequestURI(), started, err)
-		http.Error(w, "read request body", http.StatusBadRequest)
-
+	body, readOK := p.readPlainHTTPRequestBody(w, r, cfg, provider, upstream, started)
+	if !readOK {
 		return
 	}
-
-	_ = r.Body.Close()
 
 	transformer, reqTransformer, err := p.matchRequestResponseHook(
 		newRequestResponseHookRequest(provider, r.Host, r, newStaticRequestResponseHookBody(body)),
@@ -681,19 +676,8 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	// Apply any request-body rewrite before indexing, dispatching, and capturing so
 	// all three see the forwarded (possibly trimmed) body. Fail-open leaves body as-is.
 	body, _ = p.transformRequestBody(upstreamCtx, reqTransformer, body)
-	requestBodyIndex := newCaptureBodyIndexFromSummary(summarizeBody(body))
-	resp, ok := p.dispatchUpstream(
-		upstreamCtx,
-		w,
-		upstreamRequest{
-			method:   r.Method,
-			path:     r.URL.RequestURI(),
-			header:   r.Header,
-			body:     body,
-			provider: provider,
-			upstream: upstream,
-		},
-	)
+	requestBodyIndex, upstreamInput := plainHTTPDispatchInput(r, body, provider, upstream)
+	resp, ok := p.dispatchUpstream(upstreamCtx, w, upstreamInput)
 	if !ok {
 		p.recordPlainHTTPDispatchFailure(
 			r,
