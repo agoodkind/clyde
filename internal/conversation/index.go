@@ -653,26 +653,7 @@ func (idx *Index) refresh(ctx context.Context, prior scanCache, reason RefreshRe
 	provider := idx.refreshProviderLabel()
 	result := scanResult{changed: false, records: nil, stamps: nil, multiStates: nil}
 	cacheChanged := false
-	slog.InfoContext(
-		ctx,
-		"conversation.index.refresh_started",
-		"concern",
-		"conversation.index",
-		"component",
-		"conversation",
-		"reason",
-		reason.String(),
-		"provider",
-		provider,
-		"duration_ms",
-		0,
-		"outcome",
-		"in_progress",
-		"record_count",
-		0,
-		"cache_changed",
-		false,
-	)
+	logIndexRefreshStarted(ctx, reason, provider)
 	defer func() {
 		recovered := recover()
 		outcome := "success"
@@ -741,18 +722,7 @@ func (idx *Index) refresh(ctx context.Context, prior scanCache, reason RefreshRe
 			return err
 		}
 
-		slog.InfoContext(
-			ctx,
-			"conversation.index.records_retained",
-			"concern",
-			"conversation.index",
-			"component",
-			"conversation",
-			"newly_retained",
-			newlyRetained,
-			"retained",
-			len(retained),
-		)
+		logRetainedRecords(ctx, newlyRetained, retained)
 	}
 
 	completedAt := clock.Now()
@@ -1145,4 +1115,42 @@ func DerivedID(provider Provider, providerID string, artifactPath string) string
 	sum := sha256.Sum256([]byte(artifactPath))
 
 	return ProviderArtifact.String() + ":" + hex.EncodeToString(sum[:8])
+}
+
+func logIndexRefreshStarted(ctx context.Context, reason RefreshReason, provider string) {
+	slog.InfoContext(
+		ctx,
+		"conversation.index.refresh_started",
+		"concern",
+		"conversation.index",
+		"component",
+		"conversation",
+		"reason",
+		reason.String(),
+		"provider",
+		provider,
+		"duration_ms",
+		0,
+		"outcome",
+		"in_progress",
+		"record_count",
+		0,
+		"cache_changed",
+		false,
+	)
+}
+
+func logRetainedRecords(ctx context.Context, newlyRetained int, retained []Record) {
+	slog.InfoContext(
+		ctx,
+		"conversation.index.records_retained",
+		"concern",
+		"conversation.index",
+		"component",
+		"conversation",
+		"newly_retained",
+		newlyRetained,
+		"retained",
+		len(retained),
+	)
 }
