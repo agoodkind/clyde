@@ -44,23 +44,29 @@ func supervisorOpenLogFiles(
 	if err != nil {
 		return nil, fmt.Errorf("list supervisor descriptors: %w", err)
 	}
+
 	var files []supervisorLogFile
+
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("inspect supervisor log descriptors: %w", err)
 		}
+
 		descriptor, err := strconv.Atoi(entry.Name())
 		if err != nil {
 			return nil, fmt.Errorf("parse supervisor descriptor %s: %w", entry.Name(), err)
 		}
+
 		link := filepath.Join(root, "fd", entry.Name())
 		info, err := os.Stat(link)
 		if err != nil {
 			return nil, fmt.Errorf("stat supervisor descriptor %d: %w", descriptor, err)
 		}
+
 		if !info.Mode().IsRegular() {
 			continue
 		}
+
 		stat, ok := info.Sys().(*syscall.Stat_t)
 		if !ok {
 			return nil, fmt.Errorf(
@@ -68,21 +74,26 @@ func supervisorOpenLogFiles(
 				descriptor,
 			)
 		}
+
 		path, err := os.Readlink(link)
 		if err != nil {
 			return nil, fmt.Errorf("read supervisor descriptor %d: %w", descriptor, err)
 		}
+
 		if stat.Nlink == 0 {
 			path = strings.TrimSuffix(path, " (deleted)")
 		}
+
 		data, err := os.ReadFile(filepath.Join(root, "fdinfo", entry.Name()))
 		if err != nil {
 			return nil, fmt.Errorf("read supervisor descriptor %d flags: %w", descriptor, err)
 		}
+
 		flags, err := readSupervisorDescriptorFlags(data, descriptor)
 		if err != nil {
 			return nil, err
 		}
+
 		if flags&syscall.O_ACCMODE != syscall.O_RDONLY {
 			files = append(
 				files,
@@ -97,6 +108,7 @@ func supervisorOpenLogFiles(
 			)
 		}
 	}
+
 	return files, nil
 }
 
@@ -110,6 +122,7 @@ func readSupervisorDescriptorFlags(data []byte, descriptor int) (uint64, error) 
 		if !ok {
 			continue
 		}
+
 		flags, err := strconv.ParseUint(strings.TrimSpace(value), 8, 64)
 		if err != nil {
 			slog.Warn(
@@ -121,9 +134,12 @@ func readSupervisorDescriptorFlags(data []byte, descriptor int) (uint64, error) 
 				"err",
 				err,
 			)
+
 			return 0, fmt.Errorf("parse supervisor descriptor %d flags: %w", descriptor, err)
 		}
+
 		return flags, nil
 	}
+
 	return 0, fmt.Errorf("supervisor descriptor %d does not report file flags", descriptor)
 }

@@ -25,8 +25,10 @@ func childProcessIDs(ctx context.Context, parentPID int) ([]int, error) {
 			"parent_pid",
 			parentPID,
 		)
+
 		return nil, nil
 	}
+
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
 		slog.WarnContext(
@@ -41,19 +43,24 @@ func childProcessIDs(ctx context.Context, parentPID int) ([]int, error) {
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("read /proc: %w", err)
 	}
+
 	pids := make([]int, 0)
+
 	for _, entry := range entries {
 		pid, ok := parseProcEntryPID(entry.Name())
 		if !ok {
 			continue
 		}
+
 		ppid, ok := procParentPID(pid)
 		if ok && ppid == parentPID {
 			pids = append(pids, pid)
 		}
 	}
+
 	sort.Ints(pids)
 	slog.DebugContext(
 		ctx,
@@ -67,6 +74,7 @@ func childProcessIDs(ctx context.Context, parentPID int) ([]int, error) {
 		"count",
 		len(pids),
 	)
+
 	return pids, nil
 }
 
@@ -75,6 +83,7 @@ func parseProcEntryPID(name string) (int, bool) {
 	if err != nil {
 		return 0, false
 	}
+
 	return pid, pid > 0
 }
 
@@ -84,17 +93,21 @@ func procParentPID(pid int) (int, bool) {
 	if err != nil {
 		return 0, false
 	}
+
 	fieldsStart := strings.LastIndex(string(data), ") ")
 	if fieldsStart < 0 {
 		return 0, false
 	}
+
 	fields := strings.Fields(string(data[fieldsStart+2:]))
 	if len(fields) < 2 {
 		return 0, false
 	}
+
 	ppid, err := strconv.Atoi(fields[1])
 	if err != nil {
 		return 0, false
 	}
+
 	return ppid, true
 }

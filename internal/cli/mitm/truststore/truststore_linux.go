@@ -88,12 +88,15 @@ func NewLinuxRegistry(options LinuxRegistryOptions) Registry {
 	if options.Runner != nil {
 		registry.runner = options.Runner
 	}
+
 	if options.InstallPath != "" {
 		registry.installPath = options.InstallPath
 	}
+
 	if options.CommandTimeout > 0 {
 		registry.commandTimeout = options.CommandTimeout
 	}
+
 	return registry
 }
 
@@ -127,8 +130,10 @@ func linuxExecRun(ctx context.Context, name string, args ...string) ([]byte, err
 			"err",
 			err,
 		)
+
 		return output, &linuxExecError{binary: name, err: err}
 	}
+
 	return output, nil
 }
 
@@ -174,12 +179,14 @@ func (l linuxRegistry) Status(certPath string) (InstallStatus, error) {
 	if fpErr != nil {
 		return status, fpErr
 	}
+
 	status.OnDiskFingerprint = onDisk
 
 	installed, fpErr := fingerprintPEM(l.installPath)
 	if fpErr != nil {
 		return status, fpErr
 	}
+
 	status.InstalledFingerprint = installed
 	status.Installed = !installed.IsZero()
 	if status.Installed {
@@ -187,6 +194,7 @@ func (l linuxRegistry) Status(certPath string) (InstallStatus, error) {
 	} else {
 		status.Detail = "ca file absent at " + l.installPath
 	}
+
 	return status, nil
 }
 
@@ -199,6 +207,7 @@ func (l linuxRegistry) Install(certPath string) error {
 	if strings.TrimSpace(certPath) == "" {
 		return ErrCAAbsent
 	}
+
 	body, err := os.ReadFile(certPath)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -209,8 +218,10 @@ func (l linuxRegistry) Install(certPath string) error {
 				"cert_path",
 				certPath,
 			)
+
 			return fmt.Errorf("%w: %s", ErrCAAbsent, certPath)
 		}
+
 		slog.Warn(
 			"cli.mitm.truststore.linux.install_read_failed",
 			"concern",
@@ -220,8 +231,10 @@ func (l linuxRegistry) Install(certPath string) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("read ca cert %q: %w", certPath, err)
 	}
+
 	if len(body) == 0 {
 		slog.Warn(
 			"cli.mitm.truststore.linux.install_ca_empty",
@@ -230,6 +243,7 @@ func (l linuxRegistry) Install(certPath string) error {
 			"cert_path",
 			certPath,
 		)
+
 		return fmt.Errorf("%w: %s is empty", ErrCAAbsent, certPath)
 	}
 
@@ -237,6 +251,7 @@ func (l linuxRegistry) Install(certPath string) error {
 	if err != nil {
 		return err
 	}
+
 	if current.Installed && current.FingerprintsMatch() {
 		return nil
 	}
@@ -257,8 +272,10 @@ func (l linuxRegistry) Install(certPath string) error {
 			"err",
 			tempErr,
 		)
+
 		return fmt.Errorf("create temp ca: %w", tempErr)
 	}
+
 	tempPath := tempFile.Name()
 	defer func() { _ = os.Remove(tempPath) }()
 	if _, writeErr := tempFile.Write(body); writeErr != nil {
@@ -270,8 +287,10 @@ func (l linuxRegistry) Install(certPath string) error {
 			"err",
 			writeErr,
 		)
+
 		return fmt.Errorf("write temp ca: %w", writeErr)
 	}
+
 	if closeErr := tempFile.Close(); closeErr != nil {
 		slog.Warn(
 			"cli.mitm.truststore.linux.temp_ca_close_failed",
@@ -280,6 +299,7 @@ func (l linuxRegistry) Install(certPath string) error {
 			"err",
 			closeErr,
 		)
+
 		return fmt.Errorf("close temp ca: %w", closeErr)
 	}
 
@@ -303,6 +323,7 @@ func (l linuxRegistry) Install(certPath string) error {
 			"output",
 			strings.TrimSpace(string(installOutput)),
 		)
+
 		return fmt.Errorf(
 			"sudo install ca: %w (%s)",
 			installErr,
@@ -321,12 +342,14 @@ func (l linuxRegistry) Install(certPath string) error {
 			"output",
 			strings.TrimSpace(string(updateOutput)),
 		)
+
 		return fmt.Errorf(
 			"sudo update-ca-certificates: %w (%s)",
 			updateErr,
 			strings.TrimSpace(string(updateOutput)),
 		)
 	}
+
 	slog.Info(
 		"cli.mitm.truststore.linux.installed",
 		"concern",
@@ -336,6 +359,7 @@ func (l linuxRegistry) Install(certPath string) error {
 		"cert_path",
 		certPath,
 	)
+
 	return nil
 }
 
@@ -355,8 +379,10 @@ func (l linuxRegistry) Uninstall() error {
 				"install_path",
 				l.installPath,
 			)
+
 			return nil
 		}
+
 		slog.Warn(
 			"cli.mitm.truststore.linux.uninstall_stat_failed",
 			"concern",
@@ -366,6 +392,7 @@ func (l linuxRegistry) Uninstall() error {
 			"err",
 			statErr,
 		)
+
 		return fmt.Errorf("stat installed ca %q: %w", l.installPath, statErr)
 	}
 
@@ -380,6 +407,7 @@ func (l linuxRegistry) Uninstall() error {
 			"output",
 			strings.TrimSpace(string(rmOutput)),
 		)
+
 		return fmt.Errorf("sudo rm ca: %w (%s)", rmErr, strings.TrimSpace(string(rmOutput)))
 	}
 
@@ -394,12 +422,14 @@ func (l linuxRegistry) Uninstall() error {
 			"output",
 			strings.TrimSpace(string(updateOutput)),
 		)
+
 		return fmt.Errorf(
 			"sudo update-ca-certificates --fresh: %w (%s)",
 			updateErr,
 			strings.TrimSpace(string(updateOutput)),
 		)
 	}
+
 	slog.Info(
 		"cli.mitm.truststore.linux.uninstalled",
 		"concern",
@@ -407,6 +437,7 @@ func (l linuxRegistry) Uninstall() error {
 		"install_path",
 		l.installPath,
 	)
+
 	return nil
 }
 

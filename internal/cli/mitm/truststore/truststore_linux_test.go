@@ -50,8 +50,10 @@ func (r *recordingLinuxRunner) run(_ context.Context, name string, args ...strin
 	if !ok || len(queue) == 0 {
 		return nil, errors.New("no programmed response for binary " + name)
 	}
+
 	response := queue[0]
 	r.responses[name] = queue[1:]
+
 	return response.output, response.err
 }
 
@@ -61,6 +63,7 @@ func writeLinuxFixtureCert(t *testing.T, path string) {
 	if err != nil {
 		t.Fatalf("generate key: %v", err)
 	}
+
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: truststore.CACommonName},
@@ -72,6 +75,7 @@ func writeLinuxFixtureCert(t *testing.T, path string) {
 	if err != nil {
 		t.Fatalf("create cert: %v", err)
 	}
+
 	if err := os.WriteFile(
 		path,
 		pem.EncodeToMemory(&pem.Block{
@@ -91,11 +95,13 @@ func TestLinuxStatusInstalledMatchingFingerprintReportsClean(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(installPath), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
+
 	writeLinuxFixtureCert(t, certPath)
 	body, err := os.ReadFile(certPath)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
+
 	if err := os.WriteFile(installPath, body, 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -109,9 +115,11 @@ func TestLinuxStatusInstalledMatchingFingerprintReportsClean(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
+
 	if !status.Installed {
 		t.Fatalf("expected Installed=true; got %#v", status)
 	}
+
 	if !status.FingerprintsMatch() {
 		t.Fatalf(
 			"expected FingerprintsMatch=true: on_disk=%q installed=%q",
@@ -135,12 +143,15 @@ func TestLinuxStatusReportsAbsentWhenInstallPathMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
+
 	if status.Installed {
 		t.Fatalf("expected Installed=false; got %#v", status)
 	}
+
 	if status.OnDiskFingerprint.IsZero() {
 		t.Fatalf("expected on-disk fingerprint populated when file exists")
 	}
+
 	if !status.InstalledFingerprint.IsZero() {
 		t.Fatalf("expected installed fingerprint empty when not installed")
 	}
@@ -175,16 +186,19 @@ func TestLinuxInstallRunsInstallAndUpdateCACertificates(t *testing.T) {
 	if len(runner.calls) != 2 {
 		t.Fatalf("expected 2 calls; got %d", len(runner.calls))
 	}
+
 	for index, call := range runner.calls {
 		if call.binary != sudoPath {
 			t.Fatalf("call %d binary = %q; want sudo", index, call.binary)
 		}
 	}
+
 	firstArgs := strings.Join(runner.calls[0].args, " ")
 	if !strings.Contains(firstArgs, "/usr/bin/install") ||
 		!strings.Contains(firstArgs, installPath) {
 		t.Fatalf("first call must run /usr/bin/install into installPath: %s", firstArgs)
 	}
+
 	if secondArgs := strings.Join(runner.calls[1].args, " "); !strings.Contains(
 		secondArgs,
 		updateCACertificatesPath,
@@ -212,6 +226,7 @@ func TestLinuxUninstallRemovesFileAndRefreshesBundle(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(installPath), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
+
 	if err := os.WriteFile(installPath, []byte("placeholder"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -235,13 +250,16 @@ func TestLinuxUninstallRemovesFileAndRefreshesBundle(t *testing.T) {
 	if err := registry.Uninstall(); err != nil {
 		t.Fatalf("Uninstall: %v", err)
 	}
+
 	if len(runner.calls) != 2 {
 		t.Fatalf("expected 2 calls; got %d", len(runner.calls))
 	}
+
 	rmArgs := strings.Join(runner.calls[0].args, " ")
 	if !strings.Contains(rmArgs, "/bin/rm") || !strings.Contains(rmArgs, installPath) {
 		t.Fatalf("first call must run /bin/rm on installPath: %s", rmArgs)
 	}
+
 	if updateArgs := strings.Join(runner.calls[1].args, " "); !strings.Contains(
 		updateArgs,
 		"--fresh",
