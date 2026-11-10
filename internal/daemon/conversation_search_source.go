@@ -49,9 +49,9 @@ func searchSourceForBackend(backend config.ConversationSemanticBackend) conversa
 // scan when primary is disabled, unavailable, or failed. A refused query
 // returns the primary error.
 type rawTextFallbackSearchSource struct {
-	primary conversationSearchSource
-	index   *conversation.Index
-	enabled *bool
+	primary  conversationSearchSource
+	index    *conversation.Index
+	disabled bool
 }
 
 func (s *rawTextFallbackSearchSource) SearchConversations(
@@ -62,7 +62,7 @@ func (s *rawTextFallbackSearchSource) SearchConversations(
 	if err == nil {
 		return result, nil
 	}
-	if s.enabled != nil && !*s.enabled {
+	if s.disabled {
 		return result, err
 	}
 	var sourceFailure conversationSearchSourceError

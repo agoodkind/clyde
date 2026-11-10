@@ -266,6 +266,7 @@ func newControlServer(
 		}
 		return runtime.semantic.currentSearchClient()
 	}
+	rawTextFallback := cfg.Conversation.Semantic.RawTextFallback
 	searchSource := &rawTextFallbackSearchSource{
 		primary: &semanticConversationSearchSource{
 			index: index,
@@ -276,8 +277,8 @@ func newControlServer(
 			collectionID: cfg.Conversation.Semantic.CollectionID,
 			backend:      cfg.Conversation.Semantic.Backend,
 		},
-		index:   index,
-		enabled: cfg.Conversation.Semantic.RawTextFallback,
+		index:    index,
+		disabled: rawTextFallback != nil && !*rawTextFallback,
 	}
 	return &controlServer{
 		UnimplementedClydeServiceServer: clydev1.UnimplementedClydeServiceServer{},
