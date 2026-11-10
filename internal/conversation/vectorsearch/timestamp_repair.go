@@ -136,17 +136,7 @@ func (c *Client) RepairConversationTimestamps(
 	sources []TimestampRepairSource,
 	dryRun bool,
 ) (TimestampRepairReport, error) {
-	report := TimestampRepairReport{
-		Conversations:        0,
-		RowsRead:             0,
-		RowsCurrent:          0,
-		RowsChanged:          0,
-		RowsWritten:          0,
-		RowsUnmatched:        0,
-		RowsMissingTimestamp: 0,
-		RowsAmbiguous:        0,
-		RowsInvalidMetadata:  0,
-	}
+	report := newTimestampRepairReport()
 	if c == nil {
 		return report, errors.New("repair conversation timestamps: provide a client")
 	}
@@ -224,6 +214,31 @@ func (c *Client) RepairConversationTimestamps(
 		}
 	}
 
+	logTimestampRepairCompleted(ctx, collectionName, &report, dryRun)
+
+	return report, nil
+}
+
+func newTimestampRepairReport() TimestampRepairReport {
+	return TimestampRepairReport{
+		Conversations:        0,
+		RowsRead:             0,
+		RowsCurrent:          0,
+		RowsChanged:          0,
+		RowsWritten:          0,
+		RowsUnmatched:        0,
+		RowsMissingTimestamp: 0,
+		RowsAmbiguous:        0,
+		RowsInvalidMetadata:  0,
+	}
+}
+
+func logTimestampRepairCompleted(
+	ctx context.Context,
+	collectionName string,
+	report *TimestampRepairReport,
+	dryRun bool,
+) {
 	slog.InfoContext(
 		ctx,
 		"conversation.vectorsearch.timestamp_repair_completed",
@@ -254,8 +269,6 @@ func (c *Client) RepairConversationTimestamps(
 		"dry_run",
 		dryRun,
 	)
-
-	return report, nil
 }
 
 func sourcePieces(
