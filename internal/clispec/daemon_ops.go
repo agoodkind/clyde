@@ -195,30 +195,7 @@ func daemonStatusOp() Operation[daemonStatusInput, daemonStatusPayload] {
 			report := daemonsvc.InspectStatus(statusCtx)
 			var body bytes.Buffer
 			daemoncmd.WriteStatusReport(&body, report)
-			output := daemonStatusOutput{
-				LaunchdTarget:          report.LaunchdTarget,
-				LaunchdError:           report.LaunchdError,
-				SupervisorPID:          report.SupervisorPID,
-				DaemonSocketPath:       report.DaemonSocketPath,
-				DaemonSocketExists:     report.DaemonSocketExists,
-				DaemonResponding:       report.DaemonResponding,
-				DaemonError:            report.DaemonError,
-				SupervisorSocketPath:   report.SupervisorSocketPath,
-				SupervisorSocketExists: report.SupervisorSocketExists,
-				SupervisorResponding:   report.SupervisorResponding,
-				SupervisorError:        report.SupervisorError,
-				SupervisorFingerprint:  report.SupervisorFingerprint,
-				WorkerPIDs:             report.WorkerPIDs,
-				WorkerError:            report.WorkerError,
-				Runtime:                report.Runtime,
-				Window:                 nil,
-				Coverage:               nil,
-				Metrics:                nil,
-				TimeBreakdown:          nil,
-				UnattributedDurationMS: nil,
-				Warnings:               nil,
-				Windows:                nil,
-			}
+			output := statusOutputFromReport(report)
 			if payload.Since > 0 {
 				metrics := daemonsvc.MetricsHistoryFromConfig(payload.Since, clock.Now())
 				snapshot, err := daemonsvc.CurrentProviderStats(statusCtx)
@@ -532,5 +509,32 @@ func daemonWorkerOp() Operation[daemonWorkerInput, daemonWorkerPayload] {
 			return daemonsvc.RunContext(ctx, log)
 		},
 		runResult: nil,
+	}
+}
+
+func statusOutputFromReport(report daemonsvc.StatusReport) daemonStatusOutput {
+	return daemonStatusOutput{
+		LaunchdTarget:          report.LaunchdTarget,
+		LaunchdError:           report.LaunchdError,
+		SupervisorPID:          report.SupervisorPID,
+		DaemonSocketPath:       report.DaemonSocketPath,
+		DaemonSocketExists:     report.DaemonSocketExists,
+		DaemonResponding:       report.DaemonResponding,
+		DaemonError:            report.DaemonError,
+		SupervisorSocketPath:   report.SupervisorSocketPath,
+		SupervisorSocketExists: report.SupervisorSocketExists,
+		SupervisorResponding:   report.SupervisorResponding,
+		SupervisorError:        report.SupervisorError,
+		SupervisorFingerprint:  report.SupervisorFingerprint,
+		WorkerPIDs:             report.WorkerPIDs,
+		WorkerError:            report.WorkerError,
+		Runtime:                report.Runtime,
+		Window:                 nil,
+		Coverage:               nil,
+		Metrics:                nil,
+		TimeBreakdown:          nil,
+		UnattributedDurationMS: nil,
+		Warnings:               nil,
+		Windows:                nil,
 	}
 }
