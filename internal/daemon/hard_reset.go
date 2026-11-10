@@ -212,6 +212,14 @@ func HardResetWithOptions(
 		_, _ = fmt.Fprintln(output, "Removed Clyde data:", target.Path)
 	}
 
+	return finishHardReset(ctx, output, lookup)
+}
+
+func finishHardReset(
+	ctx context.Context,
+	output io.Writer,
+	lookup func(string) (string, bool),
+) error {
 	if err := RunInitialConversationIndex(
 		ctx,
 		output,
@@ -273,29 +281,7 @@ func hardResetTargetsForScope(
 
 	fallbackLogRoot := filepath.Join(home, "Library", "Logs")
 	cacheTargets := []resetTarget{resetFileTarget(conversation.CachePath(), cache)}
-	stateTargets := []resetTarget{
-		resetLogTarget(filepath.Join(fallbackLogRoot, "clyde-daemon.log"), fallbackLogRoot, false),
-		resetLogTarget(filepath.Join(state, "logs"), state, true),
-		resetLogTarget(filepath.Join(state, "mitm-launcher"), state, true),
-		resetLogTarget(filepath.Join(state, "clyde-daemon.jsonl"), state, false),
-		resetLogTarget(filepath.Join(state, "clyde-cli.jsonl"), state, false),
-		resetLogTarget(filepath.Join(state, "codex.jsonl"), state, false),
-		resetLogTarget(filepath.Join(state, "anthropic.jsonl"), state, false),
-		resetLogTarget(filepath.Join(state, "audit.jsonl"), state, false),
-		resetLogTarget(filepath.Join(state, "daemon.log"), state, false),
-		resetFileTarget(filepath.Join(state, "clyde-cli.jsonl.lock"), state),
-		resetFileTarget(filepath.Join(state, "clyde-daemon.jsonl.lock"), state),
-		resetFileTarget(filepath.Join(state, "update.lock"), state),
-		{Path: filepath.Join(state, "hooks"), Root: state, RemoveTree: true, AllowProtected: false},
-		resetFileTarget(metricsRollupPath(), state),
-		resetFileTarget(metricsRollupPath()+".lock", state),
-		resetFileTarget(metricsRollupPath()+".tmp", state),
-		resetFileTarget(metricsRollupCheckpointPath(), state),
-		resetFileTarget(metricsRollupCheckpointPath()+".tmp", state),
-		resetFileTarget(config.DaemonSocketPath(), runtime),
-		resetFileTarget(daemonsupervisor.SocketPath(runtime), runtime),
-		resetFileTarget(daemonReloadLockPath(), runtime),
-	}
+	stateTargets := hardResetStateTargets(state, runtime, fallbackLogRoot)
 	rotatedLogs, err := readRotatedLogTargets(state)
 	if err != nil {
 		return nil, err
@@ -321,15 +307,7 @@ func hardResetTargetsForScope(
 	case HardResetScopeState:
 		targets = append(targets, stateTargets...)
 	case HardResetScopeHooks:
-		targets = append(
-			targets,
-			resetTarget{
-				Path:           filepath.Join(state, "hooks"),
-				Root:           state,
-				RemoveTree:     true,
-				AllowProtected: false,
-			},
-		)
+		targets = append(targets, resetHooksTarget(state))
 	case HardResetScopeConfig:
 		configDir := filepath.Dir(config.GlobalConfigPath())
 		targets = append(
@@ -383,6 +361,41 @@ func hardResetTargetsForScope(
 	}
 
 	return targets, nil
+}
+
+func resetHooksTarget(state string) resetTarget {
+	return resetTarget{
+		Path:           filepath.Join(state, "hooks"),
+		Root:           state,
+		RemoveTree:     true,
+		AllowProtected: false,
+	}
+}
+
+func hardResetStateTargets(state string, runtime string, fallbackLogRoot string) []resetTarget {
+	return []resetTarget{
+		resetLogTarget(filepath.Join(fallbackLogRoot, "clyde-daemon.log"), fallbackLogRoot, false),
+		resetLogTarget(filepath.Join(state, "logs"), state, true),
+		resetLogTarget(filepath.Join(state, "mitm-launcher"), state, true),
+		resetLogTarget(filepath.Join(state, "clyde-daemon.jsonl"), state, false),
+		resetLogTarget(filepath.Join(state, "clyde-cli.jsonl"), state, false),
+		resetLogTarget(filepath.Join(state, "codex.jsonl"), state, false),
+		resetLogTarget(filepath.Join(state, "anthropic.jsonl"), state, false),
+		resetLogTarget(filepath.Join(state, "audit.jsonl"), state, false),
+		resetLogTarget(filepath.Join(state, "daemon.log"), state, false),
+		resetFileTarget(filepath.Join(state, "clyde-cli.jsonl.lock"), state),
+		resetFileTarget(filepath.Join(state, "clyde-daemon.jsonl.lock"), state),
+		resetFileTarget(filepath.Join(state, "update.lock"), state),
+		{Path: filepath.Join(state, "hooks"), Root: state, RemoveTree: true, AllowProtected: false},
+		resetFileTarget(metricsRollupPath(), state),
+		resetFileTarget(metricsRollupPath()+".lock", state),
+		resetFileTarget(metricsRollupPath()+".tmp", state),
+		resetFileTarget(metricsRollupCheckpointPath(), state),
+		resetFileTarget(metricsRollupCheckpointPath()+".tmp", state),
+		resetFileTarget(config.DaemonSocketPath(), runtime),
+		resetFileTarget(daemonsupervisor.SocketPath(runtime), runtime),
+		resetFileTarget(daemonReloadLockPath(), runtime),
+	}
 }
 
 func printResetPlan(
