@@ -598,54 +598,58 @@ func pruneMetricsRollup(path string, cutoff time.Time) (int, error) {
 		}
 	}
 
+	return finishPrunedMetricsRollup(
+		path,
+		temporary,
+		file,
+		temporaryFile,
+		scanner,
+		writer,
+		dropped,
+		kept,
+		writeErr,
+	)
+}
+
+func finishPrunedMetricsRollup(
+	path string,
+	temporary string,
+	file *os.File,
+	temporaryFile *os.File,
+	scanner *bufio.Scanner,
+	writer *bufio.Writer,
+	dropped int,
+	kept int,
+	writeErr error,
+) (int, error) {
 	scanErr := scanner.Err()
 	closeErr := file.Close()
 	if scanErr != nil {
 		_ = temporaryFile.Close()
 		_ = os.Remove(temporary)
 
-		return 0, rollupError(
-			"daemon.metrics_rollup.read_failed",
-			path,
-			scanErr,
-			"read metrics rollup",
-		)
+		return 0, metricsRollupReadError(path, scanErr)
 	}
 
 	if closeErr != nil {
 		_ = temporaryFile.Close()
 		_ = os.Remove(temporary)
 
-		return 0, rollupError(
-			"daemon.metrics_rollup.close_failed",
-			path,
-			closeErr,
-			"close metrics rollup",
-		)
+		return 0, metricsRollupCloseError(path, closeErr)
 	}
 
 	if writeErr != nil {
 		_ = temporaryFile.Close()
 		_ = os.Remove(temporary)
 
-		return 0, rollupError(
-			"daemon.metrics_rollup.prune_write_failed",
-			temporary,
-			writeErr,
-			"write pruned metrics rollup",
-		)
+		return 0, metricsRollupPruneWriteError(temporary, writeErr)
 	}
 
 	if flushErr := writer.Flush(); flushErr != nil {
 		_ = temporaryFile.Close()
 		_ = os.Remove(temporary)
 
-		return 0, rollupError(
-			"daemon.metrics_rollup.prune_write_failed",
-			temporary,
-			flushErr,
-			"write pruned metrics rollup",
-		)
+		return 0, metricsRollupPruneWriteError(temporary, flushErr)
 	}
 
 	if closeErr := temporaryFile.Close(); closeErr != nil {
@@ -698,6 +702,23 @@ func pruneMetricsRollup(path string, cutoff time.Time) (int, error) {
 	)
 
 	return dropped, nil
+}
+
+func metricsRollupReadError(path string, failure error) error {
+	return rollupError("daemon.metrics_rollup.read_failed", path, failure, "read metrics rollup")
+}
+
+func metricsRollupCloseError(path string, failure error) error {
+	return rollupError("daemon.metrics_rollup.close_failed", path, failure, "close metrics rollup")
+}
+
+func metricsRollupPruneWriteError(temporary string, failure error) error {
+	return rollupError(
+		"daemon.metrics_rollup.prune_write_failed",
+		temporary,
+		failure,
+		"write pruned metrics rollup",
+	)
 }
 
 // rollupLineBefore reports whether a stored line is older than the cutoff. An
