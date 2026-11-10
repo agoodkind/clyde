@@ -227,15 +227,7 @@ func loadInheritedListeners(
 ) error {
 	var specs []daemonsupervisor.ListenerSpec
 	if err := json.Unmarshal([]byte(raw), &specs); err != nil {
-		slog.Warn(
-			"daemon.reload.inherited_specs_decode_failed",
-			"concern",
-			"daemon.workers.reload",
-			"component",
-			"daemon",
-			"err",
-			err,
-		)
+		logInheritedSpecsDecodeFailure(err)
 
 		return fmt.Errorf("decode listener specs: %w", err)
 	}
@@ -355,18 +347,7 @@ func daemonListener(
 			unixListener.SetUnlinkOnClose(false)
 		}
 
-		slog.InfoContext(
-			ctx,
-			"daemon.listener.inherited",
-			"concern",
-			"process.daemon.lifecycle",
-			"component",
-			"daemon",
-			"socket_path",
-			socketPath,
-			"addr",
-			inherited.Addr().String(),
-		)
+		logInheritedDaemonListener(ctx, socketPath, inherited)
 
 		return inherited, nil
 	}
@@ -442,4 +423,31 @@ func daemonListener(
 	)
 
 	return listener, nil
+}
+
+func logInheritedSpecsDecodeFailure(err error) {
+	slog.Warn(
+		"daemon.reload.inherited_specs_decode_failed",
+		"concern",
+		"daemon.workers.reload",
+		"component",
+		"daemon",
+		"err",
+		err,
+	)
+}
+
+func logInheritedDaemonListener(ctx context.Context, socketPath string, inherited net.Listener) {
+	slog.InfoContext(
+		ctx,
+		"daemon.listener.inherited",
+		"concern",
+		"process.daemon.lifecycle",
+		"component",
+		"daemon",
+		"socket_path",
+		socketPath,
+		"addr",
+		inherited.Addr().String(),
+	)
 }
