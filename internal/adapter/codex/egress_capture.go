@@ -188,7 +188,7 @@ func recordCodexHTTPEgress(
 			method:            req.Method,
 			reqType:           "application/json",
 			respType:          resp.Header.Get("Content-Type"),
-			upstreamRequestID: resp.Header.Get("X-Request-Id"),
+			upstreamRequestID: resp.Header.Get("X-Request-ID"),
 			sessionID:         conversationID,
 			status:            resp.StatusCode,
 			reqHeaders:        req.Header,
