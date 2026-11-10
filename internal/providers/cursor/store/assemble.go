@@ -215,16 +215,7 @@ func readComposerBubbleDigestsInSnapshot(
 
 	storedRows, err := snapshot.countRange(ctx, bounds)
 	if err != nil {
-		slog.WarnContext(
-			ctx,
-			"providers.cursor.store.composer_bubble_count_failed",
-			"concern",
-			concern,
-			"composer_id",
-			composerID,
-			"err",
-			err,
-		)
+		logComposerBubbleCountFailure(ctx, composerID, err)
 
 		return stored, fmt.Errorf("count cursor bubbles for composer %q: %w", composerID, err)
 	}
@@ -319,6 +310,31 @@ func readComposerBubbleDigestsInSnapshot(
 	// between two reads, and a header reference that finds no digest may be one of
 	// these rather than a row the store does not hold.
 	stored.Unaccounted = max(storedRows-projected-len(stored.Unreadable), 0)
+	logUnreadableComposerBubbles(ctx, composerID, storedRows, projected, stored)
+
+	return stored, nil
+}
+
+func logComposerBubbleCountFailure(ctx context.Context, composerID string, err error) {
+	slog.WarnContext(
+		ctx,
+		"providers.cursor.store.composer_bubble_count_failed",
+		"concern",
+		concern,
+		"composer_id",
+		composerID,
+		"err",
+		err,
+	)
+}
+
+func logUnreadableComposerBubbles(
+	ctx context.Context,
+	composerID string,
+	storedRows int,
+	projected int,
+	stored composerBubbles,
+) {
 	slog.WarnContext(
 		ctx,
 		"providers.cursor.store.composer_bubbles_unreadable",
@@ -335,8 +351,6 @@ func readComposerBubbleDigestsInSnapshot(
 		"unaccounted",
 		stored.Unaccounted,
 	)
-
-	return stored, nil
 }
 
 // bubbleProjection is a row from the digest pass that contains only the
