@@ -142,18 +142,7 @@ func uninstallHookFile(
 	}
 
 	if err != nil {
-		slog.WarnContext(
-			ctx,
-			"hooks.uninstall_file_failed",
-			"component",
-			"hookspec",
-			"client",
-			client,
-			"path",
-			path,
-			"err",
-			err,
-		)
+		logUninstallHookIOFailure(ctx, client, path, err)
 
 		return UninstallFileResult{}, fmt.Errorf("read %s hooks %s: %w", client, path, err)
 	}
@@ -204,18 +193,7 @@ func uninstallHookFile(
 
 	// #nosec G703 -- path is one fixed settings path below the resolved home directory.
 	if err := os.WriteFile(path, body, 0o600); err != nil {
-		slog.WarnContext(
-			ctx,
-			"hooks.uninstall_file_failed",
-			"component",
-			"hookspec",
-			"client",
-			client,
-			"path",
-			path,
-			"err",
-			err,
-		)
+		logUninstallHookIOFailure(ctx, client, path, err)
 
 		return UninstallFileResult{}, fmt.Errorf("write %s hooks %s: %w", client, path, err)
 	}
@@ -223,6 +201,21 @@ func uninstallHookFile(
 	result.Changed = true
 
 	return result, nil
+}
+
+func logUninstallHookIOFailure(ctx context.Context, client Client, path string, err error) {
+	slog.WarnContext(
+		ctx,
+		"hooks.uninstall_file_failed",
+		"component",
+		"hookspec",
+		"client",
+		client,
+		"path",
+		path,
+		"err",
+		err,
+	)
 }
 
 func uninstallClaudeHooks(
