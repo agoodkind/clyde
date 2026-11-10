@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/conversation/vectorsearch"
 	"goodkind.io/clyde/internal/daemon"
 )
 
@@ -111,46 +112,12 @@ func conversationDeleteOp() Operation[conversationDeleteInput, conversationDelet
 			defer func() { _ = client.Close(context.WithoutCancel(ctx)) }()
 			collectionID := cfg.Conversation.Semantic.CollectionID
 			if !payload.Execute {
-				count, countErr := client.CountConversationRows(
-					ctx,
-					collectionID,
-					payload.ConversationID,
-				)
-				if countErr != nil {
-					return nil, logFail(
-						ctx,
-						surfaceFromContext(ctx),
-						"delete_count_failed",
-						"count conversation rows",
-						countErr,
-					)
+				result, err := countConversationDeletion(ctx, client, collectionID, payload)
+				if err != nil {
+					return nil, err
 				}
 
-				slog.InfoContext(
-					ctx,
-					"clispec.conversation_delete.dry_run",
-					"concern",
-					"cli.conversation",
-					"component",
-					"clispec",
-					"conversation_id",
-					payload.ConversationID,
-					"rows",
-					count,
-				)
-
-				return valueResult{
-					Payload: conversationDeleteOutput{
-						ConversationID: payload.ConversationID,
-						Rows:           count,
-						Deleted:        false,
-					},
-					Text: fmt.Sprintf(
-						"Would delete %d rows of conversation %s. Pass --execute to delete them.\n",
-						count,
-						payload.ConversationID,
-					),
-				}, nil
+				return result, nil
 			}
 
 			removed, deleteErr := client.DeleteConversation(
@@ -168,18 +135,66 @@ func conversationDeleteOp() Operation[conversationDeleteInput, conversationDelet
 				)
 			}
 
-			return valueResult{
-				Payload: conversationDeleteOutput{
-					ConversationID: payload.ConversationID,
-					Rows:           removed,
-					Deleted:        true,
-				},
-				Text: fmt.Sprintf(
-					"Deleted %d rows of conversation %s.\n",
-					removed,
-					payload.ConversationID,
-				),
-			}, nil
+			return conversationDeletionResult(payload, removed), nil
 		},
+	}
+}
+
+func countConversationDeletion(
+	ctx context.Context,
+	client *vectorsearch.Client,
+	collectionID string,
+	payload conversationDeletePayload,
+) (valueResult, error) {
+	count, countErr := client.CountConversationRows(ctx, collectionID, payload.ConversationID)
+	if countErr != nil {
+		return valueResult{}, logFail(
+			ctx,
+			surfaceFromContext(ctx),
+			"delete_count_failed",
+			"count conversation rows",
+			countErr,
+		)
+	}
+
+	slog.InfoContext(
+		ctx,
+		"clispec.conversation_delete.dry_run",
+		"concern",
+		"cli.conversation",
+		"component",
+		"clispec",
+		"conversation_id",
+		payload.ConversationID,
+		"rows",
+		count,
+	)
+
+	return valueResult{
+		Payload: conversationDeleteOutput{
+			ConversationID: payload.ConversationID,
+			Rows:           count,
+			Deleted:        false,
+		},
+		Text: fmt.Sprintf(
+			"Would delete %d rows of conversation %s. Pass --execute to delete them.\n",
+			count,
+			payload.ConversationID,
+		),
+	}, nil
+}
+
+func conversationDeletionResult(payload conversationDeletePayload, removed int64) valueResult {
+	return valueResult{
+		Payload: conversationDeleteOutput{
+			ConversationID: payload.ConversationID,
+			Rows:           removed,
+			Deleted:        true,
+		},
+		Text: fmt.Sprintf(
+			"Deleted %d rows of conversation %s.\n",
+			removed,
+			payload.ConversationID,
+		),
 	}
 }
