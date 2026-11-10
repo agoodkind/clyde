@@ -378,23 +378,7 @@ func (s *Server) executeAnthropicPreparedCollect(
 	if prepared.NativeIngress {
 		nativeWriter, ok := writer.(*nativeAnthropicJSONWriter)
 		if !ok || nativeWriter == nil {
-			result := adapterprovider.Result{
-				Usage: emptyAnthropicOpenAIUsage(),
-
-				FinalResponse:              nil,
-				FinishReason:               "",
-				SystemFingerprint:          "",
-				ReasoningSignaled:          false,
-				ReasoningVisible:           false,
-				ReasoningSummary:           "",
-				DerivedCacheCreationTokens: 0,
-				UpstreamResponseID:         "",
-				ToolCallCount:              0,
-				ToolCallNames:              nil,
-				HasSubagentToolCall:        false,
-				UsageNoticeWindows:         nil,
-				UsageNotices:               nil,
-			}
+			result := anthropicProviderResultFromResponse(nil)
 			executeErr := &anthropic.ExecuteError{
 				Status:  http.StatusInternalServerError,
 				Code:    "internal_error",
@@ -414,23 +398,7 @@ func (s *Server) executeAnthropicPreparedCollect(
 
 	collector, ok := writer.(*providerCollectorWriter)
 	if !ok || collector == nil {
-		result := adapterprovider.Result{
-			Usage: emptyAnthropicOpenAIUsage(),
-
-			FinalResponse:              nil,
-			FinishReason:               "",
-			SystemFingerprint:          "",
-			ReasoningSignaled:          false,
-			ReasoningVisible:           false,
-			ReasoningSummary:           "",
-			DerivedCacheCreationTokens: 0,
-			UpstreamResponseID:         "",
-			ToolCallCount:              0,
-			ToolCallNames:              nil,
-			HasSubagentToolCall:        false,
-			UsageNoticeWindows:         nil,
-			UsageNotices:               nil,
-		}
+		result := anthropicProviderResultFromResponse(nil)
 		executeErr := &anthropic.ExecuteError{
 			Status:  http.StatusInternalServerError,
 			Code:    "internal_error",
