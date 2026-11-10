@@ -590,6 +590,17 @@ func startMITMListener(
 			errCh <- serveErr
 		}
 	}()
+	logMITMListenerStarted(ctx, log, listenerCfg.ID, addrs)
+
+	return nil
+}
+
+func logMITMListenerStarted(
+	ctx context.Context,
+	log *slog.Logger,
+	listenerID string,
+	addrs []string,
+) {
 	log.InfoContext(
 		ctx,
 		"daemon.mitm.started",
@@ -598,12 +609,10 @@ func startMITMListener(
 		"component",
 		"daemon",
 		"listener_id",
-		listenerCfg.ID,
+		listenerID,
 		"addrs",
 		addrs,
 	)
-
-	return nil
 }
 
 // hasInheritedMITMListener reports whether any inherited listener key belongs to
