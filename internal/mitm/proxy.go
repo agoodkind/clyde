@@ -735,43 +735,17 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 		defer func() { _ = streamResp.Body.Close() }()
 	}
 
-	forwardResponseHeaders(w.Header(), streamResp.Header)
-	w.WriteHeader(streamResp.StatusCode)
-	// Buffer the response up to the store body cap so the full body reaches
-	// the capture store while still streaming to the client. The wire-leg
-	// summary is derived from this same buffer (summarizeBody previews/caps).
-	captureBuffer := &limitedBuffer{limit: p.captureBodyCap(cfg), buf: bytes.Buffer{}}
-	counter := &countingWriter{writer: w, bytesWritten: 0}
-	flusher, _ := w.(http.Flusher)
-	copyErr := streamWithFlush(counter, captureBuffer, streamResp.Body, flusher, plainHTTPSession)
-	duration := clock.Since(started)
-	if copyErr != nil {
-		p.log.Warn(
-			"mitm.proxy.copy_failed",
-			"concern",
-			"providers.mitm.wire",
-			"provider",
-			provider,
-			"path",
-			r.URL.Path,
-			"err",
-			copyErr,
-		)
-	}
-
-	p.finalizePlainHTTPCapture(
+	p.forwardPlainHTTPResponse(
+		w,
 		r,
+		cfg,
+		provider,
+		upstream,
+		body,
+		requestBodyIndex,
 		streamResp,
-		plainHTTPCaptureFinalize{
-			cfg:              cfg,
-			provider:         provider,
-			upstream:         upstream,
-			requestBody:      body,
-			capture:          captureBuffer,
-			responseBytes:    counter.bytesWritten,
-			requestBodyIndex: requestBodyIndex,
-			duration:         duration,
-		},
+		plainHTTPSession,
+		started,
 	)
 }
 
