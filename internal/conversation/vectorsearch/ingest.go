@@ -189,6 +189,23 @@ func (c *Client) UpsertConversationDocuments(
 		c.checkpoint.record(collectionName, conversationID, fingerprint)
 	}
 
+	logUpsertCompleted(ctx, collectionName, stats, writtenConversations)
+	c.recordUpsert(UpsertStats{
+		JobID:           jobID,
+		RowsWritten:     stats.rowsWritten,
+		VectorsReused:   stats.reused,
+		VectorsEmbedded: stats.embedded,
+	})
+
+	return jobID, nil
+}
+
+func logUpsertCompleted(
+	ctx context.Context,
+	collectionName string,
+	stats ingestStats,
+	writtenConversations []string,
+) {
 	slog.InfoContext(
 		ctx,
 		"conversation.vectorsearch.upsert_completed",
@@ -215,14 +232,6 @@ func (c *Client) UpsertConversationDocuments(
 		"times_filled",
 		stats.timesFilled,
 	)
-	c.recordUpsert(UpsertStats{
-		JobID:           jobID,
-		RowsWritten:     stats.rowsWritten,
-		VectorsReused:   stats.reused,
-		VectorsEmbedded: stats.embedded,
-	})
-
-	return jobID, nil
 }
 
 func (c *Client) nextJobID() string {

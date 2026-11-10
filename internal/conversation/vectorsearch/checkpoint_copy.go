@@ -136,15 +136,7 @@ func (store *checkpointStore) copyCollection(source string, target string) (int,
 			targetDir,
 			err,
 		)
-		slog.Warn(
-			"conversation.vectorsearch.checkpoint_copy_failed",
-			"concern",
-			"conversation.semantic",
-			"component",
-			"conversation",
-			"err",
-			failure,
-		)
+		logCheckpointCopyFailure(failure)
 
 		return 0, failure
 	}
@@ -161,15 +153,7 @@ func (store *checkpointStore) copyCollection(source string, target string) (int,
 
 		if err := os.Remove(filepath.Join(targetDir, name)); err != nil {
 			failure := fmt.Errorf("%s: remove target record %s: %w", operation, name, err)
-			slog.Warn(
-				"conversation.vectorsearch.checkpoint_copy_failed",
-				"concern",
-				"conversation.semantic",
-				"component",
-				"conversation",
-				"err",
-				failure,
-			)
+			logCheckpointCopyFailure(failure)
 
 			return 0, failure
 		}
@@ -186,15 +170,7 @@ func (store *checkpointStore) copyCollection(source string, target string) (int,
 			operation,
 			targetDir,
 		)
-		slog.Warn(
-			"conversation.vectorsearch.checkpoint_copy_failed",
-			"concern",
-			"conversation.semantic",
-			"component",
-			"conversation",
-			"err",
-			failure,
-		)
+		logCheckpointCopyFailure(failure)
 
 		return 0, failure
 	}
@@ -202,6 +178,18 @@ func (store *checkpointStore) copyCollection(source string, target string) (int,
 	store.loaded[target] = maps.Clone(sourceRecords)
 
 	return len(sourceRecords), nil
+}
+
+func logCheckpointCopyFailure(failure error) {
+	slog.Warn(
+		"conversation.vectorsearch.checkpoint_copy_failed",
+		"concern",
+		"conversation.semantic",
+		"component",
+		"conversation",
+		"err",
+		failure,
+	)
 }
 
 // readCheckpointDir returns a directory's records by conversation ID and its
