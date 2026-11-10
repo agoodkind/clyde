@@ -183,7 +183,8 @@ func (semantic ConversationSemanticConfig) AnswersSearch() bool {
 	return semantic.SearchEnabled
 }
 
-// RawTextFallbackEnabled reports whether failed indexed searches scan transcripts.
+// RawTextFallbackEnabled reports whether failed indexed searches scan
+// transcripts.
 func (semantic ConversationSemanticConfig) RawTextFallbackEnabled() bool {
 	return semantic.RawTextFallback == nil || *semantic.RawTextFallback
 }
