@@ -3,7 +3,6 @@ package adapter
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -313,47 +312,23 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) (err error) {
 	// correlation built at handler construction does not have it yet.
 	hctx.Correlation = corr
 
-	// The resolver is the authoritative single resolution path. It maps
-	// the alias and reasoning effort to a typed ResolvedRequest carrying
-	// provider identity, effort, budget, and the per-provider knobs the
-	// dispatcher and backends consume directly.
-	resolvedReq, resolverErr := resolveCursorChatRequest(
-		openAIIngressSurface(ctx),
-		req,
-		adapterresolver.NewModelRegistryAdapter(s.modelRegistry()),
-	)
-	if resolverErr != nil {
-		s.logChatResolveFailed(ctx, corr, reqID, req, ingressCtx, ingress, resolverErr)
-		recorder.EmitError(ctx, "model_resolve_failed", resolverErr.Error())
-		var invalidRequestErr *adapterresolver.InvalidRequestError
-		if errors.As(resolverErr, &invalidRequestErr) {
-			return adapterErrInvalidRequest(invalidRequestErr.Error(), resolverErr)
-		}
-
-		return adapterErrModelNotFound(resolverErr.Error())
-	}
-
-	resolvedReq.RequestID = reqID
-	resolvedReq.Correlation = corr
-	effort := resolvedReq.Effort.String()
-	s.logChatResolved(ctx, corr, reqID, req, ingressCtx, ingress, &resolvedReq, effort)
-	s.emitChatModelResolveLeg(ctx, recorder, corr, &resolvedReq, effort, bodyFacets)
-	s.logResolverOutcome(ctx, corr, reqID, req, ingressCtx, &resolvedReq, nil)
-
-	if err := s.applyBackendOverride(r, req, &resolvedReq, reqID); err != nil {
-		recorder.EmitError(ctx, "backend_override_failed", err.Error())
-		return err
-	}
-
-	if contractErr := prepareDocumentedChat(
+	var resolvedReq adapterresolver.ResolvedRequest
+	effort, preparationErr := s.prepareChatDispatch(
 		ctx,
-		recorder,
-		body,
+		r,
+		corr,
+		reqID,
 		&req,
-		discovery,
+		ingressCtx,
+		ingress,
+		recorder,
 		&resolvedReq,
-	); contractErr != nil {
-		return contractErr
+		bodyFacets,
+		body,
+		discovery,
+	)
+	if preparationErr != nil {
+		return preparationErr
 	}
 
 	toolNames := chatToolNames(req)
