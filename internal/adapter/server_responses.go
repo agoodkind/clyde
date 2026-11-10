@@ -100,41 +100,18 @@ func (s *Server) handleResponses(ctx context.Context, hctx *handlerCtx) (err err
 
 	forceStreamUsageOptIn(&req)
 
-	resolvedReq, resolverErr := resolveResponsesRequest(
-		openAIIngressSurface(ctx),
-		req,
-		adapterresolver.NewModelRegistryAdapter(s.modelRegistry()),
-	)
-	if resolverErr != nil {
-		var invalidRequestErr *adapterresolver.InvalidRequestError
-		if errors.As(resolverErr, &invalidRequestErr) {
-			return adapterErrInvalidRequest(invalidRequestErr.Error(), resolverErr)
-		}
-
-		return adapterErrModelNotFound(resolverErr.Error())
-	}
-
-	resolvedReq.RequestID = reqID
-	resolvedReq.Correlation = corr
-	resolvedReq.Responses = &rr
-	resolvedReq.ResponsesFields = rr.Fields
-
-	if overrideErr := s.applyBackendOverride(r, req, &resolvedReq, reqID); overrideErr != nil {
-		return overrideErr
-	}
-
-	if listenerFollowsDocumentedContract(ctx) {
-		if rejectErr := documentedResponsesRejection(
-			rr,
-			resolvedReq.Provider,
-			droppedTools,
-		); rejectErr != nil {
-			return rejectErr
-		}
-	}
-
-	if preErr := s.preflightChat(ctx, &req, &resolvedReq, reqID); preErr != nil {
-		return preErr
+	var resolvedReq adapterresolver.ResolvedRequest
+	if resolutionErr := s.resolveProjectedResponses(
+		ctx,
+		r,
+		&req,
+		&resolvedReq,
+		&rr,
+		reqID,
+		corr,
+		droppedTools,
+	); resolutionErr != nil {
+		return resolutionErr
 	}
 
 	if resolvedReq.Provider == adapterresolver.ProviderPassthrough {
@@ -160,6 +137,63 @@ func (s *Server) handleResponses(ctx context.Context, hctx *handlerCtx) (err err
 	}
 
 	s.dispatchResolvedResponsesWithID(w, r, req, reqID, responseID, body, resolvedReq, warnings)
+
+	return nil
+}
+
+func (s *Server) resolveProjectedResponses(
+	ctx context.Context,
+	request *http.Request,
+	chatRequest *ChatRequest,
+	resolvedRequest *adapterresolver.ResolvedRequest,
+	responsesRequest *adapteropenai.ResponsesRequest,
+	requestID string,
+	corr correlation.Context,
+	droppedTools []string,
+) error {
+	var resolverErr error
+	*resolvedRequest, resolverErr = resolveResponsesRequest(
+		openAIIngressSurface(ctx),
+		*chatRequest,
+		adapterresolver.NewModelRegistryAdapter(s.modelRegistry()),
+	)
+	if resolverErr != nil {
+		if invalidRequestErr, ok := errors.AsType[*adapterresolver.InvalidRequestError](
+			resolverErr,
+		); ok {
+			return adapterErrInvalidRequest(invalidRequestErr.Error(), resolverErr)
+		}
+
+		return adapterErrModelNotFound(resolverErr.Error())
+	}
+
+	resolvedRequest.RequestID = requestID
+	resolvedRequest.Correlation = corr
+	resolvedRequest.Responses = responsesRequest
+	resolvedRequest.ResponsesFields = responsesRequest.Fields
+
+	if overrideErr := s.applyBackendOverride(
+		request,
+		*chatRequest,
+		resolvedRequest,
+		requestID,
+	); overrideErr != nil {
+		return overrideErr
+	}
+
+	if listenerFollowsDocumentedContract(ctx) {
+		if rejectErr := documentedResponsesRejection(
+			*responsesRequest,
+			resolvedRequest.Provider,
+			droppedTools,
+		); rejectErr != nil {
+			return rejectErr
+		}
+	}
+
+	if preErr := s.preflightChat(ctx, chatRequest, resolvedRequest, requestID); preErr != nil {
+		return preErr
+	}
 
 	return nil
 }
