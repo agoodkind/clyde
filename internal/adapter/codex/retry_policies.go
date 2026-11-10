@@ -30,15 +30,20 @@ const (
 func appendBuiltinCodexRetryPolicies(policies []adapterretry.Policy) []adapterretry.Policy {
 	policies = appendCodexRetryPolicyIfAbsent(policies, builtinCodexOverloadedRetryPolicy())
 	policies = appendCodexRetryPolicyIfAbsent(policies, builtinCodexTransportRetryPolicy())
+
 	return policies
 }
 
-func appendCodexRetryPolicyIfAbsent(policies []adapterretry.Policy, builtin adapterretry.Policy) []adapterretry.Policy {
+func appendCodexRetryPolicyIfAbsent(
+	policies []adapterretry.Policy,
+	builtin adapterretry.Policy,
+) []adapterretry.Policy {
 	for _, policy := range policies {
 		if strings.EqualFold(strings.TrimSpace(policy.Name), builtin.Name) {
 			return policies
 		}
 	}
+
 	return append(policies, builtin)
 }
 
@@ -56,12 +61,14 @@ func builtinCodexOverloadedRetryPolicy() adapterretry.Policy {
 		JitterFraction:           0.2,
 		RetryWhenResponseStarted: false,
 		Match: adapterretry.Matchers{
-			Backends:          []string{"codex"},
-			Operations:        []string{codexWebsocketRetryOperation, codexHTTPRetryOperation},
-			Statuses:          nil,
-			ErrorClasses:      []string{"scanner_error", "websocket_error", "response_failed"},
-			ErrorCodes:        nil,
-			MessageSubstrings: []string{"Our servers are currently overloaded. Please try again later."},
+			Backends:     []string{"codex"},
+			Operations:   []string{codexWebsocketRetryOperation, codexHTTPRetryOperation},
+			Statuses:     nil,
+			ErrorClasses: []string{"scanner_error", "websocket_error", "response_failed"},
+			ErrorCodes:   nil,
+			MessageSubstrings: []string{
+				"Our servers are currently overloaded. Please try again later.",
+			},
 		},
 	}
 }

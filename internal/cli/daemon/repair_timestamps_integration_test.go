@@ -56,25 +56,31 @@ type repairConversation struct {
 func repairConversations() []repairConversation {
 	return []repairConversation{
 		{
-			nativeID: "a8ebd9ca-59d8-486d-a43b-f37383d92cbf",
-			stamp:    "Friday, May 1, 2026, 3:04 PM (UTC-7)",
-			query:    "Why does the etcd compaction alarm fire on the staging cluster?",
-			answer:   "The etcd keyspace grew past its quota because automatic compaction was off.",
-			wantYear: 2026, wantMonth: time.May, wantDay: 1,
+			nativeID:  "a8ebd9ca-59d8-486d-a43b-f37383d92cbf",
+			stamp:     "Friday, May 1, 2026, 3:04 PM (UTC-7)",
+			query:     "Why does the etcd compaction alarm fire on the staging cluster?",
+			answer:    "The etcd keyspace grew past its quota because automatic compaction was off.",
+			wantYear:  2026,
+			wantMonth: time.May,
+			wantDay:   1,
 		},
 		{
-			nativeID: "b1f0c2de-0000-4000-8000-000000000002",
-			stamp:    "Monday, Jun 8, 2026, 9:15 AM (UTC+0)",
-			query:    "Which command rotates the WireGuard peer keys on the edge router?",
-			answer:   "Generate a new key pair and replace the peer public key on both ends.",
-			wantYear: 2026, wantMonth: time.June, wantDay: 8,
+			nativeID:  "b1f0c2de-0000-4000-8000-000000000002",
+			stamp:     "Monday, Jun 8, 2026, 9:15 AM (UTC+0)",
+			query:     "Which command rotates the WireGuard peer keys on the edge router?",
+			answer:    "Generate a new key pair and replace the peer public key on both ends.",
+			wantYear:  2026,
+			wantMonth: time.June,
+			wantDay:   8,
 		},
 		{
-			nativeID: "c2a1d3ef-0000-4000-8000-000000000003",
-			stamp:    "Tuesday, Jul 14, 2026, 6:45 PM (UTC+2)",
-			query:    "Which flag sets the Milvus segment size in the standalone config?",
-			answer:   "The dataCoord segment maxSize setting controls the sealed segment size.",
-			wantYear: 2026, wantMonth: time.July, wantDay: 14,
+			nativeID:  "c2a1d3ef-0000-4000-8000-000000000003",
+			stamp:     "Tuesday, Jul 14, 2026, 6:45 PM (UTC+2)",
+			query:     "Which flag sets the Milvus segment size in the standalone config?",
+			answer:    "The dataCoord segment maxSize setting controls the sealed segment size.",
+			wantYear:  2026,
+			wantMonth: time.July,
+			wantDay:   14,
 		},
 	}
 }
@@ -97,7 +103,10 @@ func cursorTextLine(t *testing.T, role string, text string) string {
 		Role    string  `json:"role"`
 		Message message `json:"message"`
 	}
-	encoded, err := json.Marshal(line{Role: role, Message: message{Role: role, Content: []part{{Type: "text", Text: text}}}})
+	encoded, err := json.Marshal(line{
+		Role:    role,
+		Message: message{Role: role, Content: []part{{Type: "text", Text: text}}},
+	})
 	if err != nil {
 		t.Fatalf("encode transcript line: %v", err)
 	}
@@ -113,7 +122,13 @@ func writeRepairTranscripts(t *testing.T, root string) {
 	for _, conversationCase := range repairConversations() {
 		body := cursorTextLine(t, "user", conversationCase.rawUserText()) +
 			cursorTextLine(t, "assistant", conversationCase.answer)
-		path := filepath.Join(root, repairProjectKey, "agent-transcripts", conversationCase.nativeID, conversationCase.nativeID+".jsonl")
+		path := filepath.Join(
+			root,
+			repairProjectKey,
+			"agent-transcripts",
+			conversationCase.nativeID,
+			conversationCase.nativeID+".jsonl",
+		)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatalf("create transcript directory: %v", err)
 		}
@@ -123,7 +138,11 @@ func writeRepairTranscripts(t *testing.T, root string) {
 	}
 }
 
-func openRepairClient(t *testing.T, address string, layout vectorsearch.Layout) *vectorsearch.Client {
+func openRepairClient(
+	t *testing.T,
+	address string,
+	layout vectorsearch.Layout,
+) *vectorsearch.Client {
 	t.Helper()
 	baseURL := os.Getenv(repairEmbeddingBaseURLEnv)
 	if baseURL == "" {
@@ -133,18 +152,21 @@ func openRepairClient(t *testing.T, address string, layout vectorsearch.Layout) 
 	var err error
 	deadline := time.Now().Add(time.Minute)
 	for {
-		client, err = vectorsearch.Open(context.Background(), vectorsearch.Options{
-			Backend:            vectorsearch.BackendMilvus,
-			MilvusAddress:      address,
-			MilvusDatabase:     "default",
-			MilvusLayout:       layout,
-			EmbeddingBaseURL:   baseURL,
-			EmbeddingModel:     repairEmbeddingModel,
-			EmbeddingDimension: repairEmbeddingDimension,
-			EmbeddingAPIKey:    repairEmbeddingKey,
-			EmbeddingTimeout:   2 * time.Minute,
-			CheckpointDir:      t.TempDir(),
-		})
+		client, err = vectorsearch.Open(
+			context.Background(),
+			vectorsearch.Options{
+				Backend:            vectorsearch.BackendMilvus,
+				MilvusAddress:      address,
+				MilvusDatabase:     "default",
+				MilvusLayout:       layout,
+				EmbeddingBaseURL:   baseURL,
+				EmbeddingModel:     repairEmbeddingModel,
+				EmbeddingDimension: repairEmbeddingDimension,
+				EmbeddingAPIKey:    repairEmbeddingKey,
+				EmbeddingTimeout:   2 * time.Minute,
+				CheckpointDir:      t.TempDir(),
+			},
+		)
 		if err == nil || time.Now().After(deadline) {
 			break
 		}
@@ -166,7 +188,22 @@ type storedRow struct {
 	vector        []float32
 }
 
-var repairSnapshotScalars = []string{"conversationId", "parentConversationId", "role", "provider", "workspaceRoot", "archived", "messageIndex", "loadRules", "splitPart", "contentHash", "embeddingModel", "startLine", "endLine", "fileExtension"}
+var repairSnapshotScalars = []string{
+	"conversationId",
+	"parentConversationId",
+	"role",
+	"provider",
+	"workspaceRoot",
+	"archived",
+	"messageIndex",
+	"loadRules",
+	"splitPart",
+	"contentHash",
+	"embeddingModel",
+	"startLine",
+	"endLine",
+	"fileExtension",
+}
 
 func cellText(t *testing.T, resultColumn column.Column, rowIndex int) string {
 	t.Helper()
@@ -190,17 +227,34 @@ func cellText(t *testing.T, resultColumn column.Column, rowIndex int) string {
 func snapshotRows(t *testing.T, address string) map[string]storedRow {
 	t.Helper()
 	ctx := context.Background()
-	client, err := milvusclient.New(ctx, &milvusclient.ClientConfig{Address: address, DBName: "default"})
+	client, err := milvusclient.New(
+		ctx,
+		&milvusclient.ClientConfig{Address: address, DBName: "default"},
+	)
 	if err != nil {
 		t.Fatalf("connect snapshot client: %v", err)
 	}
 	defer func() { _ = client.Close(ctx) }()
-	fields := append([]string{"id", "relativePath", "content", "metadata", "timestampUnix", "vector"}, repairSnapshotScalars...)
-	resultSet, err := client.Query(ctx, milvusclient.NewQueryOption(vectorsearch.CollectionName(repairCollectionID)).
-		WithFilter(`id != ""`).
-		WithLimit(repairSnapshotLimit).
-		WithOutputFields(fields...).
-		WithConsistencyLevel(entity.ClStrong))
+	fields := append(
+		[]string{"id", "relativePath", "content", "metadata", "timestampUnix", "vector"},
+		repairSnapshotScalars...,
+	)
+	resultSet, err := client.Query(
+		ctx,
+		milvusclient.NewQueryOption(vectorsearch.CollectionName(repairCollectionID)).
+			WithFilter(
+				`id != ""`,
+			).
+			WithLimit(
+				repairSnapshotLimit,
+			).
+			WithOutputFields(
+				fields...,
+			).
+			WithConsistencyLevel(
+				entity.ClStrong,
+			),
+	)
 	if err != nil {
 		t.Fatalf("query snapshot: %v", err)
 	}
@@ -230,16 +284,32 @@ func snapshotRows(t *testing.T, address string) map[string]storedRow {
 func requireSameVector(t *testing.T, id string, before []float32, after []float32) {
 	t.Helper()
 	if len(before) != len(after) {
-		t.Fatalf("row %s vector has %d values after the repair, want %d", id, len(after), len(before))
+		t.Fatalf(
+			"row %s vector has %d values after the repair, want %d",
+			id,
+			len(after),
+			len(before),
+		)
 	}
 	for position := range before {
 		if math.Float32bits(before[position]) != math.Float32bits(after[position]) {
-			t.Fatalf("row %s vector value %d changed from %08x to %08x", id, position, math.Float32bits(before[position]), math.Float32bits(after[position]))
+			t.Fatalf(
+				"row %s vector value %d changed from %08x to %08x",
+				id,
+				position,
+				math.Float32bits(before[position]),
+				math.Float32bits(after[position]),
+			)
 		}
 	}
 }
 
-func requireRowsUnchanged(t *testing.T, label string, before map[string]storedRow, after map[string]storedRow) {
+func requireRowsUnchanged(
+	t *testing.T,
+	label string,
+	before map[string]storedRow,
+	after map[string]storedRow,
+) {
 	t.Helper()
 	if len(before) != len(after) {
 		t.Fatalf("%s: %d rows, want %d", label, len(after), len(before))
@@ -249,7 +319,9 @@ func requireRowsUnchanged(t *testing.T, label string, before map[string]storedRo
 		if !found {
 			t.Fatalf("%s: row %s is missing", label, id)
 		}
-		if current.metadata != row.metadata || current.timestampUnix != row.timestampUnix || current.content != row.content || current.otherFields != row.otherFields {
+		if current.metadata != row.metadata || current.timestampUnix != row.timestampUnix ||
+			current.content != row.content ||
+			current.otherFields != row.otherFields {
 			t.Fatalf("%s: row %s changed from %+v to %+v", label, id, row, current)
 		}
 		requireSameVector(t, id, row.vector, current.vector)
@@ -258,14 +330,27 @@ func requireRowsUnchanged(t *testing.T, label string, before map[string]storedRo
 
 func repairDoc(conversationID string, text string, timestampUnix int64) semsearch.SemDoc {
 	return semsearch.SemDoc{
-		ConversationID: conversationID, ParentConversationID: "", MessageIndex: 0, Role: "user",
-		TimestampUnix: timestampUnix, Text: text, Tools: nil, Thinking: "",
-		WorkspaceRoot: "", Archived: false, LoadRules: "",
+		ConversationID:       conversationID,
+		ParentConversationID: "",
+		MessageIndex:         0,
+		Role:                 "user",
+		TimestampUnix:        timestampUnix,
+		Text:                 text,
+		Tools:                nil,
+		Thinking:             "",
+		WorkspaceRoot:        "",
+		Archived:             false,
+		LoadRules:            "",
 	}
 }
 
 // Seed the old timestamp and one stale message to exercise matching.
-func seedStoredRows(t *testing.T, client *vectorsearch.Client, index *conversation.Index, kinds conversation.ContentKindSet) map[string]int64 {
+func seedStoredRows(
+	t *testing.T,
+	client *vectorsearch.Client,
+	index *conversation.Index,
+	kinds conversation.ContentKindSet,
+) map[string]int64 {
 	t.Helper()
 	ctx := context.Background()
 	if err := index.Refresh(ctx); err != nil {
@@ -308,31 +393,64 @@ func seedStoredRows(t *testing.T, client *vectorsearch.Client, index *conversati
 			}
 			docs = append(docs, doc)
 		}
-		manifest = append(manifest, semsearch.Fingerprint{ConversationID: entry.Record.ID, Value: "old-parser"})
+		manifest = append(
+			manifest,
+			semsearch.Fingerprint{ConversationID: entry.Record.ID, Value: "old-parser"},
+		)
 	}
-	docs = append(docs, repairDoc(repairAmbiguousConversationID, repairAmbiguousText, time.Time{}.Unix()))
-	manifest = append(manifest, semsearch.Fingerprint{ConversationID: repairAmbiguousConversationID, Value: "old-parser"})
-	if _, err := client.UpsertConversationDocuments(ctx, repairCollectionID, docs, manifest); err != nil {
+	docs = append(
+		docs,
+		repairDoc(repairAmbiguousConversationID, repairAmbiguousText, time.Time{}.Unix()),
+	)
+	manifest = append(
+		manifest,
+		semsearch.Fingerprint{ConversationID: repairAmbiguousConversationID, Value: "old-parser"},
+	)
+	if _, err := client.UpsertConversationDocuments(
+		ctx,
+		repairCollectionID,
+		docs,
+		manifest,
+	); err != nil {
 		t.Fatalf("seed stored rows: %v", err)
 	}
 	time.Sleep(repairVisibilityWait)
 	return sourceTimes
 }
 
-func searchDay(t *testing.T, client *vectorsearch.Client, query string, year int, month time.Month, day int) []semsearch.SemHit {
+func searchDay(
+	t *testing.T,
+	client *vectorsearch.Client,
+	query string,
+	year int,
+	month time.Month,
+	day int,
+) []semsearch.SemHit {
 	t.Helper()
 	start := time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
 	from := start.Unix()
 	until := start.Add(24 * time.Hour).Unix()
 	filter := semsearch.SearchFilter{FromUnix: &from, UntilUnix: &until}
-	hits, err := client.SearchConversations(context.Background(), repairCollectionID, query, 5, filter, 0)
+	hits, err := client.SearchConversations(
+		context.Background(),
+		repairCollectionID,
+		query,
+		5,
+		filter,
+		0,
+	)
 	if err != nil {
 		t.Fatalf("search %q on %s: %v", query, start.Format(time.DateOnly), err)
 	}
 	return hits
 }
 
-func runRepair(t *testing.T, ctx context.Context, base repairTimestampsRun, options repairTimestampsOptions) (string, error) {
+func runRepair(
+	t *testing.T,
+	ctx context.Context,
+	base repairTimestampsRun,
+	options repairTimestampsOptions,
+) (string, error) {
 	t.Helper()
 	var output bytes.Buffer
 	run := base
@@ -374,11 +492,27 @@ func TestRepairTimestampsRepairsCursorRowsInMilvus(t *testing.T) {
 	sourceTimes := seedStoredRows(t, client, index, kinds)
 	reproduced := repairConversations()[0]
 	reproducedTime := time.Unix(sourceTimes[reproduced.id()], 0).UTC()
-	if reproducedTime.Year() != reproduced.wantYear || reproducedTime.Month() != reproduced.wantMonth || reproducedTime.Day() != reproduced.wantDay {
-		t.Fatalf("transcript reader returns %s for %s, want 2026-05-01", reproducedTime, reproduced.id())
+	if reproducedTime.Year() != reproduced.wantYear ||
+		reproducedTime.Month() != reproduced.wantMonth ||
+		reproducedTime.Day() != reproduced.wantDay {
+		t.Fatalf(
+			"transcript reader returns %s for %s, want 2026-05-01",
+			reproducedTime,
+			reproduced.id(),
+		)
 	}
-	if hits := searchDay(t, client, reproduced.query, reproduced.wantYear, reproduced.wantMonth, reproduced.wantDay); len(hits) != 0 {
-		t.Fatalf("date search before the repair returned %+v, want an empty result on the source day", hits)
+	if hits := searchDay(
+		t,
+		client,
+		reproduced.query,
+		reproduced.wantYear,
+		reproduced.wantMonth,
+		reproduced.wantDay,
+	); len(hits) != 0 {
+		t.Fatalf(
+			"date search before the repair returned %+v, want an empty result on the source day",
+			hits,
+		)
 	}
 	seeded := snapshotRows(t, address)
 
@@ -392,7 +526,16 @@ func TestRepairTimestampsRepairsCursorRowsInMilvus(t *testing.T) {
 		client:         client,
 		out:            nil,
 	}
-	bounded := repairTimestampsOptions{DryRun: false, Provider: "cursor", ConversationID: "", Limit: 10, MaxRows: 100, After: "", Resume: false, ProgressPath: progressPath}
+	bounded := repairTimestampsOptions{
+		DryRun:         false,
+		Provider:       "cursor",
+		ConversationID: "",
+		Limit:          10,
+		MaxRows:        100,
+		After:          "",
+		Resume:         false,
+		ProgressPath:   progressPath,
+	}
 
 	dryRun := bounded
 	dryRun.DryRun = true
@@ -400,7 +543,10 @@ func TestRepairTimestampsRepairsCursorRowsInMilvus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dry run: %v", err)
 	}
-	if !strings.Contains(output, "read 6 rows, found 0 current, 2 changed, 0 written, 1 unmatched, 3 without a source timestamp, 0 ambiguous") {
+	if !strings.Contains(
+		output,
+		"read 6 rows, found 0 current, 2 changed, 0 written, 1 unmatched, 3 without a source timestamp, 0 ambiguous",
+	) {
 		t.Fatalf("dry run output = %q", output)
 	}
 	if _, statErr := os.Stat(progressPath); !errors.Is(statErr, os.ErrNotExist) {
@@ -415,7 +561,11 @@ func TestRepairTimestampsRepairsCursorRowsInMilvus(t *testing.T) {
 	}
 	progress := readProgress(t, progressPath)
 	if progress.Cursor != reproduced.id() || progress.Complete || progress.Totals.RowsWritten != 1 {
-		t.Fatalf("progress after the bounded run = %+v, want cursor %s, incomplete, 1 row written", progress, reproduced.id())
+		t.Fatalf(
+			"progress after the bounded run = %+v, want cursor %s, incomplete, 1 row written",
+			progress,
+			reproduced.id(),
+		)
 	}
 
 	canceled, cancel := context.WithCancel(ctx)
@@ -425,8 +575,12 @@ func TestRepairTimestampsRepairsCursorRowsInMilvus(t *testing.T) {
 	if _, err := runRepair(t, canceled, base, resumed); !errors.Is(err, context.Canceled) {
 		t.Fatalf("interrupted run returned %v, want context.Canceled", err)
 	}
-	if interrupted := readProgress(t, progressPath); interrupted.Cursor != reproduced.id() || interrupted.Totals.RowsWritten != 1 {
-		t.Fatalf("progress after the interrupted run = %+v, want the bounded run cursor", interrupted)
+	if interrupted := readProgress(t, progressPath); interrupted.Cursor != reproduced.id() ||
+		interrupted.Totals.RowsWritten != 1 {
+		t.Fatalf(
+			"progress after the interrupted run = %+v, want the bounded run cursor",
+			interrupted,
+		)
 	}
 
 	output, err = runRepair(t, ctx, base, resumed)
@@ -434,17 +588,29 @@ func TestRepairTimestampsRepairsCursorRowsInMilvus(t *testing.T) {
 		t.Fatalf("resumed run: %v", err)
 	}
 	progress = readProgress(t, progressPath)
-	if !progress.Complete || progress.Totals.RowsWritten != 2 || progress.Totals.RowsChanged != 2 || progress.Cursor != repairConversations()[2].id() {
-		t.Fatalf("progress after the resumed run = %+v (output %q), want complete with 2 rows written", progress, output)
+	if !progress.Complete || progress.Totals.RowsWritten != 2 || progress.Totals.RowsChanged != 2 ||
+		progress.Cursor != repairConversations()[2].id() {
+		t.Fatalf(
+			"progress after the resumed run = %+v (output %q), want complete with 2 rows written",
+			progress,
+			output,
+		)
 	}
 
-	ambiguous, err := client.RepairConversationTimestamps(ctx, repairCollectionID, []vectorsearch.TimestampRepairSource{{
-		ConversationID: repairAmbiguousConversationID,
-		Documents: []semsearch.SemDoc{
-			repairDoc(repairAmbiguousConversationID, repairAmbiguousText, 1_780_000_000),
-			repairDoc(repairAmbiguousConversationID, repairAmbiguousText, 1_780_000_600),
+	ambiguous, err := client.RepairConversationTimestamps(
+		ctx,
+		repairCollectionID,
+		[]vectorsearch.TimestampRepairSource{
+			{
+				ConversationID: repairAmbiguousConversationID,
+				Documents: []semsearch.SemDoc{
+					repairDoc(repairAmbiguousConversationID, repairAmbiguousText, 1_780_000_000),
+					repairDoc(repairAmbiguousConversationID, repairAmbiguousText, 1_780_000_600),
+				},
+			},
 		},
-	}}, false)
+		false,
+	)
 	if err != nil {
 		t.Fatalf("ambiguous repair: %v", err)
 	}
@@ -452,7 +618,12 @@ func TestRepairTimestampsRepairsCursorRowsInMilvus(t *testing.T) {
 		t.Fatalf("ambiguous repair report = %+v, want 1 ambiguous row and 0 written", ambiguous)
 	}
 	shared := openRepairClient(t, address, vectorsearch.LayoutShared)
-	if _, err := shared.RepairConversationTimestamps(ctx, repairCollectionID, nil, true); !errors.Is(err, vectorsearch.ErrTimestampRepairUnsupported) {
+	if _, err := shared.RepairConversationTimestamps(
+		ctx,
+		repairCollectionID,
+		nil,
+		true,
+	); !errors.Is(err, vectorsearch.ErrTimestampRepairUnsupported) {
 		t.Fatalf("shared layout repair returned %v, want ErrTimestampRepairUnsupported", err)
 	}
 
@@ -463,16 +634,26 @@ func TestRepairTimestampsRepairsCursorRowsInMilvus(t *testing.T) {
 	changedRows := 0
 	for id, before := range seeded {
 		after := repaired[id]
-		if after.relativePath != before.relativePath || after.content != before.content || after.otherFields != before.otherFields {
+		if after.relativePath != before.relativePath || after.content != before.content ||
+			after.otherFields != before.otherFields {
 			t.Fatalf("row %s changed a kept field: before %+v, after %+v", id, before, after)
 		}
 		requireSameVector(t, id, before.vector, after.vector)
 		if before.timestampUnix != "null" {
-			t.Fatalf("seeded row timestamp is not null; row ID, timestamp: %s: %s", id, before.timestampUnix)
+			t.Fatalf(
+				"seeded row timestamp is not null; row ID, timestamp: %s: %s",
+				id,
+				before.timestampUnix,
+			)
 		}
 		if after.timestampUnix == before.timestampUnix {
 			if after.metadata != before.metadata {
-				t.Fatalf("row %s changed metadata without a timestamp change: %q to %q", id, before.metadata, after.metadata)
+				t.Fatalf(
+					"row %s changed metadata without a timestamp change: %q to %q",
+					id,
+					before.metadata,
+					after.metadata,
+				)
 			}
 			continue
 		}
@@ -481,7 +662,12 @@ func TestRepairTimestampsRepairsCursorRowsInMilvus(t *testing.T) {
 		if after.timestampUnix != want {
 			t.Fatalf("row %s timestampUnix = %s, want %s", id, after.timestampUnix, want)
 		}
-		wantMetadata := strings.Replace(before.metadata, `"timestamp_unix":null`, `"timestamp_unix":`+want, 1)
+		wantMetadata := strings.Replace(
+			before.metadata,
+			`"timestamp_unix":null`,
+			`"timestamp_unix":`+want,
+			1,
+		)
 		if after.metadata != wantMetadata {
 			t.Fatalf("row %s metadata = %q, want %q", id, after.metadata, wantMetadata)
 		}
@@ -492,13 +678,33 @@ func TestRepairTimestampsRepairsCursorRowsInMilvus(t *testing.T) {
 
 	time.Sleep(repairVisibilityWait)
 	for _, conversationCase := range repairConversations()[:2] {
-		hits := searchDay(t, client, conversationCase.query, conversationCase.wantYear, conversationCase.wantMonth, conversationCase.wantDay)
+		hits := searchDay(
+			t,
+			client,
+			conversationCase.query,
+			conversationCase.wantYear,
+			conversationCase.wantMonth,
+			conversationCase.wantDay,
+		)
 		if len(hits) == 0 || hits[0].ConversationID != conversationCase.id() {
-			t.Fatalf("date search for %s returned %+v, want the repaired message first", conversationCase.id(), hits)
+			t.Fatalf(
+				"date search for %s returned %+v, want the repaired message first",
+				conversationCase.id(),
+				hits,
+			)
 		}
 		hitTime := time.Unix(hits[0].TimestampUnix, 0).UTC()
-		if hitTime.Year() != conversationCase.wantYear || hitTime.Month() != conversationCase.wantMonth || hitTime.Day() != conversationCase.wantDay {
-			t.Fatalf("search hit time for %s = %s, want %d-%02d-%02d", conversationCase.id(), hitTime, conversationCase.wantYear, conversationCase.wantMonth, conversationCase.wantDay)
+		if hitTime.Year() != conversationCase.wantYear ||
+			hitTime.Month() != conversationCase.wantMonth ||
+			hitTime.Day() != conversationCase.wantDay {
+			t.Fatalf(
+				"search hit time for %s = %s, want %d-%02d-%02d",
+				conversationCase.id(),
+				hitTime,
+				conversationCase.wantYear,
+				conversationCase.wantMonth,
+				conversationCase.wantDay,
+			)
 		}
 	}
 
@@ -515,21 +721,41 @@ func TestRepairTimestampsRepairsCursorRowsInMilvus(t *testing.T) {
 
 func setRowMetadata(t *testing.T, ctx context.Context, address string, id string, metadata string) {
 	t.Helper()
-	client, err := milvusclient.New(ctx, &milvusclient.ClientConfig{Address: address, DBName: "default"})
+	client, err := milvusclient.New(
+		ctx,
+		&milvusclient.ClientConfig{Address: address, DBName: "default"},
+	)
 	if err != nil {
 		t.Fatalf("metadata client could not connect: %v", err)
 	}
 	defer func() { _ = client.Close(ctx) }()
-	option := milvusclient.NewColumnBasedInsertOption(vectorsearch.CollectionName(repairCollectionID)).
-		WithVarcharColumn("id", []string{id}).
-		WithVarcharColumn("metadata", []string{metadata}).
-		WithPartialUpdate(true)
+	option := milvusclient.NewColumnBasedInsertOption(
+		vectorsearch.CollectionName(repairCollectionID),
+	).
+		WithVarcharColumn(
+			"id",
+			[]string{id},
+		).
+		WithVarcharColumn(
+			"metadata",
+			[]string{metadata},
+		).
+		WithPartialUpdate(
+			true,
+		)
 	if _, err := client.Upsert(ctx, option); err != nil {
 		t.Fatalf("client could not set metadata for row %s: %v", id, err)
 	}
 }
 
-func requireInvalidMetadataUnchanged(t *testing.T, ctx context.Context, address string, client *vectorsearch.Client, base repairTimestampsRun, repaired map[string]storedRow) {
+func requireInvalidMetadataUnchanged(
+	t *testing.T,
+	ctx context.Context,
+	address string,
+	client *vectorsearch.Client,
+	base repairTimestampsRun,
+	repaired map[string]storedRow,
+) {
 	t.Helper()
 	target := repairConversations()[1]
 	targetPath := "conv/" + target.id() + "/0"
@@ -562,7 +788,12 @@ func requireInvalidMetadataUnchanged(t *testing.T, ctx context.Context, address 
 			source.Documents[position].TimestampUnix += 60
 		}
 	}
-	report, err := client.RepairConversationTimestamps(ctx, repairCollectionID, []vectorsearch.TimestampRepairSource{source}, false)
+	report, err := client.RepairConversationTimestamps(
+		ctx,
+		repairCollectionID,
+		[]vectorsearch.TimestampRepairSource{source},
+		false,
+	)
 	if err != nil {
 		t.Fatalf("timestamp repair failed with invalid metadata: %v", err)
 	}
@@ -571,7 +802,13 @@ func requireInvalidMetadataUnchanged(t *testing.T, ctx context.Context, address 
 	}
 	after := snapshotRows(t, address)[targetID]
 	if after.metadata != invalid || after.timestampUnix != repaired[targetID].timestampUnix {
-		t.Fatalf("row %s after timestamp repair is %+v; want metadata %q and timestampUnix %s", targetID, after, invalid, repaired[targetID].timestampUnix)
+		t.Fatalf(
+			"row %s after timestamp repair is %+v; want metadata %q and timestampUnix %s",
+			targetID,
+			after,
+			invalid,
+			repaired[targetID].timestampUnix,
+		)
 	}
 	requireSameVector(t, targetID, repaired[targetID].vector, after.vector)
 }

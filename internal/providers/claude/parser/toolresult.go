@@ -14,7 +14,9 @@ func attachToolResults(messages []transcript.Message, results []claudeToolResult
 	if len(results) == 0 {
 		return
 	}
+
 	toolsByID := make(map[string]*transcript.ToolCall)
+
 	for i := range messages {
 		tools := messages[i].Tools
 		for j := range tools {
@@ -24,11 +26,13 @@ func attachToolResults(messages []transcript.Message, results []claudeToolResult
 			}
 		}
 	}
+
 	for _, result := range results {
 		tool := toolsByID[result.ToolUseID]
 		if tool == nil {
 			continue
 		}
+
 		tool.Output = result.Output
 		tool.IsError = result.IsError
 	}

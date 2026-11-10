@@ -33,24 +33,29 @@ func TestThinkingOnlyAssistantEntryIsKept(t *testing.T) {
 		IncludeToolOutputs:    false,
 	}
 	var thinking, text int
+
 	p := New()
 	for message, err := range p.Stream(path, opts) {
 		if err != nil {
 			t.Fatalf("stream: %v", err)
 		}
+
 		if message.Thinking != "" {
 			thinking++
 			if message.Thinking != "weighing the options" {
 				t.Errorf("thinking = %q", message.Thinking)
 			}
 		}
+
 		if message.Text != "" {
 			text++
 		}
 	}
+
 	if thinking != 1 {
 		t.Errorf("thinking-bearing messages = %d, want 1", thinking)
 	}
+
 	if text != 1 {
 		t.Errorf("text messages = %d, want 1", text)
 	}

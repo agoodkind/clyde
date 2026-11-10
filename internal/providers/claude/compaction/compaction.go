@@ -38,11 +38,14 @@ func PromptIndex(roles []string, texts []string) (int, bool) {
 		if roles[index] != "user" {
 			continue
 		}
+
 		if strings.Contains(texts[index], PromptSignature) {
 			return index, true
 		}
+
 		return 0, false
 	}
+
 	return 0, false
 }
 
@@ -57,29 +60,36 @@ func Arguments(prompt string) []string {
 	if block == "" {
 		return nil
 	}
+
 	declared := declaredArguments()
 	fields := strings.Fields(block)
+
 	args := make([]string, 0, len(fields))
 	for index := 0; index < len(fields); index++ {
 		field := fields[index]
 		if !strings.HasPrefix(field, "-") {
 			break
 		}
+
 		name, _, hasInlineValue := strings.Cut(field, "=")
 		kind, declaredName := declared[strings.TrimLeft(name, "-")]
 		if !declaredName {
 			break
 		}
+
 		if hasInlineValue || kind == exportargs.KindBool {
 			args = append(args, field)
 			continue
 		}
+
 		if index+1 >= len(fields) {
 			break
 		}
+
 		args = append(args, name, fields[index+1])
 		index++
 	}
+
 	return args
 }
 
@@ -91,9 +101,11 @@ func instructionBlock(prompt string) string {
 	if !found {
 		return ""
 	}
+
 	if before, _, cut := strings.Cut(after, reminderHeading); cut {
 		after = before
 	}
+
 	return strings.TrimSpace(after)
 }
 
@@ -101,9 +113,11 @@ func instructionBlock(prompt string) string {
 // kind. A kind decides whether the next field is that argument's value.
 func declaredArguments() map[string]exportargs.Kind {
 	declared := map[string]exportargs.Kind{}
+
 	for _, declaration := range exportargs.Declarations() {
 		declared[strings.ReplaceAll(declaration.Canonical, "_", "-")] = declaration.Kind
 		declared[declaration.Canonical] = declaration.Kind
 	}
+
 	return declared
 }

@@ -15,20 +15,40 @@ import (
 // resolveLegacyTranscripts opens the transcript again and attaches typed spans
 // to compact summary messages with unframed wrappers that the transcript's
 // provenance reproduces.
-func resolveLegacyTranscripts(path string, index *provenanceIndex, messages []transcript.Message, opts parseOptions) error {
+func resolveLegacyTranscripts(
+	path string,
+	index *provenanceIndex,
+	messages []transcript.Message,
+	opts parseOptions,
+) error {
 	if len(index.summaries) == 0 {
 		return nil
 	}
+
 	file, err := os.Open(filepath.Clean(path))
 	if err != nil {
-		slog.Warn("providers.claude.parser.legacy_transcript_open_failed", "concern", concern, "component", "claude", "path", path, "err", err)
+		slog.Warn(
+			"providers.claude.parser.legacy_transcript_open_failed",
+			"concern",
+			concern,
+			"component",
+			"claude",
+			"path",
+			path,
+			"err",
+			err,
+		)
+
 		return fmt.Errorf("open transcript for legacy transcript provenance: %w", err)
 	}
+
 	defer func() { _ = file.Close() }()
 	resolver := newLegacyResolver(newProvenanceReader(file, index))
+
 	for messageIndex := range messages {
 		resolver.applyToMessage(&messages[messageIndex], opts)
 	}
+
 	return nil
 }
 
@@ -40,36 +60,73 @@ func (resolver *legacyResolver) applyToMessage(message *transcript.Message, opts
 	if message.Compaction == nil || message.Compaction.Kind != transcript.CompactionKindSummary {
 		return
 	}
+
 	if _, ok := resolver.reader.index.summaries[message.UUID]; !ok {
 		return
 	}
+
 	content, err := resolver.summaryContent(message.UUID)
 	if err != nil {
-		slog.Warn("providers.claude.parser.legacy_summary_read_failed",
-			"concern", concern, "component", "claude", "summary_uuid", message.UUID, "err", err)
+		slog.Warn(
+			"providers.claude.parser.legacy_summary_read_failed",
+			"concern",
+			concern,
+			"component",
+			"claude",
+			"summary_uuid",
+			message.UUID,
+			"err",
+			err,
+		)
+
 		return
 	}
-	if len(reorienttag.CompleteTranscriptSpans(content)) > 0 || !reorienttag.ContainsTranscriptWrapper(content) {
+
+	if len(reorienttag.CompleteTranscriptSpans(content)) > 0 ||
+		!reorienttag.ContainsTranscriptWrapper(content) {
 		return
 	}
+
 	resolution, err := resolver.resolveSummary(message.UUID)
 	if err != nil {
-		slog.Warn("providers.claude.parser.legacy_transcript_unresolved",
-			"concern", concern, "component", "claude", "summary_uuid", message.UUID, "err", err)
+		slog.Warn(
+			"providers.claude.parser.legacy_transcript_unresolved",
+			"concern",
+			concern,
+			"component",
+			"claude",
+			"summary_uuid",
+			message.UUID,
+			"err",
+			err,
+		)
+
 		return
 	}
+
 	report := resolution.report
-	slog.Debug("providers.claude.parser.legacy_transcript_resolved",
-		"concern", concern,
-		"component", "claude",
-		"summary_uuid", message.UUID,
-		"request_id", report.requestID,
-		"summaries", report.summaries,
-		"request_positions", report.positions,
-		"direct_blobs", report.directBlobs,
-		"normalized_blobs", report.normalizedBlobs,
-		"retained_positions", report.retainedPositions,
-		"segments", resolution.segments,
+	slog.Debug(
+		"providers.claude.parser.legacy_transcript_resolved",
+		"concern",
+		concern,
+		"component",
+		"claude",
+		"summary_uuid",
+		message.UUID,
+		"request_id",
+		report.requestID,
+		"summaries",
+		report.summaries,
+		"request_positions",
+		report.positions,
+		"direct_blobs",
+		report.directBlobs,
+		"normalized_blobs",
+		report.normalizedBlobs,
+		"retained_positions",
+		report.retainedPositions,
+		"segments",
+		resolution.segments,
 	)
 	applyLegacySpan(message, content, resolution.span, opts)
 }
@@ -79,7 +136,12 @@ func (resolver *legacyResolver) applyToMessage(message *transcript.Message, opts
 // offsets in that text and applies user chat stripping rules to user chat
 // segments. When the selection includes every content kind, the text equals
 // the trimmed original.
-func applyLegacySpan(message *transcript.Message, content string, span reorienttag.TranscriptSpan, opts parseOptions) {
+func applyLegacySpan(
+	message *transcript.Message,
+	content string,
+	span reorienttag.TranscriptSpan,
+	opts parseOptions,
+) {
 	opts.Tally = nil
 	wrapper := content[span.Start:span.End]
 	before := legacyProse(content[:span.Start], opts, true)
@@ -93,12 +155,16 @@ func applyLegacySpan(message *transcript.Message, content string, span reorientt
 		End:      start + len(wrapper),
 		Segments: stripSummarySegments(span.Segments, opts),
 	}
+
 	message.Text = text
 	for itemIndex := range message.Compaction.ContextItems {
 		item := &message.Compaction.ContextItems[itemIndex]
-		if item.Message == nil || item.Message.MessageClass != transcript.CompactedMessageClassSummary || len(item.Message.Content) == 0 {
+		if item.Message == nil ||
+			item.Message.MessageClass != transcript.CompactedMessageClassSummary ||
+			len(item.Message.Content) == 0 {
 			continue
 		}
+
 		item.Message.Content[0].Text = text
 		item.Message.Content[0].TranscriptSpans = []reorienttag.TranscriptSpan{resolved}
 	}
@@ -112,11 +178,14 @@ func legacyProse(text string, opts parseOptions, leading bool) string {
 	if stripped == strings.TrimSpace(text) {
 		return text
 	}
+
 	if stripped == "" {
 		return ""
 	}
+
 	if leading {
 		return stripped + summaryPieceSeparator
 	}
+
 	return summaryPieceSeparator + stripped
 }

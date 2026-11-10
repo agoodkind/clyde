@@ -49,6 +49,7 @@ func (i InputItem) MarshalJSON() ([]byte, error) {
 		if summary == nil {
 			summary = []ReasoningSummary{}
 		}
+
 		withSummary := struct {
 			inputItemAlias
 			Summary []ReasoningSummary `json:"summary"`
@@ -61,12 +62,15 @@ func (i InputItem) MarshalJSON() ([]byte, error) {
 		if err != nil {
 			return nil, wrapJSONErr("codexwire reasoning input item", err)
 		}
+
 		return out, nil
 	}
+
 	out, err := json.Marshal(inputItemAlias(i))
 	if err != nil {
 		return nil, wrapJSONErr("codexwire input item", err)
 	}
+
 	return out, nil
 }
 
@@ -141,9 +145,11 @@ func (a LocalShellAction) WorkingDir() string {
 	if v := strings.TrimSpace(a.WorkingDirectory); v != "" {
 		return v
 	}
+
 	if v := strings.TrimSpace(a.Workdir); v != "" {
 		return v
 	}
+
 	return strings.TrimSpace(a.Cwd)
 }
 
@@ -161,23 +167,29 @@ func (c *CommandValue) UnmarshalJSON(data []byte) error {
 		*c = nil
 		return nil
 	}
+
 	if trimmed[0] == '[' {
 		var argv []string
 		if err := json.Unmarshal(data, &argv); err != nil {
 			return wrapJSONErr("codexwire local_shell command argv", err)
 		}
+
 		*c = argv
+
 		return nil
 	}
+
 	var single string
 	if err := json.Unmarshal(data, &single); err != nil {
 		return wrapJSONErr("codexwire local_shell command string", err)
 	}
+
 	if single == "" {
 		*c = nil
 	} else {
 		*c = []string{single}
 	}
+
 	return nil
 }
 
@@ -188,17 +200,21 @@ func (c CommandValue) MarshalJSON() ([]byte, error) {
 	if len(c) == 0 {
 		return []byte("null"), nil
 	}
+
 	if len(c) == 1 {
 		out, err := json.Marshal(c[0])
 		if err != nil {
 			return nil, wrapJSONErr("codexwire local_shell command marshal", err)
 		}
+
 		return out, nil
 	}
+
 	out, err := json.Marshal([]string(c))
 	if err != nil {
 		return nil, wrapJSONErr("codexwire local_shell command argv marshal", err)
 	}
+
 	return out, nil
 }
 
@@ -208,6 +224,7 @@ func (c ContentItems) Text() string {
 	if len(c) == 0 {
 		return ""
 	}
+
 	parts := make([]string, 0, len(c))
 	for _, item := range c {
 		switch item.Type {
@@ -219,6 +236,7 @@ func (c ContentItems) Text() string {
 			continue
 		}
 	}
+
 	return strings.Join(parts, "\n")
 }
 
@@ -230,24 +248,30 @@ func OutputText(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
 	}
+
 	trimmed := strings.TrimSpace(string(raw))
 	if trimmed == "" || trimmed == "null" {
 		return ""
 	}
+
 	if trimmed[0] == '"' {
 		var s string
 		if err := json.Unmarshal(raw, &s); err != nil {
 			return ""
 		}
+
 		return s
 	}
+
 	if trimmed[0] == '[' {
 		var items ContentItems
 		if err := json.Unmarshal(raw, &items); err != nil {
 			return ""
 		}
+
 		return items.Text()
 	}
+
 	return ""
 }
 
@@ -259,6 +283,7 @@ func RawOutput(text string) json.RawMessage {
 	if err != nil {
 		return nil
 	}
+
 	return body
 }
 
@@ -267,6 +292,7 @@ func wrapJSONErr(label string, err error) error {
 	if err == nil {
 		return nil
 	}
+
 	return &jsonOpError{Label: label, Err: err}
 }
 

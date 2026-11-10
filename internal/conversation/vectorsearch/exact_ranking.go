@@ -7,6 +7,8 @@ func (c *Client) RanksEveryAllowedPassage() bool {
 	if c == nil {
 		return false
 	}
+
 	_, local := c.store.(*localBackend)
+
 	return local
 }

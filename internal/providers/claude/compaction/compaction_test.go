@@ -15,6 +15,7 @@ func compactionPrompt(instructions string) string {
 	if instructions != "" {
 		prompt += "\n\nAdditional Instructions:\n" + instructions
 	}
+
 	return prompt + "\n\nREMINDER: Do NOT call any tools. Respond with plain text only."
 }
 
@@ -26,6 +27,7 @@ func TestPromptIndexFindsThePromptBehindASystemReminder(t *testing.T) {
 	if !ok {
 		t.Fatal("PromptIndex found no compaction prompt")
 	}
+
 	if index != 2 {
 		t.Fatalf("index = %d, want 2", index)
 	}
@@ -42,17 +44,20 @@ func TestPromptIndexRejectsANormalTurn(t *testing.T) {
 
 func TestArgumentsReadsEveryDeclaredArgument(t *testing.T) {
 	t.Parallel()
+
 	for _, declaration := range exportargs.Declarations() {
 		flag := "--" + strings.ReplaceAll(declaration.Canonical, "_", "-")
 		typed := flag
 		if declaration.Kind != exportargs.KindBool {
 			typed += " " + argumentValue(declaration)
 		}
+
 		args := Arguments(compactionPrompt(typed))
 		if len(args) == 0 {
 			t.Errorf("argument %q read nothing from %q", declaration.Canonical, typed)
 			continue
 		}
+
 		if args[0] != flag {
 			t.Errorf("argument %q read %v", declaration.Canonical, args)
 		}
@@ -64,9 +69,11 @@ func argumentValue(declaration exportargs.Declaration) string {
 	if len(declaration.Values) > 0 {
 		return declaration.Values[0]
 	}
+
 	if declaration.Kind == exportargs.KindInt {
 		return "0"
 	}
+
 	return "20k"
 }
 

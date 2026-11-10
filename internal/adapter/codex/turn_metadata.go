@@ -44,9 +44,17 @@ type TurnMetadataRemoteURLs struct {
 func (m TurnMetadata) MarshalCompact() (string, error) {
 	raw, err := json.Marshal(m)
 	if err != nil {
-		slog.Warn("adapter.codex.turn_metadata.marshal_failed", "concern", "adapter.providers.codex.request", "err", err)
+		slog.Warn(
+			"adapter.codex.turn_metadata.marshal_failed",
+			"concern",
+			"adapter.providers.codex.request",
+			"err",
+			err,
+		)
+
 		return "", fmt.Errorf("marshal codex turn metadata: %w", err)
 	}
+
 	return string(raw), nil
 }
 
@@ -58,7 +66,8 @@ func NewTurnMetadata(sessionID, turnID string) TurnMetadata {
 		SessionID:    strings.TrimSpace(sessionID),
 		ThreadSource: "user",
 		TurnID:       strings.TrimSpace(turnID),
-		Sandbox:      "none", Workspaces:
+		Sandbox:      "none",
+		Workspaces:
 
 		// WithWorkspace adds or replaces a workspace entry. Returns the
 		// receiver for chaining.
@@ -71,9 +80,12 @@ func (m TurnMetadata) WithWorkspace(absPath string, ws TurnMetadataWorkspace) Tu
 	if absPath == "" {
 		return m
 	}
+
 	if m.Workspaces == nil {
 		m.Workspaces = map[string]TurnMetadataWorkspace{}
 	}
+
 	m.Workspaces[absPath] = ws
+
 	return m
 }

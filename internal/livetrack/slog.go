@@ -10,10 +10,17 @@ import (
 // emitSessionEvent logs one register/release event with the canonical
 // field set. Session events do not carry drain-specific fields; the
 // drain events have their own helper.
-func (r *Registry[M]) emitSessionEvent(ctx context.Context, level slog.Level, message string, sess *Session[M], reason string) {
+func (r *Registry[M]) emitSessionEvent(
+	ctx context.Context,
+	level slog.Level,
+	message string,
+	sess *Session[M],
+	reason string,
+) {
 	if r.log == nil {
 		return
 	}
+
 	openedMsAgo := r.now().Sub(sess.OpenedAt).Milliseconds()
 	attrs := []slog.Attr{
 		slog.String("concern", "livetrack"),
@@ -37,6 +44,7 @@ func (r *Registry[M]) emitForceCloseEvent(ctx context.Context, sess *Session[M],
 	if r.log == nil {
 		return
 	}
+
 	openedMsAgo := r.now().Sub(sess.OpenedAt).Milliseconds()
 	attrs := []slog.Attr{
 		slog.String("session_id", sess.ID),
@@ -46,33 +54,51 @@ func (r *Registry[M]) emitForceCloseEvent(ctx context.Context, sess *Session[M],
 		slog.String("reason", reason),
 	}
 	attrs = appendCorrelationAttrs(attrs, ctx, sess.corr)
-	r.log.LogAttrs(ctx, slog.LevelWarn, "livetrack.session.force_close", append([]slog.Attr{
-		// emitDrainStarted logs the info-level drain.started event.
-		slog.String("concern", "livetrack"),
-	}, attrs...)...)
+	r.log.LogAttrs(
+		ctx,
+		slog.LevelWarn,
+		"livetrack.session.force_close",
+		append(
+			[]slog.Attr{
+				// emitDrainStarted logs the info-level drain.started event.
+				slog.String("concern", "livetrack"),
+			},
+			attrs...,
+		)...,
+	)
 }
 
 func (r *Registry[M]) emitDrainStarted(ctx context.Context, reason string) {
 	if r.log == nil {
 		return
 	}
+
 	attrs := []slog.Attr{
 		slog.String("reason", reason),
 		slog.String("state", StateDraining.String()),
 		slog.Int("remaining", r.Count()),
 	}
 	attrs = appendCorrelationAttrsCtxOnly(attrs, ctx)
-	r.log.LogAttrs(ctx, slog.LevelInfo, "livetrack.drain.started", append([]slog.Attr{
-		// emitDrainComplete logs the info-level drain.complete event with the
-		// terminal state and force-close accounting.
-		slog.String("concern", "livetrack"),
-	}, attrs...)...)
+	r.log.LogAttrs(
+		ctx,
+		slog.LevelInfo,
+		"livetrack.drain.started",
+		append(
+			[]slog.Attr{
+				// emitDrainComplete logs the info-level drain.complete event with the
+				// terminal state and force-close accounting.
+				slog.String("concern", "livetrack"),
+			},
+			attrs...,
+		)...,
+	)
 }
 
 func (r *Registry[M]) emitDrainComplete(ctx context.Context, result DrainResult) {
 	if r.log == nil {
 		return
 	}
+
 	attrs := []slog.Attr{
 		slog.String("reason", result.Reason),
 		slog.String("state", result.Final.String()),
@@ -81,20 +107,33 @@ func (r *Registry[M]) emitDrainComplete(ctx context.Context, result DrainResult)
 		slog.Int64("duration_ms", result.Duration.Milliseconds()),
 	}
 	attrs = appendCorrelationAttrsCtxOnly(attrs, ctx)
-	r.log.LogAttrs(ctx, slog.LevelInfo, "livetrack.drain.complete", append([]slog.Attr{
-		// appendCorrelationAttrs merges correlation attributes from both the
-		// caller context and the session-captured correlation. Caller
-		// attributes win when both are present so drain events are tied to
-		// the drain caller while session events stay tied to the registering
-		// caller. The session correlation back-fills missing fields.
-		slog.String("concern", "livetrack"),
-	}, attrs...)...)
+	r.log.LogAttrs(
+		ctx,
+		slog.LevelInfo,
+		"livetrack.drain.complete",
+		append(
+			[]slog.Attr{
+				// appendCorrelationAttrs merges correlation attributes from both the
+				// caller context and the session-captured correlation. Caller
+				// attributes win when both are present so drain events are tied to
+				// the drain caller while session events stay tied to the registering
+				// caller. The session correlation back-fills missing fields.
+				slog.String("concern", "livetrack"),
+			},
+			attrs...,
+		)...,
+	)
 }
 
-func appendCorrelationAttrs(attrs []slog.Attr, ctx context.Context, sessCorr correlation.Context) []slog.Attr {
+func appendCorrelationAttrs(
+	attrs []slog.Attr,
+	ctx context.Context,
+	sessCorr correlation.Context,
+) []slog.Attr {
 	ctxCorr := correlation.FromContext(ctx)
 	attrs = correlation.AppendAttrs(attrs, ctxCorr)
 	attrs = correlation.AppendAttrs(attrs, sessCorr)
+
 	return attrs
 }
 

@@ -61,6 +61,7 @@ func (s Settings) safetyFactor() float64 {
 	if s.SafetyFactor > 0 {
 		return s.SafetyFactor
 	}
+
 	return DefaultSafetyFactor
 }
 
@@ -68,5 +69,6 @@ func (s Settings) charsPerToken() float64 {
 	if s.CharsPerToken > 0 {
 		return s.CharsPerToken
 	}
+
 	return DefaultCharsPerToken
 }

@@ -24,6 +24,7 @@ func TestRecordJSONUsesProviderLabel(t *testing.T) {
 	if err := json.Unmarshal(data, &wire); err != nil {
 		t.Fatalf("unmarshal provider wire: %v", err)
 	}
+
 	if wire.Provider != "claude" {
 		t.Fatalf("provider = %q, want claude", wire.Provider)
 	}
@@ -34,6 +35,7 @@ func TestRecordJSONParsesProviderLabel(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"provider":"codex"}`), &record); err != nil {
 		t.Fatalf("unmarshal conversation record: %v", err)
 	}
+
 	if record.Provider != ProviderCodex {
 		t.Fatalf("provider = %v, want %v", record.Provider, ProviderCodex)
 	}
@@ -50,6 +52,7 @@ func TestRecordJSONParsesLegacyProviderEnumValue(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"provider":1}`), &record); err != nil {
 		t.Fatalf("unmarshal legacy conversation record: %v", err)
 	}
+
 	if record.Provider != ProviderClaude {
 		t.Fatalf("provider = %v, want %v", record.Provider, ProviderClaude)
 	}
@@ -68,6 +71,7 @@ func TestRecordJSONRoundTripsForkLineage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal conversation record: %v", err)
 	}
+
 	type lineageWire struct {
 		ParentProvider string `json:"parent_provider"`
 	}
@@ -78,6 +82,7 @@ func TestRecordJSONRoundTripsForkLineage(t *testing.T) {
 	if err := json.Unmarshal(data, &wire); err != nil {
 		t.Fatalf("unmarshal conversation record wire: %v", err)
 	}
+
 	if wire.Lineage.ParentProvider != "claude" {
 		t.Fatalf("parent provider = %q, want claude", wire.Lineage.ParentProvider)
 	}
@@ -86,6 +91,7 @@ func TestRecordJSONRoundTripsForkLineage(t *testing.T) {
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("unmarshal conversation record: %v", err)
 	}
+
 	if !reflect.DeepEqual(decoded, record) {
 		t.Fatalf("decoded record = %#v, want %#v", decoded, record)
 	}
@@ -97,6 +103,7 @@ func TestRecordJSONWithoutLineageDecodesNilLineage(t *testing.T) {
 	if err := json.Unmarshal(data, &record); err != nil {
 		t.Fatalf("unmarshal conversation record: %v", err)
 	}
+
 	if record.Lineage != nil {
 		t.Fatalf("lineage = %#v, want nil", record.Lineage)
 	}
@@ -109,6 +116,7 @@ func TestRecordJSONNilLineageOmitsLineageKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal conversation record: %v", err)
 	}
+
 	if strings.Contains(string(data), `"lineage"`) {
 		t.Fatalf("record JSON included lineage key: %s", data)
 	}

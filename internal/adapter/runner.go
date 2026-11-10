@@ -53,5 +53,6 @@ func (d Deps) authForProvider(id adapterresolver.ProviderID) adapterprovider.Aut
 	if d.GetAuth == nil {
 		return nil
 	}
+
 	return d.GetAuth(id)
 }

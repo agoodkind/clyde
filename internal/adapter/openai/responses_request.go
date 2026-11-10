@@ -82,11 +82,13 @@ var knownResponsesRequestKeys = map[string]bool{
 // ResponsesRequest does not decode.
 func (s ResponsesFieldSet) UnknownResponsesKeys() []string {
 	unknown := make([]string, 0)
+
 	for _, key := range sortedKeys(s.fields) {
 		if !knownResponsesRequestKeys[key] {
 			unknown = append(unknown, key)
 		}
 	}
+
 	return unknown
 }
 
@@ -166,12 +168,15 @@ func (r *ResponsesRequest) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return fmt.Errorf("decode typed Responses request: %w", err)
 	}
+
 	fields := responsesRawFields{}
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return fmt.Errorf("decode Responses field presence: %w", err)
 	}
+
 	*r = ResponsesRequest(decoded)
 	r.Fields = ResponsesFieldSet{fields: fields}
+
 	return nil
 }
 
@@ -181,9 +186,17 @@ func (r *ResponsesRequest) UnmarshalJSON(data []byte) error {
 func DecodeFieldSet(body []byte) (ResponsesFieldSet, error) {
 	fields := responsesRawFields{}
 	if err := json.Unmarshal(body, &fields); err != nil {
-		slog.Warn("adapter.openai.field_presence_invalid", "concern", "adapter.chat.dispatch", "err", err)
+		slog.Warn(
+			"adapter.openai.field_presence_invalid",
+			"concern",
+			"adapter.chat.dispatch",
+			"err",
+			err,
+		)
+
 		return ResponsesFieldSet{fields: nil}, fmt.Errorf("decode request field presence: %w", err)
 	}
+
 	return ResponsesFieldSet{fields: fields}, nil
 }
 
@@ -194,7 +207,9 @@ func responsesPresence(raw json.RawMessage) ResponsesFieldPresence {
 		return ResponsesFieldAbsent
 	case responsesPresenceTokenNull:
 		return ResponsesFieldNull
-	case responsesPresenceTokenEmptyString, responsesPresenceTokenEmptyArray, responsesPresenceTokenEmptyObject:
+	case responsesPresenceTokenEmptyString,
+		responsesPresenceTokenEmptyArray,
+		responsesPresenceTokenEmptyObject:
 		return ResponsesFieldEmpty
 	case responsesPresenceTokenFalse:
 		return ResponsesFieldFalse
@@ -204,6 +219,7 @@ func responsesPresence(raw json.RawMessage) ResponsesFieldPresence {
 		if responsesNumericZero(raw) {
 			return ResponsesFieldZero
 		}
+
 		return ResponsesFieldPresent
 	}
 }
@@ -213,11 +229,14 @@ func responsesNumericZero(raw json.RawMessage) bool {
 	if len(token) == 0 || !responsesJSONNumberStart(token[0]) {
 		return false
 	}
+
 	var number json.Number
 	if err := json.Unmarshal(token, &number); err != nil {
 		return false
 	}
+
 	value, ok := new(big.Rat).SetString(number.String())
+
 	return ok && value.Sign() == 0
 }
 
@@ -231,8 +250,16 @@ func responsesJSONNumberStart(first byte) bool {
 func UnmarshalResponsesRequest(body []byte) (ResponsesRequest, error) {
 	var req ResponsesRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		slog.Warn("adapter.openai.responses_request_invalid", "concern", "adapter.chat.dispatch", "err", err)
+		slog.Warn(
+			"adapter.openai.responses_request_invalid",
+			"concern",
+			"adapter.chat.dispatch",
+			"err",
+			err,
+		)
+
 		return ResponsesRequest{}, fmt.Errorf("unmarshal responses request: %w", err)
 	}
+
 	return req, nil
 }

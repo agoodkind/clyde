@@ -28,15 +28,19 @@ func CompactionCheckpoints(
 	if len(transcript.CompactionMessages(messages)) == 0 {
 		return nil
 	}
+
 	checkpoints := make([]CompactionCheckpoint, 0)
 	attachedSummaries := make(map[int]struct{})
+
 	for index, message := range messages {
 		if _, ok := attachedSummaries[index]; ok {
 			continue
 		}
+
 		if message.Compaction == nil {
 			continue
 		}
+
 		switch message.Compaction.Kind {
 		case transcript.CompactionKindBoundary:
 			checkpoint := boundaryCheckpoint(index, message)
@@ -44,27 +48,19 @@ func CompactionCheckpoints(
 				nextMessage := messages[index+1]
 				if isCompactionSummary(nextMessage) &&
 					summaryAttachesToBoundary(message, nextMessage) {
-					checkpoint = attachSummaryCheckpoint(
-						checkpoint,
-						index+1,
-						nextMessage,
-					)
+					checkpoint = attachSummaryCheckpoint(checkpoint, index+1, nextMessage)
 					attachedSummaries[index+1] = struct{}{}
 				}
 			}
+
 			checkpoints = append(checkpoints, checkpoint)
 		case transcript.CompactionKindMicroboundary:
-			checkpoints = append(
-				checkpoints,
-				boundaryCheckpoint(index, message),
-			)
+			checkpoints = append(checkpoints, boundaryCheckpoint(index, message))
 		case transcript.CompactionKindSummary:
-			checkpoints = append(
-				checkpoints,
-				summaryOnlyCheckpoint(index, message),
-			)
+			checkpoints = append(checkpoints, summaryOnlyCheckpoint(index, message))
 		}
 	}
+
 	return checkpoints
 }
 
@@ -94,6 +90,7 @@ func boundaryCheckpoint(
 			ReplacementHistoryCount: 0,
 		}
 	}
+
 	return CompactionCheckpoint{
 		BoundaryIndex:           index,
 		BoundaryUUID:            message.UUID,
@@ -129,6 +126,7 @@ func summaryOnlyCheckpoint(
 			ReplacementHistoryCount: 0,
 		}
 	}
+
 	return CompactionCheckpoint{
 		BoundaryIndex:           -1,
 		BoundaryUUID:            "",
@@ -165,6 +163,7 @@ func attachSummaryCheckpoint(
 			summary.Compaction.ReplacementHistoryCount,
 		)
 	}
+
 	return checkpoint
 }
 
@@ -181,6 +180,7 @@ func summaryAttachesToBoundary(
 		summary.LogicalParentUUID == boundary.UUID {
 		return true
 	}
+
 	return summary.ParentUUID == "" && summary.LogicalParentUUID == ""
 }
 
@@ -190,6 +190,7 @@ func copyContextItems(
 	if len(items) == 0 {
 		return nil
 	}
+
 	return append([]transcript.CompactedContextItem(nil), items...)
 }
 
@@ -197,5 +198,6 @@ func firstNonZeroInt(a int, b int) int {
 	if a != 0 {
 		return a
 	}
+
 	return b
 }

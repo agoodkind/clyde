@@ -62,26 +62,33 @@ func NewServer(auditRotation audit.RotationConfig) *Server {
 	}.IsLivetrackMeta()
 	log, cleanup := audit.NewLogger("mcp", auditRotation)
 	group := livetrack.NewGroup(livetrack.GroupOptions{Log: log})
-	registry := livetrack.Attach[MCPMeta](group, livetrack.MemberSpec{
-		Phase:         livetrack.PhaseIngress,
-		QuietRelevant: true,
-		CancelNoWait:  false,
-	}, livetrack.Options[MCPMeta]{
-		Component:     "mcpserver",
-		Concern:       slogger.ConcernMCPServerRequest,
-		Log:           log,
-		PollEvery:     50 * time.Millisecond,
-		CloserGrace:   2 * time.Second,
-		ParallelClose: false,
-		Now:           nil,
-	})
-	mcpServer := server.NewMCPServer("clyde", "0.13.0-dev",
+	registry := livetrack.Attach[MCPMeta](
+		group,
+		livetrack.MemberSpec{
+			Phase:         livetrack.PhaseIngress,
+			QuietRelevant: true,
+			CancelNoWait:  false,
+		},
+		livetrack.Options[MCPMeta]{
+			Component:     "mcpserver",
+			Concern:       slogger.ConcernMCPServerRequest,
+			Log:           log,
+			PollEvery:     50 * time.Millisecond,
+			CloserGrace:   2 * time.Second,
+			ParallelClose: false,
+			Now:           nil,
+		},
+	)
+	mcpServer := server.NewMCPServer(
+		"clyde",
+		"0.13.0-dev",
 		server.WithHooks(newHooks()),
 		server.WithTaskCapabilities(true, true, true),
 		server.WithMaxConcurrentTasks(maxConcurrentMCPTasks),
 	)
 	mcpServer.Use(toolCallMiddleware(registry, "clyde"))
 	registerPrompt(mcpServer)
+
 	return &Server{
 		Tunnels: registry,
 		group:   group,
@@ -108,15 +115,39 @@ func (srv *Server) Serve(ctx context.Context) error {
 		Tool:       "",
 		Op:         "serve",
 	}
-	srv.log.InfoContext(ctx, "mcp.server.starting", "concern", "mcp.server.requests", "server_name", serveMeta.ServerName, "op", serveMeta.Op)
+	srv.log.InfoContext(
+		ctx,
+		"mcp.server.starting",
+		"concern",
+		"mcp.server.requests",
+		"server_name",
+		serveMeta.ServerName,
+		"op",
+		serveMeta.Op,
+	)
 	releaseServe := func() {}
-	serveHandle, err := srv.Tunnels.Register(ctx, "mcp.serve", serveMeta, &contextCancelCloser{cancel: func() {}})
+	serveHandle, err := srv.Tunnels.Register(
+		ctx,
+		"mcp.serve",
+		serveMeta,
+		&contextCancelCloser{cancel: func() {}},
+	)
 	if err == nil {
-		releaseServe = sync.OnceFunc(func() { srv.Tunnels.Release(ctx, serveHandle, "mcp.serve.done") })
+		releaseServe = sync.OnceFunc(
+			func() { srv.Tunnels.Release(ctx, serveHandle, "mcp.serve.done") },
+		)
 		defer releaseServe()
 	}
 
-	return serveStdioLocked(ctx, srv.mcp, srv.group, mcpShutdownCap, os.Stdin, os.Stdout, releaseServe)
+	return serveStdioLocked(
+		ctx,
+		srv.mcp,
+		srv.group,
+		mcpShutdownCap,
+		os.Stdin,
+		os.Stdout,
+		releaseServe,
+	)
 }
 
 // mcpShutdownCap bounds how long the MCP server drains in-flight tool calls
@@ -128,26 +159,34 @@ func newHooks() *server.Hooks {
 	if hook := newRequestIDHook(); hook != nil {
 		hooks.AddBeforeCallTool(hook)
 	}
+
 	return hooks
 }
 
 func newRequestIDHook() server.OnBeforeCallToolFunc {
 	hookType := reflect.TypeFor[server.OnBeforeCallToolFunc]()
-	hookValue := reflect.MakeFunc(hookType, func(arguments []reflect.Value) []reflect.Value {
-		if len(arguments) != 3 {
+	hookValue := reflect.MakeFunc(
+		hookType,
+		func(arguments []reflect.Value) []reflect.Value {
+			if len(arguments) != 3 {
+				return nil
+			}
+
+			request, ok := arguments[2].Interface().(*mcp.CallToolRequest)
+			if !ok {
+				return nil
+			}
+
+			stampCallToolRequestID(formatJSONRPCID(arguments[1]), request)
+
 			return nil
-		}
-		request, ok := arguments[2].Interface().(*mcp.CallToolRequest)
-		if !ok {
-			return nil
-		}
-		stampCallToolRequestID(formatJSONRPCID(arguments[1]), request)
-		return nil
-	})
+		},
+	)
 	hook, ok := hookValue.Interface().(server.OnBeforeCallToolFunc)
 	if !ok {
 		return nil
 	}
+
 	return hook
 }
 
@@ -155,12 +194,15 @@ func stampCallToolRequestID(requestID string, request *mcp.CallToolRequest) {
 	if request == nil {
 		return
 	}
+
 	if requestID == "" {
 		return
 	}
+
 	if request.Header == nil {
 		request.Header = http.Header{}
 	}
+
 	request.Header.Set(mcpRequestIDHeader, requestID)
 }
 
@@ -168,20 +210,25 @@ func formatJSONRPCID(value reflect.Value) string {
 	if !value.IsValid() {
 		return ""
 	}
+
 	for value.Kind() == reflect.Interface || value.Kind() == reflect.Pointer {
 		if value.IsNil() {
 			return ""
 		}
+
 		value = value.Elem()
 	}
+
 	if value.CanInterface() {
 		if requestID, ok := value.Interface().(mcp.RequestId); ok {
 			return formatJSONRPCID(reflect.ValueOf(requestID.Value()))
 		}
+
 		if number, ok := value.Interface().(json.Number); ok {
 			return number.String()
 		}
 	}
+
 	switch value.Kind() {
 	case reflect.Invalid:
 		return ""
@@ -191,25 +238,42 @@ func formatJSONRPCID(value reflect.Value) string {
 		return strings.TrimSpace(value.String())
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		return strconv.FormatInt(value.Int(), 10)
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+	case reflect.Uint,
+		reflect.Uint8,
+		reflect.Uint16,
+		reflect.Uint32,
+		reflect.Uint64,
+		reflect.Uintptr:
 		return strconv.FormatUint(value.Uint(), 10)
 	case reflect.Float32, reflect.Float64:
 		floatValue := value.Float()
 		if floatValue == float64(int64(floatValue)) {
 			return strconv.FormatInt(int64(floatValue), 10)
 		}
+
 		return strconv.FormatFloat(floatValue, 'f', -1, 64)
 	case reflect.Complex64, reflect.Complex128:
 		if !value.CanInterface() {
 			return ""
 		}
+
 		return strings.TrimSpace(fmt.Sprint(value.Interface()))
-	case reflect.Array, reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice, reflect.Struct, reflect.UnsafePointer:
+	case reflect.Array,
+		reflect.Chan,
+		reflect.Func,
+		reflect.Interface,
+		reflect.Map,
+		reflect.Pointer,
+		reflect.Slice,
+		reflect.Struct,
+		reflect.UnsafePointer:
 		if !value.CanInterface() {
 			return ""
 		}
+
 		return strings.TrimSpace(fmt.Sprint(value.Interface()))
 	}
+
 	return ""
 }
 
@@ -222,18 +286,29 @@ func registerPrompt(mcpServer *server.MCPServer) {
 		func(ctx context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
 			_ = ctx
 			_ = req
+
 			return &mcp.GetPromptResult{
 				Description: "Clyde transcript tools",
-				Messages: []mcp.PromptMessage{{
-					Role:    mcp.RoleUser,
-					Content: mcp.NewTextContent(gettingStartedPrompt),
-				}},
+				Messages: []mcp.PromptMessage{
+					{
+						Role:    mcp.RoleUser,
+						Content: mcp.NewTextContent(gettingStartedPrompt),
+					},
+				},
 			}, nil
 		},
 	)
 }
 
-func serveStdioLocked(parent context.Context, mcpSrv *server.MCPServer, group *livetrack.Group, shutdownCap time.Duration, stdin io.Reader, stdout io.Writer, releaseServe func()) error {
+func serveStdioLocked(
+	parent context.Context,
+	mcpSrv *server.MCPServer,
+	group *livetrack.Group,
+	shutdownCap time.Duration,
+	stdin io.Reader,
+	stdout io.Writer,
+	releaseServe func(),
+) error {
 	stdio := server.NewStdioServer(mcpSrv)
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
@@ -244,7 +319,16 @@ func serveStdioLocked(parent context.Context, mcpSrv *server.MCPServer, group *l
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				slog.ErrorContext(ctx, "mcp.stdio.signal_watcher_panic", "concern", "mcp.server.requests", "component", "mcpserver", "err", fmt.Sprintf("panic: %v", recovered))
+				slog.ErrorContext(
+					ctx,
+					"mcp.stdio.signal_watcher_panic",
+					"concern",
+					"mcp.server.requests",
+					"component",
+					"mcpserver",
+					"err",
+					fmt.Sprintf("panic: %v", recovered),
+				)
 			}
 		}()
 		select {
@@ -265,35 +349,70 @@ func serveStdioLocked(parent context.Context, mcpSrv *server.MCPServer, group *l
 	// force-closed count, so no bespoke force-close log is needed here.
 	group.Quiesce(parent, "mcp.shutdown", livetrack.Budget{Cap: shutdownCap, IdleGrace: 0})
 	if listenErr != nil {
-		slog.WarnContext(parent, "mcp.stdio.listen_failed", "concern", "mcp.server.requests", "component", "mcpserver", "err", listenErr)
+		slog.WarnContext(
+			parent,
+			"mcp.stdio.listen_failed",
+			"concern",
+			"mcp.server.requests",
+			"component",
+			"mcpserver",
+			"err",
+			listenErr,
+		)
+
 		return fmt.Errorf("mcpserver: stdio listen: %w", listenErr)
 	}
+
 	return nil
 }
 
-func toolCallMiddleware(reg *livetrack.Registry[MCPMeta], serverName string) server.ToolHandlerMiddleware {
+func toolCallMiddleware(
+	reg *livetrack.Registry[MCPMeta],
+	serverName string,
+) server.ToolHandlerMiddleware {
 	return func(next server.ToolHandlerFunc) server.ToolHandlerFunc {
-		return func(ctx context.Context, req mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
+		return func(ctx context.Context, req mcp.CallToolRequest) (
+			result *mcp.CallToolResult,
+			err error,
+		) {
 			requestID := strings.TrimSpace(req.Header.Get(mcpRequestIDHeader))
 			handlerCtx, corr := newToolCallContext(ctx, requestID)
 			defer trace.Op(handlerCtx, "mcp.tool_call."+req.Params.Name)(&err)
 			handlerCtx, handlerCancel := context.WithCancel(handlerCtx)
 			closer := &contextCancelCloser{cancel: handlerCancel}
-			handle, regErr := reg.Register(handlerCtx, "mcp.tool_call", MCPMeta{
-				ServerName: serverName,
-				Method:     req.Method,
-				RequestID:  corr.RequestID,
-				Tool:       req.Params.Name,
-				Op:         "tool_call",
-			}, closer)
+			handle, regErr := reg.Register(
+				handlerCtx,
+				"mcp.tool_call",
+				MCPMeta{
+					ServerName: serverName,
+					Method:     req.Method,
+					RequestID:  corr.RequestID,
+					Tool:       req.Params.Name,
+					Op:         "tool_call",
+				},
+				closer,
+			)
 			if regErr != nil {
 				handlerCancel()
-				slog.WarnContext(handlerCtx, "mcp.tool_call.registry_closed", "concern", "mcp.server.requests", "component", "mcpserver", "tool", req.Params.Name, "err", regErr)
+				slog.WarnContext(
+					handlerCtx,
+					"mcp.tool_call.registry_closed",
+					"concern",
+					"mcp.server.requests",
+					"component",
+					"mcpserver",
+					"tool",
+					req.Params.Name,
+					"err",
+					regErr,
+				)
+
 				return nil, fmt.Errorf("mcp: server draining, tool call rejected: %w", regErr)
 			}
 			defer reg.Release(handlerCtx, handle, "mcp.tool_call.completed")
 			result, err = next(handlerCtx, req)
 			handlerCancel()
+
 			return result, err
 		}
 	}
@@ -305,7 +424,10 @@ func toolCallMiddleware(reg *livetrack.Registry[MCPMeta], serverName string) ser
 // correlation.Ensure here would reuse that one trace and span across every call.
 // Minting a fresh correlation per call gives each tool call its own trace and
 // span while keeping the per-call request id.
-func newToolCallContext(ctx context.Context, requestID string) (context.Context, correlation.Context) {
+func newToolCallContext(
+	ctx context.Context,
+	requestID string,
+) (context.Context, correlation.Context) {
 	corr := correlation.New(requestID)
 	return correlation.WithContext(ctx, corr), corr
 }

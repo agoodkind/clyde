@@ -24,29 +24,40 @@ func (r *EventRenderer) renderReasoningFromDelta(ev ReasoningDelta) *adapteropen
 	if text == "" && ev.Text == "" {
 		return nil
 	}
+
 	decorated := r.decorateReasoningFromDelta(ev)
 	if isThinkingPlaceholder(text) && !r.reasoningBodyEmitted {
 		if r.reasoningRenderMode == ReasoningRenderModeReasoningContentOnly {
 			return nil
 		}
+
 		if !r.reasoningOpen {
 			return r.renderReasoningOpen()
 		}
+
 		return nil
 	}
+
 	if r.reasoningRenderMode == ReasoningRenderModeReasoningContentOnly {
 		r.reasoningBodyEmitted = true
 		delta := adapteropenai.StreamDelta{
 			Content:          "",
-			ReasoningContent: decorated, Role: "", Reasoning: "", ToolCalls: nil, Refusal: "",
+			ReasoningContent: decorated,
+			Role:             "",
+			Reasoning:        "",
+			ToolCalls:        nil,
+			Refusal:          "",
 		}
 		if !r.seenRole {
 			delta.Role = "assistant"
 			r.seenRole = true
 		}
+
 		ch := r.baseChunk(delta)
+
 		return &ch
 	}
+
 	open := !r.reasoningOpen
 	// leadingQuote covers two cases the split-chunk path needs: the
 	// in-chunk open path (open=true) AND the first body delta after a
@@ -55,30 +66,56 @@ func (r *EventRenderer) renderReasoningFromDelta(ev ReasoningDelta) *adapteropen
 	// line lands at column 0 and terminates the markdown blockquote.
 	leadingQuote := open || !r.reasoningBodyEmitted
 	kind := r.activeSyntheticReasoningKind()
-	contentOut := FormatSyntheticContentDeltaWithRef(kind, open, leadingQuote, r.lastReasoningItemID, r.backendOrigin(), decorated)
+	contentOut := FormatSyntheticContentDeltaWithRef(
+		kind,
+		open,
+		leadingQuote,
+		r.lastReasoningItemID,
+		r.backendOrigin(),
+		decorated,
+	)
 	r.reasoningOpen = true
 	r.reasoningBodyEmitted = true
 	delta := adapteropenai.StreamDelta{
 		Content:          contentOut,
-		ReasoningContent: decorated, Role: "", Reasoning: "", ToolCalls: nil, Refusal: "",
+		ReasoningContent: decorated,
+		Role:             "",
+		Reasoning:        "",
+		ToolCalls:        nil,
+		Refusal:          "",
 	}
 	if !r.seenRole {
 		delta.Role = "assistant"
 		r.seenRole = true
 	}
+
 	ch := r.baseChunk(delta)
+
 	return &ch
 }
 
 func (r *EventRenderer) renderReasoningOpen() *adapteropenai.StreamChunk {
 	r.reasoningOpen = true
 	kind := r.activeSyntheticReasoningKind()
-	delta := adapteropenai.StreamDelta{Content: SyntheticContentOpenWithRef(kind, r.lastReasoningItemID, r.backendOrigin()), Role: "", Reasoning: "", ReasoningContent: "", ToolCalls: nil, Refusal: ""}
+	delta := adapteropenai.StreamDelta{
+		Content: SyntheticContentOpenWithRef(
+			kind,
+			r.lastReasoningItemID,
+			r.backendOrigin(),
+		),
+		Role:             "",
+		Reasoning:        "",
+		ReasoningContent: "",
+		ToolCalls:        nil,
+		Refusal:          "",
+	}
 	if !r.seenRole {
 		delta.Role = "assistant"
 		r.seenRole = true
 	}
+
 	ch := r.baseChunk(delta)
+
 	return &ch
 }
 
@@ -115,6 +152,7 @@ func (r *EventRenderer) activeSyntheticReasoningKind() SyntheticContentKind {
 	if r.lastReasoningKind == "redacted" {
 		return SyntheticRedactedThinking
 	}
+
 	return SyntheticReasoning
 }
 
@@ -134,23 +172,29 @@ func (r *EventRenderer) decorateReasoningFromDelta(ev ReasoningDelta) string {
 	if kind == "" {
 		kind = "text"
 	}
+
 	if r.pendingReasoningBreak {
 		prefix = "\n\n"
 		r.pendingReasoningBreak = false
 	} else if r.lastReasoningKind != "" && r.lastReasoningKind != kind {
 		prefix = "\n\n"
 	}
+
 	if kind == "summary" && strings.HasPrefix(strings.TrimSpace(ev.Text), "**") {
 		prefix = "\n\n"
 	}
+
 	if ev.SummaryIndex != nil {
 		if r.haveSummaryIdx && r.lastSummaryIdx != *ev.SummaryIndex {
 			prefix = "\n\n"
 		}
+
 		r.lastSummaryIdx = *ev.SummaryIndex
 		r.haveSummaryIdx = true
 	}
+
 	r.lastReasoningKind = kind
+
 	return prefix + ev.Text
 }
 
@@ -184,6 +228,7 @@ func (r *EventRenderer) renderReasoningClose() *adapteropenai.StreamChunk {
 	if !r.reasoningOpen {
 		return nil
 	}
+
 	r.reasoningOpen = false
 	kind := r.activeSyntheticReasoningKind()
 	encrypted := r.lastReasoningEncrypted
@@ -197,11 +242,20 @@ func (r *EventRenderer) renderReasoningClose() *adapteropenai.StreamChunk {
 		encrypted = r.lastReasoningRedactedData
 		signature = ""
 	}
+
 	r.lastReasoningEncrypted = ""
 	r.lastReasoningSignature = ""
 	r.lastReasoningRedactedData = ""
 	// Reset the kind so a later reasoning span starts fresh.
 	r.lastReasoningKind = ""
-	ch := r.baseChunk(adapteropenai.StreamDelta{Content: SyntheticContentCloseWithAttrs(kind, encrypted, signature), Role: "", Reasoning: "", ReasoningContent: "", ToolCalls: nil, Refusal: ""})
+	ch := r.baseChunk(adapteropenai.StreamDelta{
+		Content:          SyntheticContentCloseWithAttrs(kind, encrypted, signature),
+		Role:             "",
+		Reasoning:        "",
+		ReasoningContent: "",
+		ToolCalls:        nil,
+		Refusal:          "",
+	})
+
 	return &ch
 }

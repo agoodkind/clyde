@@ -22,8 +22,12 @@ func filterCompactionSelectionItems(
 ) CompactionSegmentSelection {
 	segments := slices.Clone(selection.Segments)
 	for i := range segments {
-		segments[i].Checkpoint.ContextItems = filterCompactionContextItems(segments[i].Checkpoint.ContextItems, content)
+		segments[i].Checkpoint.ContextItems = filterCompactionContextItems(
+			segments[i].Checkpoint.ContextItems,
+			content,
+		)
 	}
+
 	return CompactionSegmentSelection{
 		Selector: selection.Selector,
 		Segments: segments,
@@ -38,6 +42,7 @@ func filterCompactionMessageItems(messages []transcript.Message, content Content
 		if messages[i].Compaction == nil {
 			continue
 		}
+
 		metadata := *messages[i].Compaction
 		sourceItems := metadata.ContextItems
 		metadata.ContextItems = filterCompactionContextItems(sourceItems, content)
@@ -45,7 +50,8 @@ func filterCompactionMessageItems(messages []transcript.Message, content Content
 		// A summary message renders its text when system_messages is selected.
 		// Unless raw_json_metadata is selected, the text uses the same segment
 		// selection as context items.
-		if metadata.Kind == transcript.CompactionKindSummary && !content.Has(ContentKindRawJSONMetadata) {
+		if metadata.Kind == transcript.CompactionKindSummary &&
+			!content.Has(ContentKindRawJSONMetadata) {
 			messages[i].Text = filterInjectedTranscriptText(messages[i].Text, sourceItems, content)
 		}
 	}
@@ -63,20 +69,25 @@ func filterCompactionContextItems(
 	if content.Has(ContentKindRawJSONMetadata) {
 		return copyContextItems(items)
 	}
+
 	kept := make([]transcript.CompactedContextItem, 0, len(items))
 	for _, item := range expandInjectedTranscriptItems(items) {
 		if !compactedItemSelected(item, content) {
 			continue
 		}
+
 		item = compactedItemWithoutRaw(item)
 		if !content.Has(ContentKindToolCalls) && !content.Has(ContentKindToolOutputs) {
 			item = compactedCallSummary(item)
 		}
+
 		kept = append(kept, item)
 	}
+
 	if len(kept) == 0 {
 		return nil
 	}
+
 	return kept
 }
 
@@ -116,13 +127,18 @@ func compactedItemSelected(item transcript.CompactedContextItem, content Content
 // compactedMessageSelected reports whether content kinds select a message.
 // Chat selects summary messages and user or assistant messages. System prompts
 // select developer and system messages.
-func compactedMessageSelected(message *transcript.CompactedMessageItem, content ContentKindSet) bool {
+func compactedMessageSelected(
+	message *transcript.CompactedMessageItem,
+	content ContentKindSet,
+) bool {
 	if message == nil {
 		return false
 	}
+
 	if message.MessageClass == transcript.CompactedMessageClassSummary {
 		return content.Has(ContentKindChat)
 	}
+
 	switch message.Role {
 	case compactedRoleDeveloper, compactedRoleSystem:
 		return content.Has(ContentKindSystemPrompts)
@@ -140,15 +156,20 @@ func compactedItemWithoutRaw(item transcript.CompactedContextItem) transcript.Co
 	if item.Message != nil {
 		item.Message = compactedMessageWithoutRaw(*item.Message)
 	}
+
 	if item.Reasoning != nil {
 		item.Reasoning = compactedReasoningWithoutRaw(*item.Reasoning)
 	}
+
 	return compactedToolItemWithoutRaw(item)
 }
 
-func compactedMessageWithoutRaw(message transcript.CompactedMessageItem) *transcript.CompactedMessageItem {
+func compactedMessageWithoutRaw(
+	message transcript.CompactedMessageItem,
+) *transcript.CompactedMessageItem {
 	message.Raw = nil
 	message.ContentRaw = nil
+
 	message.Content = slices.Clone(message.Content)
 	for i := range message.Content {
 		message.Content[i].Raw = nil
@@ -156,54 +177,67 @@ func compactedMessageWithoutRaw(message transcript.CompactedMessageItem) *transc
 			message.Content[i].ImageURL = ""
 		}
 	}
+
 	return &message
 }
 
-func compactedReasoningWithoutRaw(reasoning transcript.CompactedReasoningItem) *transcript.CompactedReasoningItem {
+func compactedReasoningWithoutRaw(
+	reasoning transcript.CompactedReasoningItem,
+) *transcript.CompactedReasoningItem {
 	reasoning.Raw = nil
 	reasoning.SummaryRaw = nil
 	reasoning.EncryptedContent = ""
+
 	reasoning.Summary = slices.Clone(reasoning.Summary)
 	for i := range reasoning.Summary {
 		reasoning.Summary[i].Raw = nil
 	}
+
 	return &reasoning
 }
 
 // compactedToolItemWithoutRaw returns a copy without raw JSON in tool call and
 // tool output payloads.
-func compactedToolItemWithoutRaw(item transcript.CompactedContextItem) transcript.CompactedContextItem {
+func compactedToolItemWithoutRaw(
+	item transcript.CompactedContextItem,
+) transcript.CompactedContextItem {
 	if item.LocalShellCall != nil {
 		call := *item.LocalShellCall
 		call.Raw = nil
 		item.LocalShellCall = &call
 	}
+
 	if item.FunctionCall != nil {
 		call := *item.FunctionCall
 		call.Raw = nil
 		item.FunctionCall = &call
 	}
+
 	if item.ToolSearchCall != nil {
 		call := *item.ToolSearchCall
 		call.Raw = nil
 		item.ToolSearchCall = &call
 	}
+
 	if item.CustomToolCall != nil {
 		call := *item.CustomToolCall
 		call.Raw = nil
 		item.CustomToolCall = &call
 	}
+
 	if item.WebSearchCall != nil {
 		call := *item.WebSearchCall
 		call.Raw = nil
 		item.WebSearchCall = &call
 	}
+
 	if item.ImageGenerationCall != nil {
 		call := *item.ImageGenerationCall
 		call.Raw = nil
 		call.Result = ""
 		item.ImageGenerationCall = &call
 	}
+
 	return compactedToolOutputWithoutRaw(item)
 }
 
@@ -215,39 +249,50 @@ func compactedCallSummary(item transcript.CompactedContextItem) transcript.Compa
 	if item.LocalShellCall != nil {
 		item.LocalShellCall.ActionRaw = nil
 	}
+
 	if item.FunctionCall != nil {
 		item.FunctionCall.Arguments = ""
 	}
+
 	if item.ToolSearchCall != nil {
 		item.ToolSearchCall.ArgumentsRaw = nil
 	}
+
 	if item.CustomToolCall != nil {
 		item.CustomToolCall.Input = ""
 	}
+
 	if item.WebSearchCall != nil {
 		item.WebSearchCall.ActionRaw = nil
 	}
+
 	if item.ImageGenerationCall != nil {
 		item.ImageGenerationCall.RevisedPrompt = ""
 	}
+
 	return item
 }
 
-func compactedToolOutputWithoutRaw(item transcript.CompactedContextItem) transcript.CompactedContextItem {
+func compactedToolOutputWithoutRaw(
+	item transcript.CompactedContextItem,
+) transcript.CompactedContextItem {
 	if item.FunctionCallOutput != nil {
 		output := *item.FunctionCallOutput
 		output.Raw = nil
 		item.FunctionCallOutput = &output
 	}
+
 	if item.CustomToolCallOutput != nil {
 		output := *item.CustomToolCallOutput
 		output.Raw = nil
 		item.CustomToolCallOutput = &output
 	}
+
 	if item.ToolSearchOutput != nil {
 		output := *item.ToolSearchOutput
 		output.Raw = nil
 		item.ToolSearchOutput = &output
 	}
+
 	return item
 }

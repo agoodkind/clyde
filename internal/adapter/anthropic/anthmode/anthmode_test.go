@@ -18,26 +18,48 @@ func TestInboundThinkingValidate(t *testing.T) {
 		input     anthmode.InboundThinking
 		expectErr bool
 	}
+
 	cases := []testCase{
 		{name: "empty accepted", input: "", expectErr: false},
 		{name: "native accepted", input: anthmode.InboundThinkingNative, expectErr: false},
 		{name: "drop accepted", input: anthmode.InboundThinkingDrop, expectErr: false},
-		{name: "plain_text_concat accepted", input: anthmode.InboundThinkingPlainText, expectErr: false},
-		{name: "passthrough accepted", input: anthmode.InboundThinkingPassthrough, expectErr: false},
+		{
+			name:      "plain_text_concat accepted",
+			input:     anthmode.InboundThinkingPlainText,
+			expectErr: false,
+		},
+		{
+			name:      "passthrough accepted",
+			input:     anthmode.InboundThinkingPassthrough,
+			expectErr: false,
+		},
 		{name: "made_up rejected", input: anthmode.InboundThinking("made_up"), expectErr: true},
 	}
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-			err := testCase.input.Validate()
-			gotErr := err != nil
-			if gotErr != testCase.expectErr {
-				t.Fatalf("Validate(%q) err=%v, expectErr=%v", testCase.input, err, testCase.expectErr)
-			}
-			if gotErr && !strings.Contains(err.Error(), "reasoning.inbound_thinking") {
-				t.Fatalf("Validate(%q) error message %q does not mention reasoning.inbound_thinking", testCase.input, err.Error())
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				t.Parallel()
+				err := testCase.input.Validate()
+				gotErr := err != nil
+				if gotErr != testCase.expectErr {
+					t.Fatalf(
+						"Validate(%q) err=%v, expectErr=%v",
+						testCase.input,
+						err,
+						testCase.expectErr,
+					)
+				}
+
+				if gotErr && !strings.Contains(err.Error(), "reasoning.inbound_thinking") {
+					t.Fatalf(
+						"Validate(%q) error message %q does not mention reasoning.inbound_thinking",
+						testCase.input,
+						err.Error(),
+					)
+				}
+			},
+		)
 	}
 }
 
@@ -51,20 +73,40 @@ func TestInboundThinkingResolved(t *testing.T) {
 		input    anthmode.InboundThinking
 		expected anthmode.InboundThinking
 	}
+
 	cases := []testCase{
 		{name: "empty resolves to native", input: "", expected: anthmode.InboundThinkingNative},
-		{name: "native passes through", input: anthmode.InboundThinkingNative, expected: anthmode.InboundThinkingNative},
-		{name: "drop passes through", input: anthmode.InboundThinkingDrop, expected: anthmode.InboundThinkingDrop},
-		{name: "plain_text_concat passes through", input: anthmode.InboundThinkingPlainText, expected: anthmode.InboundThinkingPlainText},
-		{name: "passthrough passes through", input: anthmode.InboundThinkingPassthrough, expected: anthmode.InboundThinkingPassthrough},
+		{
+			name:     "native passes through",
+			input:    anthmode.InboundThinkingNative,
+			expected: anthmode.InboundThinkingNative,
+		},
+		{
+			name:     "drop passes through",
+			input:    anthmode.InboundThinkingDrop,
+			expected: anthmode.InboundThinkingDrop,
+		},
+		{
+			name:     "plain_text_concat passes through",
+			input:    anthmode.InboundThinkingPlainText,
+			expected: anthmode.InboundThinkingPlainText,
+		},
+		{
+			name:     "passthrough passes through",
+			input:    anthmode.InboundThinkingPassthrough,
+			expected: anthmode.InboundThinkingPassthrough,
+		},
 	}
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-			if got := testCase.input.Resolved(); got != testCase.expected {
-				t.Fatalf("Resolved(%q) = %q, want %q", testCase.input, got, testCase.expected)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				t.Parallel()
+				if got := testCase.input.Resolved(); got != testCase.expected {
+					t.Fatalf("Resolved(%q) = %q, want %q", testCase.input, got, testCase.expected)
+				}
+			},
+		)
 	}
 }
 
@@ -80,11 +122,24 @@ func TestWireValuesAreStableStrings(t *testing.T) {
 		got      string
 		expected string
 	}
+
 	cases := []entry{
-		{name: "InboundThinkingNative", got: string(anthmode.InboundThinkingNative), expected: "native_thinking_block"},
+		{
+			name:     "InboundThinkingNative",
+			got:      string(anthmode.InboundThinkingNative),
+			expected: "native_thinking_block",
+		},
 		{name: "InboundThinkingDrop", got: string(anthmode.InboundThinkingDrop), expected: "drop"},
-		{name: "InboundThinkingPlainText", got: string(anthmode.InboundThinkingPlainText), expected: "plain_text_concat"},
-		{name: "InboundThinkingPassthrough", got: string(anthmode.InboundThinkingPassthrough), expected: "passthrough"},
+		{
+			name:     "InboundThinkingPlainText",
+			got:      string(anthmode.InboundThinkingPlainText),
+			expected: "plain_text_concat",
+		},
+		{
+			name:     "InboundThinkingPassthrough",
+			got:      string(anthmode.InboundThinkingPassthrough),
+			expected: "passthrough",
+		},
 	}
 	for _, c := range cases {
 		if c.got != c.expected {

@@ -39,6 +39,7 @@ func (purposeTestProvider) ClassifyRequestPurpose(headers http.Header) RequestPu
 	if headers.Get(purposeTestHeader) == "compaction" {
 		return RequestPurposeCompaction
 	}
+
 	return RequestPurposeUnspecified
 }
 

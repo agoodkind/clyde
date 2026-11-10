@@ -17,12 +17,19 @@ func TestChatRequestJSONTagsMatchKnownKeys(t *testing.T) {
 	actual := chatRequestJSONTags()
 	for key := range actual {
 		if !knownChatRequestKeys[key] {
-			t.Errorf("ChatRequest serializes JSON key %q absent from knownChatRequestKeys; add it to the catalog in discovery.go", key)
+			t.Errorf(
+				"ChatRequest serializes JSON key %q absent from knownChatRequestKeys; add it to the catalog in discovery.go",
+				key,
+			)
 		}
 	}
+
 	for key := range knownChatRequestKeys {
 		if !actual[key] {
-			t.Errorf("knownChatRequestKeys lists %q but ChatRequest no longer serializes that JSON key", key)
+			t.Errorf(
+				"knownChatRequestKeys lists %q but ChatRequest no longer serializes that JSON key",
+				key,
+			)
 		}
 	}
 }
@@ -34,12 +41,19 @@ func TestResponsesRequestJSONTagsMatchKnownKeys(t *testing.T) {
 	actual := structJSONTags(reflect.TypeOf(ResponsesRequest{}))
 	for key := range actual {
 		if !knownResponsesRequestKeys[key] {
-			t.Errorf("ResponsesRequest serializes JSON key %q absent from knownResponsesRequestKeys", key)
+			t.Errorf(
+				"ResponsesRequest serializes JSON key %q absent from knownResponsesRequestKeys",
+				key,
+			)
 		}
 	}
+
 	for key := range knownResponsesRequestKeys {
 		if !actual[key] {
-			t.Errorf("knownResponsesRequestKeys lists %q but ResponsesRequest no longer serializes that JSON key", key)
+			t.Errorf(
+				"knownResponsesRequestKeys lists %q but ResponsesRequest no longer serializes that JSON key",
+				key,
+			)
 		}
 	}
 }
@@ -50,12 +64,19 @@ func TestCompletionRequestJSONTagsMatchKnownKeys(t *testing.T) {
 	actual := structJSONTags(reflect.TypeOf(CompletionRequest{}))
 	for key := range actual {
 		if !knownCompletionRequestKeys[key] {
-			t.Errorf("CompletionRequest serializes JSON key %q absent from knownCompletionRequestKeys", key)
+			t.Errorf(
+				"CompletionRequest serializes JSON key %q absent from knownCompletionRequestKeys",
+				key,
+			)
 		}
 	}
+
 	for key := range knownCompletionRequestKeys {
 		if !actual[key] {
-			t.Errorf("knownCompletionRequestKeys lists %q but CompletionRequest no longer serializes that JSON key", key)
+			t.Errorf(
+				"knownCompletionRequestKeys lists %q but CompletionRequest no longer serializes that JSON key",
+				key,
+			)
 		}
 	}
 }
@@ -69,16 +90,20 @@ func chatRequestJSONTags() map[string]bool {
 
 func structJSONTags(typ reflect.Type) map[string]bool {
 	out := map[string]bool{}
+
 	for fieldIndex := 0; fieldIndex < typ.NumField(); fieldIndex++ {
 		tag := typ.Field(fieldIndex).Tag.Get("json")
 		if tag == "" || tag == "-" {
 			continue
 		}
+
 		name := strings.Split(tag, ",")[0]
 		if name == "" {
 			continue
 		}
+
 		out[name] = true
 	}
+
 	return out
 }

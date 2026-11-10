@@ -48,32 +48,57 @@ func TestOpenAIConformanceResponsesRejectsFieldsBeforeProviderRequest(t *testing
 		},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			upstream := newConformanceUpstream(conformanceUsageWithoutDetails)
-			listeners := startConformanceServer(t, upstream)
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				upstream := newConformanceUpstream(conformanceUsageWithoutDetails)
+				listeners := startConformanceServer(t, upstream)
 
-			stored := postConformance(t, listeners.openAI+"/v1/responses", `{"model":"gpt-future","input":"hi","previous_response_id":"resp_prior"}`)
-			if stored.status != http.StatusBadRequest || decodeErrorEnvelope(t, stored.body).Type != "invalid_request_error" {
-				t.Fatalf("previous_response_id = %d %s, want 400", stored.status, stored.body)
-			}
-			requireNoUpstreamRequest(t, upstream)
+				stored := postConformance(
+					t,
+					listeners.openAI+"/v1/responses",
+					`{"model":"gpt-future","input":"hi","previous_response_id":"resp_prior"}`,
+				)
+				if stored.status != http.StatusBadRequest ||
+					decodeErrorEnvelope(t, stored.body).Type != "invalid_request_error" {
+					t.Fatalf("previous_response_id = %d %s, want 400", stored.status, stored.body)
+				}
 
-			rejected := postConformance(t, listeners.openAI+"/v1/responses", test.body)
-			rejection := decodeErrorEnvelope(t, rejected.body)
-			if rejected.status != http.StatusBadRequest || rejection.Type != "invalid_request_error" || rejection.Code != test.wantCode || rejection.Param != test.wantParam {
-				t.Fatalf("OpenAI listener = %d %+v, want 400 %s for %s", rejected.status, rejection, test.wantCode, test.wantParam)
-			}
-			requireNoUpstreamRequest(t, upstream)
+				requireNoUpstreamRequest(t, upstream)
 
-			cursor := postConformance(t, listeners.cursor+"/v1/responses", test.body)
-			if cursor.status != http.StatusOK {
-				t.Fatalf("Cursor listener status = %d; body=%s", cursor.status, cursor.body)
-			}
-			if test.wantParam == "access_programs" && len(cursor.header.Values("X-Clyde-Warning")) != 0 {
-				t.Fatalf("Cursor listener added an access program warning: %v", cursor.header.Values("X-Clyde-Warning"))
-			}
-			drainConformanceRequest(t, upstream)
-		})
+				rejected := postConformance(t, listeners.openAI+"/v1/responses", test.body)
+				rejection := decodeErrorEnvelope(t, rejected.body)
+				if rejected.status != http.StatusBadRequest ||
+					rejection.Type != "invalid_request_error" ||
+					rejection.Code != test.wantCode ||
+					rejection.Param != test.wantParam {
+					t.Fatalf(
+						"OpenAI listener = %d %+v, want 400 %s for %s",
+						rejected.status,
+						rejection,
+						test.wantCode,
+						test.wantParam,
+					)
+				}
+
+				requireNoUpstreamRequest(t, upstream)
+
+				cursor := postConformance(t, listeners.cursor+"/v1/responses", test.body)
+				if cursor.status != http.StatusOK {
+					t.Fatalf("Cursor listener status = %d; body=%s", cursor.status, cursor.body)
+				}
+
+				if test.wantParam == "access_programs" &&
+					len(cursor.header.Values("X-Clyde-Warning")) != 0 {
+					t.Fatalf(
+						"Cursor listener added an access program warning: %v",
+						cursor.header.Values("X-Clyde-Warning"),
+					)
+				}
+
+				drainConformanceRequest(t, upstream)
+			},
+		)
 	}
 }
 
@@ -83,11 +108,20 @@ func TestOpenAIConformanceResponsesAcceptsDocumentedDefaults(t *testing.T) {
 	body := `{"model":"gpt-future","input":"hi","access_programs":null,"temperature":1,"top_p":1,"store":false,"background":false,"truncation":"disabled","parallel_tool_calls":true,"tool_choice":"auto","metadata":{"k":"v"},"user":"caller","prompt_cache_key":"cache"}`
 	accepted := postConformance(t, listeners.openAI+"/v1/responses", body)
 	if accepted.status != http.StatusOK {
-		t.Fatalf("default-valued Responses request status = %d; body=%s", accepted.status, accepted.body)
+		t.Fatalf(
+			"default-valued Responses request status = %d; body=%s",
+			accepted.status,
+			accepted.body,
+		)
 	}
+
 	if len(accepted.header.Values("X-Clyde-Warning")) != 0 {
-		t.Fatalf("OpenAI listener emitted compatibility warnings: %v", accepted.header.Values("X-Clyde-Warning"))
+		t.Fatalf(
+			"OpenAI listener emitted compatibility warnings: %v",
+			accepted.header.Values("X-Clyde-Warning"),
+		)
 	}
+
 	drainConformanceRequest(t, upstream)
 }
 
@@ -133,19 +167,24 @@ func reasoningOutputItems(t *testing.T, response map[string]json.RawMessage) ([]
 	if err := json.Unmarshal(requireMember(t, response, "output"), &output); err != nil {
 		t.Fatalf("decode output: %v", err)
 	}
+
 	var ids []string
 	var texts []string
+
 	for _, item := range output {
 		if item.Type != "reasoning" {
 			continue
 		}
+
 		ids = append(ids, item.ID)
 		text := ""
 		if len(item.Summary) > 0 {
 			text = item.Summary[0].Text
 		}
+
 		texts = append(texts, text)
 	}
+
 	return ids, texts
 }
 
@@ -159,33 +198,61 @@ func TestOpenAIConformanceResponsesSeparatesReasoningItems(t *testing.T) {
 	}
 	listeners := startConformanceServer(t, upstream)
 
-	collected := postConformance(t, listeners.openAI+"/v1/responses", `{"model":"gpt-future","input":"hi"}`)
+	collected := postConformance(
+		t,
+		listeners.openAI+"/v1/responses",
+		`{"model":"gpt-future","input":"hi"}`,
+	)
 	drainConformanceRequest(t, upstream)
 	ids, texts := reasoningOutputItems(t, decodeJSONObject(t, collected.body))
 	if len(ids) != 2 || ids[0] == ids[1] || texts[0] != "first" || texts[1] != "second" {
-		t.Fatalf("collected reasoning ids=%v texts=%v, want two distinct items first and second; body=%s", ids, texts, collected.body)
+		t.Fatalf(
+			"collected reasoning ids=%v texts=%v, want two distinct items first and second; body=%s",
+			ids,
+			texts,
+			collected.body,
+		)
 	}
 
-	stream := postConformance(t, listeners.openAI+"/v1/responses", `{"model":"gpt-future","input":"hi","stream":true}`)
+	stream := postConformance(
+		t,
+		listeners.openAI+"/v1/responses",
+		`{"model":"gpt-future","input":"hi","stream":true}`,
+	)
 	drainConformanceRequest(t, upstream)
 	names, payloads := responsesStreamEvents(t, stream.body)
 	addedReasoning := 0
+
 	for index, name := range names {
 		if name != "response.output_item.added" {
 			continue
 		}
+
 		var item adapteropenai.ResponsesOutputItem
 		if err := json.Unmarshal(payloads[index]["item"], &item); err != nil {
 			t.Fatalf("decode added item: %v", err)
 		}
+
 		if item.Type == "reasoning" {
 			addedReasoning++
 		}
 	}
-	completed := decodeJSONObject(t, payloads[indexOfEvent(names, "response.completed")]["response"])
+
+	completed := decodeJSONObject(
+		t,
+		payloads[indexOfEvent(names, "response.completed")]["response"],
+	)
 	streamIDs, streamTexts := reasoningOutputItems(t, completed)
-	if addedReasoning != 2 || len(streamIDs) != 2 || streamIDs[0] == streamIDs[1] || streamTexts[0] != "first" || streamTexts[1] != "second" {
-		t.Fatalf("stream reasoning added=%d ids=%v texts=%v, want two distinct items; events=%v", addedReasoning, streamIDs, streamTexts, names)
+	if addedReasoning != 2 || len(streamIDs) != 2 || streamIDs[0] == streamIDs[1] ||
+		streamTexts[0] != "first" ||
+		streamTexts[1] != "second" {
+		t.Fatalf(
+			"stream reasoning added=%d ids=%v texts=%v, want two distinct items; events=%v",
+			addedReasoning,
+			streamIDs,
+			streamTexts,
+			names,
+		)
 	}
 }
 
@@ -204,6 +271,7 @@ func TestOpenAIConformanceResponsesStreamEventsAndEcho(t *testing.T) {
 	if stream.status != http.StatusOK {
 		t.Fatalf("stream status = %d; body=%s", stream.status, stream.body)
 	}
+
 	drainConformanceRequest(t, upstream)
 	names, payloads := responsesStreamEvents(t, stream.body)
 	ordered := []string{
@@ -220,13 +288,16 @@ func TestOpenAIConformanceResponsesStreamEventsAndEcho(t *testing.T) {
 		"response.completed",
 	}
 	previous := -1
+
 	for _, name := range ordered {
 		index := indexOfEvent(names, name)
 		if index <= previous {
 			t.Fatalf("event %s at %d, want after %d; events=%v", name, index, previous, names)
 		}
+
 		previous = index
 	}
+
 	for index, name := range names {
 		payload := payloads[index]
 		requireMember(t, payload, "sequence_number")
@@ -236,13 +307,37 @@ func TestOpenAIConformanceResponsesStreamEventsAndEcho(t *testing.T) {
 			}
 		}
 	}
-	completed := decodeJSONObject(t, payloads[indexOfEvent(names, "response.completed")]["response"])
-	for _, key := range []string{"parallel_tool_calls", "tool_choice", "tools", "temperature", "top_p", "store", "text", "truncation", "previous_response_id", "max_output_tokens", "reasoning", "user"} {
+
+	completed := decodeJSONObject(
+		t,
+		payloads[indexOfEvent(names, "response.completed")]["response"],
+	)
+
+	for _, key := range []string{
+		"parallel_tool_calls",
+		"tool_choice",
+		"tools",
+		"temperature",
+		"top_p",
+		"store",
+		"text",
+		"truncation",
+		"previous_response_id",
+		"max_output_tokens",
+		"reasoning",
+		"user",
+	} {
 		requireMember(t, completed, key)
 	}
+
 	if string(completed["instructions"]) != `"be brief"` || string(completed["store"]) != "false" {
-		t.Fatalf("completed echo instructions=%s store=%s", completed["instructions"], completed["store"])
+		t.Fatalf(
+			"completed echo instructions=%s store=%s",
+			completed["instructions"],
+			completed["store"],
+		)
 	}
+
 	usage := decodeJSONObject(t, completed["usage"])
 	if string(decodeJSONObject(t, usage["output_tokens_details"])["reasoning_tokens"]) != "7" {
 		t.Fatalf("completed usage = %s, want reasoning_tokens 7", completed["usage"])
@@ -256,10 +351,18 @@ func TestOpenAIConformanceResponsesStreamEventsAndEcho(t *testing.T) {
 	if indexOfEvent(cursorNames, "response.reasoning_summary_part.added") >= 0 {
 		t.Fatalf("cursor stream gained reasoning_summary_part events: %v", cursorNames)
 	}
-	if _, present := cursorPayloads[indexOfEvent(cursorNames, "response.output_text.delta")]["logprobs"]; present {
+
+	if _, present := cursorPayloads[indexOfEvent(
+		cursorNames,
+		"response.output_text.delta",
+	)]["logprobs"]; present {
 		t.Fatal("cursor output_text.delta gained logprobs")
 	}
-	cursorCompleted := decodeJSONObject(t, cursorPayloads[indexOfEvent(cursorNames, "response.completed")]["response"])
+
+	cursorCompleted := decodeJSONObject(
+		t,
+		cursorPayloads[indexOfEvent(cursorNames, "response.completed")]["response"],
+	)
 	if _, present := cursorCompleted["parallel_tool_calls"]; present {
 		t.Fatal("cursor response object gained request echo fields")
 	}

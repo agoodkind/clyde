@@ -50,6 +50,7 @@ func surfaceFromContext(ctx context.Context) Surface {
 	if !ok {
 		return SurfaceCLI
 	}
+
 	return surface
 }
 
@@ -95,6 +96,7 @@ func (n Name) CLI() string {
 	if n.CLIOverride != "" {
 		return n.CLIOverride
 	}
+
 	return strings.ReplaceAll(n.Canonical, "_", "-")
 }
 

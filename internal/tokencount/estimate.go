@@ -26,7 +26,11 @@ func (s Spec) Count(text string) Estimate {
 func describe(family Family, model string, settings Settings) (string, Counter) {
 	switch family {
 	case FamilyClaude:
-		return fmt.Sprintf("o200k x %.1f", settings.safetyFactor()), LocalCounter(family, model, settings)
+		return fmt.Sprintf("o200k x %.1f", settings.safetyFactor()), LocalCounter(
+			family,
+			model,
+			settings,
+		)
 	case FamilyGPT:
 		return "o200k", LocalCounter(family, model, settings)
 	case FamilyUnknown:
@@ -34,6 +38,7 @@ func describe(family Family, model string, settings Settings) (string, Counter) 
 		if inferred != FamilyUnknown {
 			return describe(inferred, model, settings)
 		}
+
 		return heuristicName(settings), LocalCounter(family, model, settings)
 	default:
 		return heuristicName(settings), LocalCounter(family, model, settings)

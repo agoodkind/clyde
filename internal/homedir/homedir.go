@@ -29,16 +29,20 @@ func Expand(path string) string {
 	if path == "" || path[0] != tilde {
 		return path
 	}
+
 	if len(path) > 1 && path[1] != '/' {
 		return path
 	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return path
 	}
+
 	if len(path) == 1 {
 		return home
 	}
+
 	return filepath.Join(home, path[2:])
 }
 
@@ -52,13 +56,16 @@ func Contract(path string) string {
 	if err != nil || home == "" {
 		return path
 	}
+
 	marker := string(rune(tilde))
 	if path == home {
 		return marker
 	}
+
 	prefix := home + string(filepath.Separator)
 	if strings.HasPrefix(path, prefix) {
 		return marker + "/" + path[len(prefix):]
 	}
+
 	return path
 }

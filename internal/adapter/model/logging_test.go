@@ -22,12 +22,14 @@ func TestModelResolveLogBindsSingleResolveConcern(t *testing.T) {
 	if count := strings.Count(body, `"concern"`); count != 1 {
 		t.Fatalf("concern attribute count = %d, want 1; event=%s", count, body)
 	}
+
 	var event struct {
 		Concern string `json:"concern"`
 	}
 	if err := json.Unmarshal([]byte(body), &event); err != nil {
 		t.Fatalf("unmarshal log event: %v; event=%s", err, body)
 	}
+
 	if event.Concern != slogger.ConcernAdapterModelsResolve {
 		t.Fatalf("concern = %q, want %q", event.Concern, slogger.ConcernAdapterModelsResolve)
 	}

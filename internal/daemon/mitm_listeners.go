@@ -40,6 +40,7 @@ func mitmBindAddrs(host string, port int) []string {
 			net.JoinHostPort("127.0.0.1", portStr),
 		}
 	}
+
 	return []string{net.JoinHostPort(normalized, portStr)}
 }
 
@@ -53,47 +54,118 @@ func validateMITMListenerSet(runtime *runtimeServices, cfg *config.Config) error
 	if len(runtime.mitmListeners) == 0 {
 		return nil
 	}
+
 	configured := make(map[string][]string, len(cfg.MITM.Listeners))
 	for id, listenerCfg := range cfg.MITM.Listeners {
 		configured[id] = mitmBindAddrs(listenerCfg.Host, listenerCfg.Port)
 	}
+
 	if len(configured) != len(runtime.mitmListeners) {
-		slog.Warn("daemon.reload.mitm_listener_set_changed", "concern", "daemon.workers.reload", "component", "daemon",
-			"configured", len(configured), "running", len(runtime.mitmListeners))
+		slog.Warn(
+			"daemon.reload.mitm_listener_set_changed",
+			"concern",
+			"daemon.workers.reload",
+			"component",
+			"daemon",
+			"configured",
+			len(configured),
+			"running",
+			len(runtime.mitmListeners),
+		)
+
 		return fmt.Errorf("mitm listener set changed; full daemon restart required")
 	}
+
 	for id, sockets := range runtime.mitmListeners {
 		wantAddrs, ok := configured[id]
 		if !ok {
-			slog.Warn("daemon.reload.mitm_listener_removed", "concern", "daemon.workers.reload", "component", "daemon", "listener_id", id)
+			slog.Warn(
+				"daemon.reload.mitm_listener_removed",
+				"concern",
+				"daemon.workers.reload",
+				"component",
+				"daemon",
+				"listener_id",
+				id,
+			)
+
 			return fmt.Errorf("mitm listener %q removed; full daemon restart required", id)
 		}
+
 		gotAddrs := make([]string, 0, len(sockets))
 		for _, socket := range sockets {
 			gotAddrs = append(gotAddrs, socket.Addr().String())
 		}
+
 		if !equalStringSet(gotAddrs, wantAddrs) {
-			slog.Warn("daemon.reload.mitm_listener_address_changed", "concern", "daemon.workers.reload", "component", "daemon",
-				"listener_id", id, "running", gotAddrs, "configured", wantAddrs)
-			return fmt.Errorf("mitm listener %q address changed from %v to %v; full daemon restart required", id, gotAddrs, wantAddrs)
+			slog.Warn(
+				"daemon.reload.mitm_listener_address_changed",
+				"concern",
+				"daemon.workers.reload",
+				"component",
+				"daemon",
+				"listener_id",
+				id,
+				"running",
+				gotAddrs,
+				"configured",
+				wantAddrs,
+			)
+
+			return fmt.Errorf(
+				"mitm listener %q address changed from %v to %v; full daemon restart required",
+				id,
+				gotAddrs,
+				wantAddrs,
+			)
 		}
 	}
+
 	for id, conns := range runtime.mitmPacketConns {
 		wantAddrs, ok := configured[id]
 		if !ok {
-			slog.Warn("daemon.reload.mitm_udp_listener_removed", "concern", "daemon.workers.reload", "component", "daemon", "listener_id", id)
+			slog.Warn(
+				"daemon.reload.mitm_udp_listener_removed",
+				"concern",
+				"daemon.workers.reload",
+				"component",
+				"daemon",
+				"listener_id",
+				id,
+			)
+
 			return fmt.Errorf("mitm udp listener %q removed; full daemon restart required", id)
 		}
+
 		gotAddrs := make([]string, 0, len(conns))
 		for _, conn := range conns {
 			gotAddrs = append(gotAddrs, conn.LocalAddr().String())
 		}
+
 		if !equalStringSet(gotAddrs, wantAddrs) {
-			slog.Warn("daemon.reload.mitm_udp_listener_address_changed", "concern", "daemon.workers.reload", "component", "daemon",
-				"listener_id", id, "running", gotAddrs, "configured", wantAddrs)
-			return fmt.Errorf("mitm udp listener %q address changed from %v to %v; full daemon restart required", id, gotAddrs, wantAddrs)
+			slog.Warn(
+				"daemon.reload.mitm_udp_listener_address_changed",
+				"concern",
+				"daemon.workers.reload",
+				"component",
+				"daemon",
+				"listener_id",
+				id,
+				"running",
+				gotAddrs,
+				"configured",
+				wantAddrs,
+			)
+
+			return fmt.Errorf(
+				"mitm udp listener %q address changed from %v to %v; full daemon restart required",
+				id,
+				gotAddrs,
+				wantAddrs,
+			)
 		}
 	}
+
 	return nil
 }
 
@@ -104,9 +176,11 @@ func equalStringSet(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
 	}
+
 	ac := slices.Clone(a)
 	bc := slices.Clone(b)
 	slices.Sort(ac)
 	slices.Sort(bc)
+
 	return slices.Equal(ac, bc)
 }

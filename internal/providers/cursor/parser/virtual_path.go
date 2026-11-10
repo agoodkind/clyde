@@ -31,7 +31,9 @@ func RootHash(rootDir string) string {
 	if rootDir == "" {
 		return ""
 	}
+
 	sum := sha256.Sum256([]byte(rootDir))
+
 	return hex.EncodeToString(sum[:8])
 }
 
@@ -40,10 +42,12 @@ func BuildVirtualPath(rootHash string, kind string, id string) string {
 	if !safeVirtualPart(rootHash) || !safeVirtualPart(kind) || !safeVirtualPart(id) {
 		return ""
 	}
+
 	path := virtualPathPrefix + rootHash + "/" + kind + "/" + id
 	if _, err := ParseVirtualPath(path); err != nil {
 		return ""
 	}
+
 	return path
 }
 
@@ -53,20 +57,25 @@ func ParseVirtualPath(raw string) (CursorVirtualPath, error) {
 	if !strings.HasPrefix(raw, virtualPathPrefix) {
 		return CursorVirtualPath{}, fmt.Errorf("invalid cursor virtual path %q", raw)
 	}
+
 	trimmed := strings.TrimPrefix(raw, virtualPathPrefix)
 	parts := strings.Split(trimmed, "/")
 	if len(parts) != 3 {
 		return CursorVirtualPath{}, fmt.Errorf("invalid cursor virtual path %q", raw)
 	}
+
 	if !safeVirtualPart(parts[0]) || !safeVirtualPart(parts[1]) || !safeVirtualPart(parts[2]) {
 		return CursorVirtualPath{}, fmt.Errorf("invalid cursor virtual path %q", raw)
 	}
+
 	if len(parts[0]) != rootHashHexLength {
 		return CursorVirtualPath{}, fmt.Errorf("invalid cursor virtual path %q", raw)
 	}
+
 	if _, err := hex.DecodeString(parts[0]); err != nil {
 		return CursorVirtualPath{}, fmt.Errorf("invalid cursor virtual path %q", raw)
 	}
+
 	return CursorVirtualPath{
 		RootHash: parts[0],
 		Kind:     parts[1],
@@ -78,6 +87,7 @@ func legacyID(workspaceHash string, tabID string) string {
 	if workspaceHash == "" || tabID == "" {
 		return ""
 	}
+
 	return workspaceHash + "~" + tabID
 }
 
@@ -86,12 +96,15 @@ func splitLegacyID(id string) (string, string, bool) {
 	if !found {
 		return "", "", false
 	}
+
 	if workspaceHash == "" || tabID == "" {
 		return "", "", false
 	}
+
 	if strings.Contains(tabID, "~") {
 		return "", "", false
 	}
+
 	return workspaceHash, tabID, true
 }
 
@@ -99,8 +112,10 @@ func safeVirtualPart(part string) bool {
 	if part == "" {
 		return false
 	}
+
 	if part != strings.TrimSpace(part) {
 		return false
 	}
+
 	return !strings.ContainsAny(part, "/?#")
 }

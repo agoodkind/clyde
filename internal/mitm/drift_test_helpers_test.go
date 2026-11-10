@@ -18,7 +18,9 @@ func openTestCaptureStore(t *testing.T) *capture.Store {
 	if err != nil {
 		t.Fatalf("open capture store: %v", err)
 	}
+
 	t.Cleanup(func() { _ = store.Close(context.Background(), "test cleanup") })
+
 	return store
 }
 
@@ -33,17 +35,30 @@ func proxyWithStore(t *testing.T, store *capture.Store) *Proxy {
 // waitForUpstreamShapes polls the store until at least want deduped shapes are
 // readable for the upstream, so a test can assert after the async drift write
 // lands.
-func waitForUpstreamShapes(t *testing.T, store *capture.Store, upstream string, want int) []capture.DriftShape {
+func waitForUpstreamShapes(
+	t *testing.T,
+	store *capture.Store,
+	upstream string,
+	want int,
+) []capture.DriftShape {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
+
 	for {
 		shapes, err := store.ShapesForUpstream(context.Background(), upstream, time.Unix(0, 0))
 		if err == nil && len(shapes) >= want {
 			return shapes
 		}
+
 		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %d shapes for upstream %q (last err=%v)", want, upstream, err)
+			t.Fatalf(
+				"timed out waiting for %d shapes for upstream %q (last err=%v)",
+				want,
+				upstream,
+				err,
+			)
 		}
+
 		time.Sleep(5 * time.Millisecond)
 	}
 }
@@ -56,5 +71,6 @@ func upstreamShapeRowCount(t *testing.T, store *capture.Store, upstream string) 
 	if err != nil {
 		t.Fatalf("ShapesForUpstream: %v", err)
 	}
+
 	return len(shapes)
 }

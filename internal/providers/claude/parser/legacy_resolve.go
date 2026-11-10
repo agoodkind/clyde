@@ -116,19 +116,27 @@ func (resolver *legacyResolver) summaryContent(uuid string) (string, error) {
 	if content, ok := resolver.contents[uuid]; ok {
 		return content, nil
 	}
+
 	summary, ok := resolver.reader.index.summaries[uuid]
 	if !ok {
-		return "", newResolutionError("compact summary "+uuid, "the transcript has no such summary record")
+		return "", newResolutionError(
+			"compact summary "+uuid,
+			"the transcript has no such summary record",
+		)
 	}
+
 	message, err := resolver.reader.lineMessage(summary.span)
 	if err != nil {
 		return "", err
 	}
+
 	var decoded summaryContentLine
 	if err := json.Unmarshal(message, &decoded); err != nil {
 		return "", newResolutionError("compact summary "+uuid, "decode content failed", err)
 	}
+
 	resolver.contents[uuid] = decoded.Content
+
 	return decoded.Content, nil
 }
 
@@ -141,16 +149,19 @@ func (resolver *legacyResolver) summaryForText(text string) string {
 			if _, ok := resolver.reader.index.summaries[uuid]; !ok {
 				continue
 			}
+
 			content, err := resolver.summaryContent(uuid)
 			if err != nil {
 				continue
 			}
+
 			digest := sha256.Sum256([]byte(content))
 			if _, seen := resolver.digests[digest]; !seen {
 				resolver.digests[digest] = uuid
 			}
 		}
 	}
+
 	return resolver.digests[sha256.Sum256([]byte(text))]
 }
 
@@ -159,34 +170,51 @@ func (resolver *legacyResolver) summaryForText(text string) string {
 // matched. It omits segments containing only whitespace.
 func (resolver *legacyResolver) resolveSummary(uuid string) (legacyResolution, error) {
 	noResolution := legacyResolution{
-		span:     reorienttag.TranscriptSpan{Start: 0, End: 0, Segments: nil},
-		report:   legacyResolutionReport{requestID: "", summaries: 0, positions: 0, directBlobs: 0, normalizedBlobs: 0, retainedPositions: 0},
+		span: reorienttag.TranscriptSpan{Start: 0, End: 0, Segments: nil},
+		report: legacyResolutionReport{
+			requestID:         "",
+			summaries:         0,
+			positions:         0,
+			directBlobs:       0,
+			normalizedBlobs:   0,
+			retainedPositions: 0,
+		},
 		segments: 0,
 	}
 	decomposition, err := resolver.decompose(uuid)
 	if err != nil {
 		return noResolution, err
 	}
+
 	visited := make(map[string]bool)
 	pieces, err := resolver.resolveRange(uuid, decomposition.bodyStart, false, visited, 0)
 	if err != nil {
 		return noResolution, err
 	}
+
 	segments := make([]reorienttag.Segment, 0, len(pieces))
 	retained := make(map[string]bool)
+
 	for _, piece := range pieces {
 		if piece.position != legacyNoPosition {
 			retained[piece.summary+":"+strconv.Itoa(piece.position)] = true
 		}
+
 		text := decomposition.content[piece.start:piece.end]
 		if strings.TrimSpace(text) == "" {
 			continue
 		}
-		segments = append(segments, reorienttag.Segment{Role: piece.role, Kind: piece.kind, Text: text})
+
+		segments = append(
+			segments,
+			reorienttag.Segment{Role: piece.role, Kind: piece.kind, Text: text},
+		)
 	}
+
 	report := resolver.report(visited)
 	report.requestID = decomposition.requestID
 	report.retainedPositions = len(retained)
+
 	return legacyResolution{
 		span: reorienttag.TranscriptSpan{
 			Start:    decomposition.bodyStart - len(reorienttag.PreCompactionTranscriptOpen) - 1,
@@ -201,19 +229,29 @@ func (resolver *legacyResolver) resolveSummary(uuid string) (legacyResolution, e
 // report totals request positions and distinct direct blobs across the visited
 // summaries.
 func (resolver *legacyResolver) report(visited map[string]bool) legacyResolutionReport {
-	report := legacyResolutionReport{requestID: "", summaries: len(visited), positions: 0, directBlobs: 0, normalizedBlobs: 0, retainedPositions: 0}
+	report := legacyResolutionReport{
+		requestID:         "",
+		summaries:         len(visited),
+		positions:         0,
+		directBlobs:       0,
+		normalizedBlobs:   0,
+		retainedPositions: 0,
+	}
 	blobs := make(map[string]resolvedSource)
+
 	for uuid := range visited {
 		decomposition := resolver.decompositions[uuid]
 		report.positions += decomposition.positions
 		maps.Copy(blobs, decomposition.blobSources)
 	}
+
 	report.directBlobs = len(blobs)
 	for _, source := range blobs {
 		if source == resolvedSourceNormalizedBlob {
 			report.normalizedBlobs++
 		}
 	}
+
 	return report
 }
 
@@ -222,46 +260,83 @@ func (resolver *legacyResolver) report(visited map[string]bool) legacyResolution
 // pieces into this content. When outside is true, it treats content before and
 // after the wrapper body as user chat text because the request stored it as
 // user text.
-func (resolver *legacyResolver) resolveRange(uuid string, from int, outside bool, visited map[string]bool, depth int) ([]resolvedPiece, error) {
+func (resolver *legacyResolver) resolveRange(
+	uuid string,
+	from int,
+	outside bool,
+	visited map[string]bool,
+	depth int,
+) ([]resolvedPiece, error) {
 	if depth > legacyMaximumDepth {
-		return nil, newResolutionError("compact summary "+uuid, "the inherited transcript chain exceeds "+strconv.Itoa(legacyMaximumDepth)+" summaries")
+		return nil, newResolutionError(
+			"compact summary "+uuid,
+			"the inherited transcript chain exceeds "+strconv.Itoa(legacyMaximumDepth)+" summaries",
+		)
 	}
+
 	decomposition, err := resolver.decompose(uuid)
 	if err != nil {
 		return nil, err
 	}
+
 	visited[uuid] = true
 	out := make([]resolvedPiece, 0, len(decomposition.pieces)+2)
 	if outside && from < decomposition.bodyStart {
 		out = append(out, inheritedTextPiece(from, decomposition.bodyStart))
 	}
+
 	for _, piece := range decomposition.pieces {
 		if piece.end <= from {
 			continue
 		}
+
 		start := max(piece.start, from)
 		if piece.prior == "" {
-			out = append(out, resolvedPiece{start: start, end: piece.end, role: piece.role, kind: piece.kind, summary: uuid, position: piece.position})
+			out = append(
+				out,
+				resolvedPiece{
+					start:    start,
+					end:      piece.end,
+					role:     piece.role,
+					kind:     piece.kind,
+					summary:  uuid,
+					position: piece.position,
+				},
+			)
 			continue
 		}
-		inherited, err := resolver.resolveRange(piece.prior, decomposition.priorOffset(piece, start), true, visited, depth+1)
+
+		inherited, err := resolver.resolveRange(
+			piece.prior,
+			decomposition.priorOffset(piece, start),
+			true,
+			visited,
+			depth+1,
+		)
 		if err != nil {
 			return nil, err
 		}
+
 		for _, child := range inherited {
 			childStart := max(decomposition.contentOffset(piece, child.start), start)
 			childEnd := min(decomposition.contentOffset(piece, child.end), piece.end)
 			if childEnd <= childStart {
 				continue
 			}
+
 			child.start = childStart
 			child.end = childEnd
 			out = append(out, child)
 		}
 	}
+
 	if outside {
-		out = append(out, inheritedTextPiece(max(from, decomposition.bodyEnd), len(decomposition.content)))
+		out = append(
+			out,
+			inheritedTextPiece(max(from, decomposition.bodyEnd), len(decomposition.content)),
+		)
 	}
+
 	return out, nil
 }
 
@@ -288,7 +363,11 @@ func (decomposition *legacyDecomposition) priorOffset(piece legacyPiece, content
 // contentOffset converts a prior summary offset to the matching content offset
 // inside an inherited piece.
 func (decomposition *legacyDecomposition) contentOffset(piece legacyPiece, priorOffset int) int {
-	source := min(max(piece.sourceStart+priorOffset-piece.priorBase, piece.sourceStart), piece.sourceEnd)
+	source := min(
+		max(piece.sourceStart+priorOffset-piece.priorBase, piece.sourceStart),
+		piece.sourceEnd,
+	)
+
 	return decomposition.bodyStart + decomposition.persisted.outputOffset(source)
 }
 
@@ -297,15 +376,19 @@ func (resolver *legacyResolver) decompose(uuid string) (*legacyDecomposition, er
 	if decomposition, ok := resolver.decompositions[uuid]; ok {
 		return decomposition, nil
 	}
+
 	if err, ok := resolver.failures[uuid]; ok {
 		return nil, err
 	}
+
 	decomposition, err := resolver.decomposeSummary(uuid)
 	if err != nil {
 		resolver.failures[uuid] = err
 		return nil, err
 	}
+
 	resolver.decompositions[uuid] = decomposition
+
 	return decomposition, nil
 }
 
@@ -315,23 +398,35 @@ func (resolver *legacyResolver) decomposeSummary(uuid string) (*legacyDecomposit
 	if err != nil {
 		return nil, err
 	}
+
 	starts := legacyBodyStarts(content)
 	if len(starts) == 0 {
 		return nil, newResolutionError(subject, "the summary has no unframed transcript wrapper")
 	}
+
 	candidates := resolver.reader.index.summaries[uuid].candidates
 	if len(candidates) == 0 {
-		return nil, newResolutionError(subject, "the transcript has no replayed source request before the summary")
+		return nil, newResolutionError(
+			subject,
+			"the transcript has no replayed source request before the summary",
+		)
 	}
+
 	failures := make([]error, 0, len(candidates))
 	for _, candidate := range candidates {
 		decomposition, err := resolver.decomposeWith(uuid, content, starts, candidate)
 		if err == nil {
 			return decomposition, nil
 		}
+
 		failures = append(failures, err)
 	}
-	return nil, newResolutionError(subject, "no replayed source request reproduces the wrapper", failures...)
+
+	return nil, newResolutionError(
+		subject,
+		"no replayed source request reproduces the wrapper",
+		failures...,
+	)
 }
 
 // decomposeWith resolves every reference in one request snapshot and decodes
@@ -347,37 +442,56 @@ func (resolver *legacyResolver) decomposeWith(
 	subject := "request " + snapshot.id
 	messages := make([]resolvedMessage, 0, len(snapshot.refs))
 	unresolved := make([]error, 0)
+
 	for _, ref := range snapshot.refs {
 		message, err := resolver.reader.resolveReference(ref)
 		if err != nil {
 			unresolved = append(unresolved, err)
 			continue
 		}
+
 		messages = append(messages, message)
 	}
+
 	if len(unresolved) > 0 {
-		return nil, newResolutionError(subject, strconv.Itoa(len(unresolved))+" unresolved references", unresolved...)
+		return nil, newResolutionError(
+			subject,
+			strconv.Itoa(len(unresolved))+" unresolved references",
+			unresolved...,
+		)
 	}
+
 	request, err := decodeSnapshotRequest(messages)
 	if err != nil {
 		return nil, err
 	}
+
 	instruction := lastUserMessage(request)
 	if instruction < 1 {
-		return nil, newResolutionError(subject, "the request has no user message after its first message")
+		return nil, newResolutionError(
+			subject,
+			"the request has no user message after its first message",
+		)
 	}
+
 	match, ok := matchLegacyBody(request, instruction, content, starts)
 	if !ok {
-		return nil, newResolutionError(subject, "exactly one wrapper body must equal the replayed rendering")
+		return nil, newResolutionError(
+			subject,
+			"exactly one wrapper body must equal the replayed rendering",
+		)
 	}
+
 	decomposition := resolver.buildDecomposition(uuid, content, match)
 	decomposition.requestID = snapshot.id
+
 	decomposition.positions = len(snapshot.refs)
 	for index, ref := range snapshot.refs {
 		if messages[index].source != resolvedSourceGroup {
 			decomposition.blobSources[ref] = messages[index].source
 		}
 	}
+
 	return decomposition, nil
 }
 
@@ -387,6 +501,7 @@ func lastUserMessage(request anthropic.CompactionRequest) int {
 			return index
 		}
 	}
+
 	return -1
 }
 
@@ -396,15 +511,18 @@ func legacyBodyStarts(content string) []int {
 	open := reorienttag.PreCompactionTranscriptOpen + "\n"
 	starts := make([]int, 0, 1)
 	position := 0
+
 	for {
 		offset := strings.Index(content[position:], open)
 		if offset < 0 {
 			return starts
 		}
+
 		bodyStart := position + offset + len(open)
 		if legacyHeadingLength(content[bodyStart:]) > 0 {
 			starts = append(starts, bodyStart)
 		}
+
 		position = bodyStart
 	}
 }
@@ -416,6 +534,7 @@ func legacyHeadingLength(text string) int {
 			return len(prefix)
 		}
 	}
+
 	return 0
 }
 
@@ -441,20 +560,39 @@ func matchLegacyBody(
 	fullPersisted := persistLegacy(full.source)
 	closing := "\n" + reorienttag.PreCompactionTranscriptClose
 	matches := make([]legacyMatch, 0, 1)
+
 	for _, bodyStart := range starts {
 		position := bodyStart
+
 		for {
 			offset := strings.Index(content[position:], closing)
 			if offset < 0 {
 				break
 			}
+
 			bodyEnd := position + offset
-			if rendering, persisted, ok := matchLegacyCut(request, instruction, full, fullPersisted, content[bodyStart:bodyEnd]); ok {
-				matches = append(matches, legacyMatch{bodyStart: bodyStart, bodyEnd: bodyEnd, rendering: rendering, persisted: persisted})
+			if rendering, persisted, ok := matchLegacyCut(
+				request,
+				instruction,
+				full,
+				fullPersisted,
+				content[bodyStart:bodyEnd],
+			); ok {
+				matches = append(
+					matches,
+					legacyMatch{
+						bodyStart: bodyStart,
+						bodyEnd:   bodyEnd,
+						rendering: rendering,
+						persisted: persisted,
+					},
+				)
 			}
+
 			position = bodyEnd + 1
 		}
 	}
+
 	if len(matches) != 1 {
 		return legacyMatch{
 			bodyStart: 0,
@@ -463,6 +601,7 @@ func matchLegacyBody(
 			persisted: persistedRendering{text: "", sourceMap: nil},
 		}, false
 	}
+
 	return matches[0], true
 }
 
@@ -484,21 +623,29 @@ func matchLegacyCut(
 	if headingLength == 0 || rest == "" || !strings.HasSuffix(fullPersisted.text, rest) {
 		return noRendering, noPersisted, false
 	}
+
 	source := int(fullPersisted.sourceMap[len(fullPersisted.text)-len(rest)])
 	piece, ok := segmentPieceAt(full.pieces, source)
 	if !ok {
 		return noRendering, noPersisted, false
 	}
+
 	headBytes := piece.headBytes + source - piece.sourceStart
 	if !isRuneBoundary(piece.fullText, headBytes) {
 		return noRendering, noPersisted, false
 	}
-	cut := legacyCut{message: piece.message, segment: piece.segment, headRunes: utf8.RuneCountInString(piece.fullText[:headBytes])}
+
+	cut := legacyCut{
+		message:   piece.message,
+		segment:   piece.segment,
+		headRunes: utf8.RuneCountInString(piece.fullText[:headBytes]),
+	}
 	rendering := renderLegacy(request, cut, instruction)
 	persisted := persistLegacy(rendering.source)
 	if persisted.text != body {
 		return noRendering, noPersisted, false
 	}
+
 	return rendering, persisted, true
 }
 
@@ -508,36 +655,47 @@ func segmentPieceAt(pieces []renderPiece, source int) (renderPiece, bool) {
 			return piece, true
 		}
 	}
+
 	return framingPiece(0, ""), false
 }
 
 // buildDecomposition converts rendered segment pieces to content offsets. When
 // a user chat segment equals another compact summary's text, it records that
 // summary as the segment's prior.
-func (resolver *legacyResolver) buildDecomposition(uuid string, content string, match legacyMatch) *legacyDecomposition {
+func (resolver *legacyResolver) buildDecomposition(
+	uuid string,
+	content string,
+	match legacyMatch,
+) *legacyDecomposition {
 	pieces := make([]legacyPiece, 0, len(match.rendering.pieces))
 	for _, piece := range match.rendering.pieces {
 		if piece.framing {
 			continue
 		}
+
 		prior := ""
 		if piece.role == reorienttag.SegmentRoleUser && piece.kind == reorienttag.SegmentKindChat {
 			if candidate := resolver.summaryForText(piece.fullText); candidate != uuid {
 				prior = candidate
 			}
 		}
-		pieces = append(pieces, legacyPiece{
-			start:       match.bodyStart + match.persisted.outputOffset(piece.sourceStart),
-			end:         match.bodyStart + match.persisted.outputOffset(piece.sourceEnd),
-			role:        piece.role,
-			kind:        piece.kind,
-			position:    piece.message,
-			prior:       prior,
-			priorBase:   piece.headBytes,
-			sourceStart: piece.sourceStart,
-			sourceEnd:   piece.sourceEnd,
-		})
+
+		pieces = append(
+			pieces,
+			legacyPiece{
+				start:       match.bodyStart + match.persisted.outputOffset(piece.sourceStart),
+				end:         match.bodyStart + match.persisted.outputOffset(piece.sourceEnd),
+				role:        piece.role,
+				kind:        piece.kind,
+				position:    piece.message,
+				prior:       prior,
+				priorBase:   piece.headBytes,
+				sourceStart: piece.sourceStart,
+				sourceEnd:   piece.sourceEnd,
+			},
+		)
 	}
+
 	return &legacyDecomposition{
 		content:     content,
 		requestID:   "",

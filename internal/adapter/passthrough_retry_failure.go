@@ -15,8 +15,18 @@ type passthroughRetryFailure struct {
 	err          error
 }
 
-func newPassthroughRetryFailure(status int, responseBody []byte, contentType string, err error) *passthroughRetryFailure {
-	return &passthroughRetryFailure{status: status, responseBody: responseBody, contentType: contentType, err: err}
+func newPassthroughRetryFailure(
+	status int,
+	responseBody []byte,
+	contentType string,
+	err error,
+) *passthroughRetryFailure {
+	return &passthroughRetryFailure{
+		status:       status,
+		responseBody: responseBody,
+		contentType:  contentType,
+		err:          err,
+	}
 }
 
 func (s *Server) respondPassthroughRetryFailure(
@@ -30,9 +40,20 @@ func (s *Server) respondPassthroughRetryFailure(
 	failure *passthroughRetryFailure,
 ) {
 	if failure.err != nil {
-		s.respondPassthroughOverrideTransportError(w, r, ctx, req, reqID, started, streamRequested, failure.err)
+		s.respondPassthroughOverrideTransportError(
+			w,
+			r,
+			ctx,
+			req,
+			reqID,
+			started,
+			streamRequested,
+			failure.err,
+		)
+
 		return
 	}
+
 	s.respondPassthroughOverrideError(
 		w,
 		r,

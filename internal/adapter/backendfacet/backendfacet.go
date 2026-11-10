@@ -34,6 +34,7 @@ func (f FactoryFunc) RequestFacet(input Input) logevent.Facet {
 	if f == nil {
 		return nil
 	}
+
 	return f(input)
 }
 

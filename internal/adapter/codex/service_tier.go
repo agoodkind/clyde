@@ -12,6 +12,7 @@ func ServiceTierFromRequest(req adapteropenai.ChatRequest) string {
 	if serviceTier := normalizeServiceTier(req.ServiceTier); serviceTier != "" {
 		return serviceTier
 	}
+
 	return ServiceTierFromMetadata(req.Metadata)
 }
 
@@ -20,12 +21,14 @@ func ServiceTierFromMetadata(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
 	}
+
 	var metadata struct {
 		ServiceTier string `json:"service_tier"`
 	}
 	if err := json.Unmarshal(raw, &metadata); err != nil {
 		return ""
 	}
+
 	return normalizeServiceTier(metadata.ServiceTier)
 }
 

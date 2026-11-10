@@ -27,9 +27,11 @@ func (projection *toolIDProjection) reserveCompliant(sourceIDs []string) {
 		if sourceID == "" || len(sourceID) > codexToolCallIDMaxLength {
 			continue
 		}
+
 		if _, ok := projection.sourceToWire[sourceID]; ok {
 			continue
 		}
+
 		projection.sourceToWire[sourceID] = sourceID
 		projection.wireToSource[sourceID] = sourceID
 	}
@@ -39,6 +41,7 @@ func (projection *toolIDProjection) project(sourceID string) string {
 	if sourceID == "" {
 		return ""
 	}
+
 	if wireID, ok := projection.sourceToWire[sourceID]; ok {
 		return wireID
 	}
@@ -48,9 +51,11 @@ func (projection *toolIDProjection) project(sourceID string) string {
 		digest := sha256.Sum256([]byte(sourceID))
 		candidate = "call_" + hex.EncodeToString(digest[:])[:codexToolCallIDMaxLength-len("call_")]
 	}
+
 	candidate = projection.reserve(candidate, sourceID)
 	projection.sourceToWire[sourceID] = candidate
 	projection.wireToSource[candidate] = sourceID
+
 	return candidate
 }
 

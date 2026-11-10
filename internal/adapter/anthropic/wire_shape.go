@@ -19,6 +19,7 @@ func applyBillingAttestation(blocks []SystemBlock, attestation string) {
 	if attestation == "" {
 		return
 	}
+
 	for i := range blocks {
 		updated := SubstituteBillingAttestation(blocks[i].Text, attestation)
 		if updated != blocks[i].Text {
@@ -43,36 +44,62 @@ func checkBodyShape(ctx context.Context, model string, body []byte, flavor WireF
 	if len(flavor.BodyFieldsRequired) == 0 {
 		return
 	}
+
 	// json.RawMessage keeps each value opaque so the decode stays a
 	// typed map without materializing a loose map[string]any; only the
 	// key set drives the required-field diagnostic.
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(body, &fields); err != nil {
-		log.WarnContext(ctx, "anthropic.messages.body_shape_unparseable", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
-			"model", model,
-			"err", fmt.Errorf("decode outbound body field set: %w", err).Error(),
+		log.WarnContext(
+			ctx,
+			"anthropic.messages.body_shape_unparseable",
+			"concern",
+			"adapter.providers.anthropic.request",
+			"subcomponent",
+			"anthropic",
+			"model",
+			model,
+			"err",
+			fmt.Errorf("decode outbound body field set: %w", err).Error(),
 		)
+
 		return
 	}
+
 	var missing []string
+
 	for _, required := range flavor.BodyFieldsRequired {
 		if _, ok := fields[required]; !ok {
 			missing = append(missing, required)
 		}
 	}
+
 	if len(missing) == 0 {
 		return
 	}
+
 	present := make([]string, 0, len(fields))
 	for name := range fields {
 		present = append(present, name)
 	}
+
 	sort.Strings(present)
-	log.WarnContext(ctx, "anthropic.messages.body_shape_mismatch", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
-		"model", model,
-		"slug", flavor.Slug,
-		"missing", missing,
-		"learned_required", flavor.BodyFieldsRequired,
-		"present", present,
+	log.WarnContext(
+		ctx,
+		"anthropic.messages.body_shape_mismatch",
+		"concern",
+		"adapter.providers.anthropic.request",
+		"subcomponent",
+		"anthropic",
+		"model",
+		model,
+		"slug",
+		flavor.Slug,
+		"missing",
+		missing,
+		"learned_required",
+		flavor.BodyFieldsRequired,
+		"present",
+		present,
 	)
 }

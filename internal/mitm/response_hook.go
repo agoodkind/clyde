@@ -89,6 +89,7 @@ func ReplaceResponseBody(response ResponseHookResponse, body []byte) ResponseHoo
 	response.Header.Del("Content-Length")
 	response.ContentLength = -1
 	response.Body = bytes.NewReader(body)
+
 	return response
 }
 
@@ -117,39 +118,66 @@ func (p *Proxy) requestResponseHookSnapshot() []RequestResponseHook {
 	if p == nil {
 		return nil
 	}
+
 	p.mu.RLock()
 	defer p.mu.RUnlock()
+
 	return slices.Clone(p.requestResponseHooks)
 }
 
-func (p *Proxy) matchRequestResponseHook(request RequestResponseHookRequest) (ResponseTransformer, RequestTransformer, error) {
+func (p *Proxy) matchRequestResponseHook(
+	request RequestResponseHookRequest,
+) (ResponseTransformer, RequestTransformer, error) {
 	var responseTransformers []ResponseTransformer
 	var requestTransformer RequestTransformer
+
 	for _, hook := range p.requestResponseHookSnapshot() {
 		if hook == nil {
 			continue
 		}
+
 		match, err := hook.MatchRequestResponse(request)
 		if err != nil {
-			slog.Warn("mitm.response_hook.match_failed", "concern", "providers.mitm.wire", "provider", request.Provider, "host", request.Host, "method", request.Method, "path", request.Path, "err", err)
+			slog.Warn(
+				"mitm.response_hook.match_failed",
+				"concern",
+				"providers.mitm.wire",
+				"provider",
+				request.Provider,
+				"host",
+				request.Host,
+				"method",
+				request.Method,
+				"path",
+				request.Path,
+				"err",
+				err,
+			)
+
 			return nil, nil, fmt.Errorf("match request response hook: %w", err)
 		}
+
 		if !match.Matched {
 			continue
 		}
+
 		if match.Transformer == nil && match.RequestTransformer == nil {
 			return nil, nil, fmt.Errorf("matched request response hook returned no transformer")
 		}
+
 		if match.Transformer != nil {
 			responseTransformers = append(responseTransformers, match.Transformer)
 		}
+
 		if requestTransformer == nil {
 			requestTransformer = match.RequestTransformer
 		}
+
 		if !match.ContinueMatching {
 			break
 		}
 	}
+
 	return combineResponseTransformers(responseTransformers), requestTransformer, nil
 }
 
@@ -179,18 +207,29 @@ func (s responseTransformerSequence) TransformResponse(
 			slog.WarnContext(
 				ctx,
 				"mitm.response_hook.sequence_failed",
-				"concern", "providers.mitm.wire",
-				"transformer_index", index,
-				"err", err,
+				"concern",
+				"providers.mitm.wire",
+				"transformer_index",
+				index,
+				"err",
+				err,
 			)
+
 			return response, fmt.Errorf("transform response with hook %d: %w", index, err)
 		}
 	}
+
 	return response, nil
 }
 
-func newRequestResponseHookRequest(provider string, host string, req *http.Request, body RequestResponseHookBody) RequestResponseHookRequest {
+func newRequestResponseHookRequest(
+	provider string,
+	host string,
+	req *http.Request,
+	body RequestResponseHookBody,
+) RequestResponseHookRequest {
 	header := req.Header.Clone()
+
 	return RequestResponseHookRequest{
 		Provider: provider,
 		Host:     host,
@@ -223,15 +262,18 @@ func (b *cachedRequestResponseHookBody) Bytes() ([]byte, error) {
 	if b == nil {
 		return nil, nil
 	}
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !b.loaded {
 		b.body, b.err = readAndRewindHookRequestBody(b.request)
 		b.loaded = true
 	}
+
 	if b.err != nil {
 		return nil, b.err
 	}
+
 	return append([]byte(nil), b.body...), nil
 }
 
@@ -243,6 +285,7 @@ func readAndRewindHookRequestBody(req *http.Request) ([]byte, error) {
 	if req == nil || req.Body == nil {
 		return nil, nil
 	}
+
 	body, readErr := io.ReadAll(req.Body)
 	closeErr := req.Body.Close()
 	if readErr != nil {
@@ -255,14 +298,30 @@ func readAndRewindHookRequestBody(req *http.Request) ([]byte, error) {
 		req.GetBody = func() (io.ReadCloser, error) {
 			return nil, fmt.Errorf("hook request body read failed: %w", readErr)
 		}
-		slog.Warn("mitm.response_hook.request_body_read_failed", "concern", "providers.mitm.wire", "err", readErr)
+		slog.Warn(
+			"mitm.response_hook.request_body_read_failed",
+			"concern",
+			"providers.mitm.wire",
+			"err",
+			readErr,
+		)
+
 		return body, fmt.Errorf("read hook request body: %w", readErr)
 	}
+
 	reseatRequestBody(req, body)
 	if closeErr != nil {
-		slog.Warn("mitm.response_hook.request_body_close_failed", "concern", "providers.mitm.wire", "err", closeErr)
+		slog.Warn(
+			"mitm.response_hook.request_body_close_failed",
+			"concern",
+			"providers.mitm.wire",
+			"err",
+			closeErr,
+		)
+
 		return body, fmt.Errorf("close hook request body: %w", closeErr)
 	}
+
 	return body, nil
 }
 
@@ -282,18 +341,33 @@ func reseatRequestBody(req *http.Request, body []byte) {
 // body plus whether it changed. It is fail-open: a nil transformer, a no-op
 // transform, or a transform error all return the original body with changed
 // false, so a request rewrite can never break the forwarded request.
-func (p *Proxy) transformRequestBody(ctx context.Context, transformer RequestTransformer, body []byte) ([]byte, bool) {
+func (p *Proxy) transformRequestBody(
+	ctx context.Context,
+	transformer RequestTransformer,
+	body []byte,
+) ([]byte, bool) {
 	if transformer == nil {
 		return body, false
 	}
+
 	newBody, changed, err := transformer.TransformRequest(ctx, body)
 	if err != nil {
-		slog.WarnContext(ctx, "mitm.request_hook.transform_failed", "concern", "providers.mitm.wire", "err", err)
+		slog.WarnContext(
+			ctx,
+			"mitm.request_hook.transform_failed",
+			"concern",
+			"providers.mitm.wire",
+			"err",
+			err,
+		)
+
 		return body, false
 	}
+
 	if !changed {
 		return body, false
 	}
+
 	return newBody, true
 }
 
@@ -308,10 +382,15 @@ func (r *erroringBodyReader) Read([]byte) (int, error) {
 	return 0, r.err
 }
 
-func (p *Proxy) applyResponseHook(ctx context.Context, transformer ResponseTransformer, resp *http.Response) (*http.Response, error) {
+func (p *Proxy) applyResponseHook(
+	ctx context.Context,
+	transformer ResponseTransformer,
+	resp *http.Response,
+) (*http.Response, error) {
 	if transformer == nil {
 		return resp, nil
 	}
+
 	// A response transformer rewrites the body, so it must read a decoded body.
 	// Streaming-decode the matched response in place and strip the content
 	// encoding so the transformer reads a plain body without the seam buffering
@@ -322,17 +401,36 @@ func (p *Proxy) applyResponseHook(ctx context.Context, transformer ResponseTrans
 		// The body was not decoded: an encoding the proxy cannot handle (brotli),
 		// or a supported encoding whose bytes are mislabeled or truncated. Forward
 		// the original response untouched either way.
-		slog.WarnContext(ctx, "mitm.response_hook.decode_declined", "concern", "providers.mitm.wire", "encoding", resp.Header.Get("Content-Encoding"))
+		slog.WarnContext(
+			ctx,
+			"mitm.response_hook.decode_declined",
+			"concern",
+			"providers.mitm.wire",
+			"encoding",
+			resp.Header.Get("Content-Encoding"),
+		)
+
 		return resp, nil
 	}
+
 	output, err := transformer.TransformResponse(ctx, responseHookResponseFromHTTP(resp))
 	if err != nil {
-		slog.WarnContext(ctx, "mitm.response_hook.transform_failed", "concern", "providers.mitm.wire", "err", err)
+		slog.WarnContext(
+			ctx,
+			"mitm.response_hook.transform_failed",
+			"concern",
+			"providers.mitm.wire",
+			"err",
+			err,
+		)
+
 		return nil, fmt.Errorf("transform response hook: %w", err)
 	}
+
 	if output.Body == nil {
 		return nil, fmt.Errorf("transform response hook returned nil body")
 	}
+
 	return httpResponseFromHookResponse(resp, output), nil
 }
 
@@ -348,6 +446,7 @@ func decodeResponseBodyForHook(resp *http.Response) bool {
 	if encoding == "" || strings.EqualFold(encoding, "identity") {
 		return true
 	}
+
 	// Buffer the body so the decoder can peek its magic bytes without consuming
 	// from the underlying stream. On a declined encoding the same buffered reader
 	// becomes the body, so bytes buffered during detection are never lost and the
@@ -359,11 +458,13 @@ func decodeResponseBodyForHook(resp *http.Response) bool {
 		resp.Body = &bufferedReadCloser{reader: buffered, closer: original}
 		return false
 	}
+
 	resp.Body = decoder
 	resp.Header.Del("Content-Encoding")
 	resp.Header.Del("Content-Length")
 	resp.ContentLength = -1
 	resp.Uncompressed = true
+
 	return true
 }
 
@@ -381,7 +482,10 @@ func responseHookResponseFromHTTP(resp *http.Response) ResponseHookResponse {
 	}
 }
 
-func httpResponseFromHookResponse(base *http.Response, response ResponseHookResponse) *http.Response {
+func httpResponseFromHookResponse(
+	base *http.Response,
+	response ResponseHookResponse,
+) *http.Response {
 	out := new(http.Response)
 	*out = *base
 	out.StatusCode = hookStatusCode(base, response)
@@ -391,11 +495,13 @@ func httpResponseFromHookResponse(base *http.Response, response ResponseHookResp
 	if out.Header == nil {
 		out.Header = http.Header{}
 	}
+
 	out.Body = io.NopCloser(response.Body)
 	out.ContentLength = response.ContentLength
 	if out.ContentLength < 0 {
 		out.Header.Del("Content-Length")
 	}
+
 	return out
 }
 
@@ -403,6 +509,7 @@ func hookStatusCode(base *http.Response, response ResponseHookResponse) int {
 	if response.StatusCode != 0 {
 		return response.StatusCode
 	}
+
 	return base.StatusCode
 }
 
@@ -410,10 +517,12 @@ func hookStatus(statusCode int, status string) string {
 	if status != "" {
 		return status
 	}
+
 	text := http.StatusText(statusCode)
 	if text == "" {
 		return strconv.Itoa(statusCode)
 	}
+
 	return fmt.Sprintf("%d %s", statusCode, text)
 }
 
@@ -421,5 +530,6 @@ func hookProto(base *http.Response, response ResponseHookResponse) string {
 	if response.Proto != "" {
 		return response.Proto
 	}
+
 	return base.Proto
 }

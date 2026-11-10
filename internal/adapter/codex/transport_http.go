@@ -39,7 +39,10 @@ type HTTPTransportConfig struct {
 	RoundTripEncrypted        RoundTripEncrypted
 	NativePatchRepresentation adapterrender.NativePatchRepresentation
 	RetryPolicies             []adapterretry.Policy
-	BeforeAttempt             func(ctx context.Context, attemptNo int) (context.Context, func(string))
+	BeforeAttempt             func(ctx context.Context, attemptNo int) (
+		context.Context,
+		func(string),
+	)
 	// AuthRefresh, when non-nil, is called when the HTTP request
 	// returns 401 or 403. It returns a refreshed access token (or an
 	// error if the refresh itself failed) so the transport can retry
@@ -93,6 +96,7 @@ func buildResponsesHTTPHeaders(cfg HTTPTransportConfig) http.Header {
 	delete(header, http.CanonicalHeaderKey(openAIBetaHeader))
 	header.Set("Content-Type", "application/json")
 	header.Set("Accept", "text/event-stream")
+
 	return header
 }
 
@@ -118,18 +122,22 @@ func runHTTPTransportEventsWithRetry(
 	if sleep == nil {
 		sleep = adapterretry.Sleep
 	}
+
 	attempt := 1
+
 	for {
 		attemptCtx := ctx
 		releaseAttempt := func(string) {}
 		if cfg.BeforeAttempt != nil {
 			attemptCtx, releaseAttempt = cfg.BeforeAttempt(ctx, attempt)
 		}
+
 		result, responseStarted, err := runHTTPTransportEventsOnce(attemptCtx, cfg, payload, emit)
 		if err == nil {
 			releaseAttempt("codex.http.attempt.success")
 			return result, nil
 		}
+
 		if IsPermanentRefreshFailure(err) {
 			// Auth refresh failed permanently (refresh token expired,
 			// reused, or revoked). Retry cannot recover; bypass the
@@ -137,6 +145,7 @@ func runHTTPTransportEventsWithRetry(
 			releaseAttempt("codex.http.attempt.auth_permanent")
 			return result, err
 		}
+
 		releaseAttempt("codex.http.attempt.failed")
 		signal := adapterretry.Signal{
 			Backend:         "codex",
@@ -153,10 +162,12 @@ func runHTTPTransportEventsWithRetry(
 			logHTTPRetryDecision(ctx, cfg, decision, attempt, maxAttempts, "failed")
 			return result, err
 		}
+
 		logHTTPRetryDecision(ctx, cfg, decision, attempt, maxAttempts, "retrying")
 		if err := sleep(ctx, decision.Delay); err != nil {
 			return result, err
 		}
+
 		attempt++
 	}
 }
@@ -176,24 +187,30 @@ func runHTTPTransportEventsOnce(
 	if err != nil {
 		wrapped := fmt.Errorf("codex http transport: marshal request: %w", err)
 		logHTTPTransportError(ctx, cfg, "marshal_request", wrapped)
+
 		return NewRunResult("stop"), false, wrapped
 	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.URL, bytes.NewReader(body))
 	if err != nil {
 		wrapped := fmt.Errorf("codex http transport: build request: %w", err)
 		logHTTPTransportError(ctx, cfg, "build_request", wrapped)
+
 		return NewRunResult("stop"), false, wrapped
 	}
+
 	req.Header = buildResponsesHTTPHeaders(cfg)
 
 	httpClient := cfg.HTTPClient
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
+
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		wrapped := fmt.Errorf("codex http transport: %w", err)
 		logHTTPTransportError(ctx, cfg, "http_request_failed", wrapped)
+
 		return NewRunResult("stop"), false, wrapped
 	}
 
@@ -202,13 +219,21 @@ func runHTTPTransportEventsOnce(
 	// went stale between Token() and the dial. At most one refresh
 	// per HTTP request; the outer retry loop handles anything beyond.
 	if shouldRefreshAuthForStatus(resp.StatusCode, cfg.AuthRefresh) {
-		refreshedResp, refreshedCfg, refreshErr := retryHTTPTransportAfterAuthRefresh(ctx, cfg, body, resp, httpClient)
+		refreshedResp, refreshedCfg, refreshErr := retryHTTPTransportAfterAuthRefresh(
+			ctx,
+			cfg,
+			body,
+			resp,
+			httpClient,
+		)
 		if refreshErr != nil {
 			return NewRunResult("stop"), false, refreshErr
 		}
+
 		resp = refreshedResp
 		cfg = refreshedCfg
 	}
+
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
@@ -223,9 +248,24 @@ func runHTTPTransportEventsOnce(
 		// other err.Error() consumer stay free of the response body. The snippet
 		// reaches the client only through the error boundary's ClientMessage path
 		// and the capture store; it never lands in JSONL.
-		logHTTPTransportError(ctx, cfg, "upstream_non_200", fmt.Errorf("codex http transport: upstream status %d", resp.StatusCode))
+		logHTTPTransportError(
+			ctx,
+			cfg,
+			"upstream_non_200",
+			fmt.Errorf("codex http transport: upstream status %d", resp.StatusCode),
+		)
 		statusErr := &UpstreamStatusError{Status: resp.StatusCode, Snippet: snippet}
-		recordCodexHTTPEgress(cfg.CaptureStore, cfg.Correlation, req, resp, body, []byte(snippet), cfg.ConversationID, started)
+		recordCodexHTTPEgress(
+			cfg.CaptureStore,
+			cfg.Correlation,
+			req,
+			resp,
+			body,
+			[]byte(snippet),
+			cfg.ConversationID,
+			started,
+		)
+
 		return NewRunResult("stop"), false, statusErr
 	}
 
@@ -242,20 +282,42 @@ func runHTTPTransportEventsOnce(
 		PreviousResponseID: "",
 		Warmup:             false,
 	}
-	parseOpts := SSEParseOptions{DropEncryptedContent: cfg.RoundTripEncrypted == RoundTripEncryptedDrop, DeclaredTools: payload.Tools, NativePatchRepresentation: cfg.NativePatchRepresentation}
+	parseOpts := SSEParseOptions{
+		DropEncryptedContent:      cfg.RoundTripEncrypted == RoundTripEncryptedDrop,
+		DeclaredTools:             payload.Tools,
+		NativePatchRepresentation: cfg.NativePatchRepresentation,
+	}
 	responseStarted := false
 	sink := capture.NewCappedBuffer(codexCaptureBodyCap)
 	var bodyReader io.Reader = resp.Body
 	if cfg.CaptureStore.RecordingEnabled() {
 		bodyReader = io.TeeReader(resp.Body, sink)
 	}
-	result, parseErr := ParseSSEEventsWithOptions(ctx, bodyReader, func(event adapterrender.Event) error {
-		if codexRenderEventStartsClientResponse(event) {
-			responseStarted = true
-		}
-		return emit(event)
-	}, logCtx, parseOpts)
-	recordCodexHTTPEgress(cfg.CaptureStore, cfg.Correlation, req, resp, body, sink.Bytes(), cfg.ConversationID, started)
+
+	result, parseErr := ParseSSEEventsWithOptions(
+		ctx,
+		bodyReader,
+		func(event adapterrender.Event) error {
+			if codexRenderEventStartsClientResponse(event) {
+				responseStarted = true
+			}
+
+			return emit(event)
+		},
+		logCtx,
+		parseOpts,
+	)
+	recordCodexHTTPEgress(
+		cfg.CaptureStore,
+		cfg.Correlation,
+		req,
+		resp,
+		body,
+		sink.Bytes(),
+		cfg.ConversationID,
+		started,
+	)
+
 	return result, responseStarted, parseErr
 }
 
@@ -263,6 +325,7 @@ func shouldRefreshAuthForStatus(status int, refresh func(context.Context) (strin
 	if refresh == nil {
 		return false
 	}
+
 	return status == http.StatusUnauthorized || status == http.StatusForbidden
 }
 
@@ -280,23 +343,34 @@ func retryHTTPTransportAfterAuthRefresh(
 		logHTTPTransportError(ctx, cfg, "auth_refresh_failed", refreshErr)
 		return nil, cfg, refreshErr
 	}
+
 	if strings.TrimSpace(newToken) == "" {
 		return originalResp, cfg, nil
 	}
+
 	cfg.Token = newToken
-	retryReq, retryErr := http.NewRequestWithContext(ctx, http.MethodPost, cfg.URL, bytes.NewReader(body))
+	retryReq, retryErr := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		cfg.URL,
+		bytes.NewReader(body),
+	)
 	if retryErr != nil {
 		wrapped := fmt.Errorf("codex http transport: build retry request: %w", retryErr)
 		logHTTPTransportError(ctx, cfg, "build_retry_request", wrapped)
+
 		return nil, cfg, wrapped
 	}
+
 	retryReq.Header = buildResponsesHTTPHeaders(cfg)
 	retryResp, retryDoErr := httpClient.Do(retryReq)
 	if retryDoErr != nil {
 		wrapped := fmt.Errorf("codex http transport (post-refresh): %w", retryDoErr)
 		logHTTPTransportError(ctx, cfg, "http_retry_failed", wrapped)
+
 		return nil, cfg, wrapped
 	}
+
 	return retryResp, cfg, nil
 }
 
@@ -328,6 +402,7 @@ func readHTTPErrorSnippet(r io.Reader) string {
 	if snippet == "" {
 		return "(empty body)"
 	}
+
 	return snippet
 }
 
@@ -336,20 +411,47 @@ func logHTTPTransportError(ctx context.Context, cfg HTTPTransportConfig, stage s
 	if log == nil {
 		log = slog.Default()
 	}
-	log.WarnContext(ctx, "adapter.codex.http_transport_error", "concern", "adapter.providers.codex.request", "component", "adapter",
-		"subcomponent", "codex",
-		"request_id", cfg.RequestID,
-		"trace_id", string(cfg.Correlation.TraceID),
-		"stage", stage,
-		"err", err.Error(),
+
+	log.WarnContext(
+		ctx,
+		"adapter.codex.http_transport_error",
+		"concern",
+		"adapter.providers.codex.request",
+		"component",
+		"adapter",
+		"subcomponent",
+		"codex",
+		"request_id",
+		cfg.RequestID,
+		"trace_id",
+		string(cfg.Correlation.TraceID),
+		"stage",
+		stage,
+		"err",
+		err.Error(),
 	)
 }
 
-func logHTTPRetryDecision(ctx context.Context, cfg HTTPTransportConfig, decision adapterretry.Decision, attempt int, maxAttempts int, finalOutcome string) {
-	adapterretry.LogDecision(ctx, cfg.Log, decision, attempt, maxAttempts, adapterretry.AttemptLogContext{
-		RequestID: cfg.RequestID,
-		TraceID:   string(cfg.Correlation.TraceID),
-		ChatKey:   clydeingress.ChatKey(cfg.Correlation),
-		Operation: codexHTTPRetryOperation,
-	}, finalOutcome)
+func logHTTPRetryDecision(
+	ctx context.Context,
+	cfg HTTPTransportConfig,
+	decision adapterretry.Decision,
+	attempt int,
+	maxAttempts int,
+	finalOutcome string,
+) {
+	adapterretry.LogDecision(
+		ctx,
+		cfg.Log,
+		decision,
+		attempt,
+		maxAttempts,
+		adapterretry.AttemptLogContext{
+			RequestID: cfg.RequestID,
+			TraceID:   string(cfg.Correlation.TraceID),
+			ChatKey:   clydeingress.ChatKey(cfg.Correlation),
+			Operation: codexHTTPRetryOperation,
+		},
+		finalOutcome,
+	)
 }

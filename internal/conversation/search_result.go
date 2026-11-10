@@ -77,11 +77,13 @@ func ComputeFacets(matches []SearchMatch, topN int) SearchFacets {
 	workspaceCounts := map[string]int{}
 	providerCounts := map[string]int{}
 	modelCounts := map[string]int{}
+
 	for _, match := range matches {
 		workspaceCounts[homedir.Contract(match.Record.WorkspaceRoot)]++
 		providerCounts[match.Record.Provider.String()]++
 		modelCounts[match.Record.Model]++
 	}
+
 	return SearchFacets{
 		Workspaces: topFacetCounts(workspaceCounts, topN),
 		Providers:  topFacetCounts(providerCounts, topN),
@@ -97,16 +99,23 @@ func topFacetCounts(counts map[string]int, topN int) []SearchFacetCount {
 		if value == "" {
 			continue
 		}
+
 		ordered = append(ordered, SearchFacetCount{Value: value, Count: count})
 	}
-	sort.Slice(ordered, func(i, j int) bool {
-		if ordered[i].Count != ordered[j].Count {
-			return ordered[i].Count > ordered[j].Count
-		}
-		return ordered[i].Value < ordered[j].Value
-	})
+
+	sort.Slice(
+		ordered,
+		func(i, j int) bool {
+			if ordered[i].Count != ordered[j].Count {
+				return ordered[i].Count > ordered[j].Count
+			}
+
+			return ordered[i].Value < ordered[j].Value
+		},
+	)
 	if topN > 0 && len(ordered) > topN {
 		ordered = ordered[:topN]
 	}
+
 	return ordered
 }

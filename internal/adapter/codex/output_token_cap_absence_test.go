@@ -25,12 +25,17 @@ func TestCodexEgressOmitsAllOutputTokenCaps(t *testing.T) {
 		MaxComplTokens:  &maxCompletion,
 		MaxOutputTokens: &maxOutput,
 	}
-	built := BuildRequest(req, adaptermodel.ResolvedAlias{Alias: "gpt-5.4", MaxOutputTokens: 32000}, "medium")
+	built := BuildRequest(
+		req,
+		adaptermodel.ResolvedAlias{Alias: "gpt-5.4", MaxOutputTokens: 32000},
+		"medium",
+	)
 
 	httpEncoded, err := json.Marshal(built)
 	if err != nil {
 		t.Fatalf("marshal http transport request: %v", err)
 	}
+
 	wsEncoded, err := MarshalResponseCreateWsRequest(ResponseCreateRequestFromHTTP(built))
 	if err != nil {
 		t.Fatalf("marshal websocket request: %v", err)
@@ -42,6 +47,7 @@ func TestCodexEgressOmitsAllOutputTokenCaps(t *testing.T) {
 		if bytes.Contains(httpEncoded, needle) {
 			t.Errorf("HTTP Codex egress carried %s: %s", key, httpEncoded)
 		}
+
 		if bytes.Contains(wsEncoded, needle) {
 			t.Errorf("websocket Codex egress carried %s: %s", key, wsEncoded)
 		}

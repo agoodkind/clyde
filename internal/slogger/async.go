@@ -46,13 +46,16 @@ func newAsyncHandler(handler slog.Handler, handlerCloser io.Closer) *asyncHandle
 			if r := recover(); r != nil {
 				slog.Error(
 					"slogger.async_handler.panicked",
-					"component", "slogger",
-					"err", fmt.Errorf("async handler panic: %v", r),
+					"component",
+					"slogger",
+					"err",
+					fmt.Errorf("async handler panic: %v", r),
 				)
 			}
 		}()
 		state.run()
 	}()
+
 	return &asyncHandler{handler: handler, state: state}
 }
 
@@ -63,6 +66,7 @@ func (h *asyncHandler) Enabled(ctx context.Context, level slog.Level) bool {
 	if closing {
 		return false
 	}
+
 	return h.handler.Enabled(ctx, level)
 }
 
@@ -72,9 +76,11 @@ func (h *asyncHandler) Handle(_ context.Context, record slog.Record) error {
 		h.state.mu.Unlock()
 		return nil
 	}
+
 	h.state.queue = append(h.state.queue, queuedRecord{handler: h.handler, record: record.Clone()})
 	h.state.cond.Signal()
 	h.state.mu.Unlock()
+
 	return nil
 }
 
@@ -97,6 +103,7 @@ func (h *asyncHandler) Close() error {
 			h.state.closeErr = h.state.handlerCloser.Close()
 		}
 	})
+
 	return h.state.closeErr
 }
 
@@ -106,14 +113,18 @@ func (s *asyncHandlerState) run() {
 		for len(s.queue) == 0 && !s.closing {
 			s.cond.Wait()
 		}
+
 		if len(s.queue) == 0 && s.closing {
 			s.mu.Unlock()
 			close(s.drained)
+
 			return
 		}
+
 		batch := append([]queuedRecord(nil), s.queue...)
 		s.queue = nil
 		s.mu.Unlock()
+
 		for _, item := range batch {
 			_ = item.handler.Handle(context.Background(), item.record)
 		}
@@ -133,6 +144,7 @@ func newMultiCloser(closers ...io.Closer) io.Closer {
 			filtered = append(filtered, closer)
 		}
 	}
+
 	return &multiCloser{closers: filtered, once: sync.Once{}, err: nil}
 }
 
@@ -144,5 +156,6 @@ func (c *multiCloser) Close() error {
 			}
 		}
 	})
+
 	return c.err
 }

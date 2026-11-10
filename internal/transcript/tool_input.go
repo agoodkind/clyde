@@ -32,38 +32,48 @@ func ProvenToolPositions(saved []ToolIdentity, source []ToolIdentity) []int {
 	for _, identity := range saved {
 		savedKeys = append(savedKeys, toolIdentityKey(identity, savedInvalidToolKey))
 	}
+
 	sourceKeys := make([]string, 0, len(source))
 	for _, identity := range source {
 		sourceKeys = append(sourceKeys, toolIdentityKey(identity, sourceInvalidToolKey))
 	}
+
 	positions := slices.Repeat([]int{UnprovenToolPosition}, len(saved))
 	earliest := make([]int, 0, len(saved))
 	next := 0
+
 	for _, key := range savedKeys {
 		position := next
 		for position < len(sourceKeys) && sourceKeys[position] != key {
 			position++
 		}
+
 		if position == len(sourceKeys) {
 			break
 		}
+
 		earliest = append(earliest, position)
 		next = position + 1
 	}
+
 	if len(earliest) < len(saved) {
 		earliest = alignedToolPrefix(earliest)
 	}
+
 	next = len(sourceKeys) - 1
 	for index := len(earliest) - 1; index >= 0; index-- {
 		position := next
 		for sourceKeys[position] != savedKeys[index] {
 			position--
 		}
+
 		if position == earliest[index] {
 			positions[index] = position
 		}
+
 		next = position - 1
 	}
+
 	return positions
 }
 
@@ -75,6 +85,7 @@ func alignedToolPrefix(earliest []int) []int {
 			return earliest[:index]
 		}
 	}
+
 	return earliest
 }
 
@@ -91,10 +102,12 @@ func toolIdentityKey(identity ToolIdentity, invalid string) string {
 	if len(bytes.TrimSpace(identity.Input)) == 0 {
 		return identity.Name + toolIdentitySeparator
 	}
+
 	canonical, valid := CanonicalToolInput(identity.Input)
 	if !valid {
 		return invalid
 	}
+
 	return identity.Name + toolIdentitySeparator + canonical
 }
 
@@ -102,6 +115,7 @@ func toolIdentityKey(identity ToolIdentity, invalid string) string {
 func SameToolInput(left json.RawMessage, right json.RawMessage) bool {
 	leftCanonical, leftOK := CanonicalToolInput(left)
 	rightCanonical, rightOK := CanonicalToolInput(right)
+
 	return leftOK && rightOK && leftCanonical == rightCanonical
 }
 
@@ -111,6 +125,7 @@ func CanonicalToolInput(raw json.RawMessage) (string, bool) {
 	if !writeCanonicalJSON(&builder, bytes.TrimSpace(raw)) {
 		return "", false
 	}
+
 	return builder.String(), true
 }
 
@@ -119,27 +134,34 @@ func writeCanonicalObject(builder *bytes.Buffer, raw []byte) bool {
 	if err := json.Unmarshal(raw, &object); err != nil {
 		return false
 	}
+
 	keys := make([]string, 0, len(object))
 	for key := range object {
 		keys = append(keys, key)
 	}
+
 	slices.Sort(keys)
 	builder.WriteByte('{')
+
 	for index, key := range keys {
 		if index > 0 {
 			builder.WriteByte(',')
 		}
+
 		encodedKey, err := json.Marshal(key)
 		if err != nil {
 			return false
 		}
+
 		builder.Write(encodedKey)
 		builder.WriteByte(':')
 		if !writeCanonicalJSON(builder, bytes.TrimSpace(object[key])) {
 			return false
 		}
 	}
+
 	builder.WriteByte('}')
+
 	return true
 }
 
@@ -149,6 +171,7 @@ func writeCanonicalJSON(builder *bytes.Buffer, raw []byte) bool {
 	if len(raw) == 0 {
 		return false
 	}
+
 	switch raw[0] {
 	case '{':
 		return writeCanonicalObject(builder, raw)
@@ -157,15 +180,19 @@ func writeCanonicalJSON(builder *bytes.Buffer, raw []byte) bool {
 		if err := json.Unmarshal(raw, &items); err != nil {
 			return false
 		}
+
 		builder.WriteByte('[')
+
 		for index, item := range items {
 			if index > 0 {
 				builder.WriteByte(',')
 			}
+
 			if !writeCanonicalJSON(builder, bytes.TrimSpace(item)) {
 				return false
 			}
 		}
+
 		builder.WriteByte(']')
 	case '"':
 		// Decode and re-encode strings to normalize equivalent JSON escapes.
@@ -173,15 +200,18 @@ func writeCanonicalJSON(builder *bytes.Buffer, raw []byte) bool {
 		if err := json.Unmarshal(raw, &value); err != nil {
 			return false
 		}
+
 		encoded, err := json.Marshal(value)
 		if err != nil {
 			return false
 		}
+
 		builder.Write(encoded)
 	default:
 		if err := json.Compact(builder, raw); err != nil {
 			return false
 		}
 	}
+
 	return true
 }

@@ -8,5 +8,6 @@ func FileExists(path string) bool {
 	if err != nil {
 		return false
 	}
+
 	return info.Mode().IsRegular()
 }

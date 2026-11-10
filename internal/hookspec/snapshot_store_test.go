@@ -17,17 +17,21 @@ func TestFileSnapshotStoreRoundTrip(t *testing.T) {
 	if err := store.Save(context.Background(), key, "saved body"); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
+
 	got, ok, err := store.Consume(context.Background(), key)
 	if err != nil {
 		t.Fatalf("Consume: %v", err)
 	}
+
 	if !ok || got != "saved body" {
 		t.Fatalf("Consume = (%q, %t), want (saved body, true)", got, ok)
 	}
+
 	got, ok, err = store.Consume(context.Background(), key)
 	if err != nil {
 		t.Fatalf("second Consume: %v", err)
 	}
+
 	if ok || got != "" {
 		t.Fatalf("second Consume = (%q, %t), want missing snapshot", got, ok)
 	}

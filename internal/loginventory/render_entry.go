@@ -9,11 +9,18 @@ import (
 
 // Build constructs the typed log inventory under stateRoot. An empty stateRoot
 // defaults to the Clyde state directory.
-func Build(stateRoot string, largestFileLimit int, deep bool, logging config.LoggingConfig, mitm config.MITMConfig) (Inventory, error) {
+func Build(
+	stateRoot string,
+	largestFileLimit int,
+	deep bool,
+	logging config.LoggingConfig,
+	mitm config.MITMConfig,
+) (Inventory, error) {
 	root := stateRoot
 	if root == "" {
 		root = config.DefaultStateDir()
 	}
+
 	mode := inventoryModeIndexed
 	if deep {
 		mode = inventoryModeDeep
@@ -32,6 +39,7 @@ func Build(stateRoot string, largestFileLimit int, deep bool, logging config.Log
 	if err != nil {
 		return Inventory{}, err
 	}
+
 	return currentInventory, nil
 }
 
@@ -41,5 +49,6 @@ func RenderText(currentInventory Inventory) (string, error) {
 	if writeErr := writeInventoryTable(&builder, currentInventory); writeErr != nil {
 		return "", writeErr
 	}
+
 	return builder.String(), nil
 }

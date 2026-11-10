@@ -20,14 +20,21 @@ func openCollection(t *testing.T, root string) (*codestore.Store, *staticembed.M
 	if err != nil {
 		t.Fatalf("Load model: %v", err)
 	}
+
 	store, err := codestore.Open(root, staticembed.ModelName)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	ensure := collection.EnsureRequest{Collection: testCollection, Declaration: declaration(), Dimension: staticembed.Dimensions}
+
+	ensure := collection.EnsureRequest{
+		Collection:  testCollection,
+		Declaration: declaration(),
+		Dimension:   staticembed.Dimensions,
+	}
 	if err := store.EnsureCollection(context.Background(), ensure); err != nil {
 		t.Fatalf("EnsureCollection: %v", err)
 	}
+
 	return store, model
 }
 
@@ -40,14 +47,24 @@ func upsert(t *testing.T, store *codestore.Store, rows ...collection.Row) {
 
 func contents(t *testing.T, store *codestore.Store) map[string]string {
 	t.Helper()
-	hits, err := store.Query(context.Background(), collection.QueryRequest{Collection: testCollection, Declaration: declaration(), Filter: nil, Limit: 0})
+	hits, err := store.Query(
+		context.Background(),
+		collection.QueryRequest{
+			Collection:  testCollection,
+			Declaration: declaration(),
+			Filter:      nil,
+			Limit:       0,
+		},
+	)
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
+
 	byID := make(map[string]string, len(hits))
 	for _, hit := range hits {
 		byID[hit.ID] = hit.Content
 	}
+
 	return byID
 }
 
@@ -61,6 +78,7 @@ func fileSize(t *testing.T, path string) int64 {
 	if err != nil {
 		t.Fatalf("stat %s: %v", path, err)
 	}
+
 	return info.Size()
 }
 
@@ -78,20 +96,24 @@ func TestStoreRefusesRowLogWithCorruptMiddleRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read row log: %v", err)
 	}
+
 	original := raw[corruptAt]
 	raw[corruptAt] ^= 0xFF
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		t.Fatalf("corrupt row log: %v", err)
 	}
+
 	sizeBefore := fileSize(t, path)
 
 	corrupted, err := codestore.Open(root, staticembed.ModelName)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+
 	if _, err := corrupted.Load(context.Background(), testCollection); err == nil {
 		t.Fatal("Load succeeded on a row log with a corrupt middle record")
 	}
+
 	corrupted.Close()
 	if got := fileSize(t, path); got != sizeBefore {
 		t.Fatalf("row log size = %d after the failed open, want %d", got, sizeBefore)
@@ -101,6 +123,7 @@ func TestStoreRefusesRowLogWithCorruptMiddleRecord(t *testing.T) {
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		t.Fatalf("restore row log: %v", err)
 	}
+
 	repaired, err := codestore.Open(root, staticembed.ModelName)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -127,12 +150,15 @@ func TestStoreRefusesRowLogEndingWithUndecodableRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open row log: %v", err)
 	}
+
 	if _, err := rowLog.Write(frame); err != nil {
 		t.Fatalf("append record: %v", err)
 	}
+
 	if err := rowLog.Close(); err != nil {
 		t.Fatalf("close row log: %v", err)
 	}
+
 	sizeBefore := fileSize(t, path)
 
 	reopened, err := codestore.Open(root, staticembed.ModelName)
@@ -143,6 +169,7 @@ func TestStoreRefusesRowLogEndingWithUndecodableRecord(t *testing.T) {
 	if _, err := reopened.Load(context.Background(), testCollection); err == nil {
 		t.Fatal("Load succeeded on a row log ending with a checksummed record that does not decode")
 	}
+
 	if got := fileSize(t, path); got != sizeBefore {
 		t.Fatalf("row log size = %d after the failed open, want %d", got, sizeBefore)
 	}
@@ -155,20 +182,27 @@ func TestCompactedStoreReopensWithEveryRowContent(t *testing.T) {
 	)
 	root := t.TempDir()
 	store, model := openCollection(t, root)
+
 	for round := range rounds {
 		rows := make([]collection.Row, 0, rowCount)
 		for index := range rowCount {
 			id := fmt.Sprintf("row-%04d", index)
-			rows = append(rows, testRow(t, model, id, "claude:"+id, fmt.Sprintf("round %d of %s", round, id)))
+			rows = append(
+				rows,
+				testRow(t, model, id, "claude:"+id, fmt.Sprintf("round %d of %s", round, id)),
+			)
 		}
+
 		upsert(t, store, rows...)
 	}
+
 	want := contents(t, store)
 	store.Close()
 
 	if _, err := os.Stat(rowLogPath(root)); !os.IsNotExist(err) {
 		t.Fatalf("generation 0 row log still exists after compaction: %v", err)
 	}
+
 	reopened, err := codestore.Open(root, staticembed.ModelName)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -178,6 +212,7 @@ func TestCompactedStoreReopensWithEveryRowContent(t *testing.T) {
 	if len(got) != rowCount {
 		t.Fatalf("reopened store has %d rows, want %d", len(got), rowCount)
 	}
+
 	for id, content := range want {
 		if got[id] != content || content != fmt.Sprintf("round %d of %s", rounds-1, id) {
 			t.Fatalf("row %s content = %q, want %q", id, got[id], content)

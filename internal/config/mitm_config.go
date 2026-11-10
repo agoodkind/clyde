@@ -103,11 +103,13 @@ func (c MITMCaptureStoreConfig) RecordingDeadline() (time.Time, error) {
 	if c.RecordUntil == "" {
 		return time.Time{}, nil
 	}
+
 	deadline, err := time.Parse(time.RFC3339, c.RecordUntil)
 	if err != nil {
 		slog.Warn("config.capture_recording_deadline_invalid", "err", err)
 		return time.Time{}, fmt.Errorf("mitm.capture_store.record_until must use RFC3339: %w", err)
 	}
+
 	return deadline, nil
 }
 
@@ -141,7 +143,9 @@ func (p MITMProvider) IsValid() bool {
 	if p == "" {
 		return true
 	}
+
 	_, ok := providerid.Parse(string(p))
+
 	return ok
 }
 
@@ -230,12 +234,15 @@ func (m MITMConfig) EnabledFor(provider string) bool {
 	if !isValidMITMProviderName(normalizedProvider) {
 		return false
 	}
+
 	providers, err := parseMITMProviders(m.Providers)
 	if err != nil {
 		return false
 	}
+
 	if len(providers) == 1 && providers[0] == mitmProviderAll {
 		return true
 	}
+
 	return slices.Contains(providers, normalizedProvider)
 }

@@ -64,36 +64,76 @@ func (d Declaration) flagName() string {
 
 func stringDeclaration(canonical, description string) Declaration {
 	return Declaration{
-		Canonical: canonical, Kind: KindString, Description: description, Required: false,
-		Values: nil, DefaultStr: "", DefaultInt: 0, DefaultBool: false, CLIOnly: false,
+		Canonical:   canonical,
+		Kind:        KindString,
+		Description: description,
+		Required:    false,
+		Values:      nil,
+		DefaultStr:  "",
+		DefaultInt:  0,
+		DefaultBool: false,
+		CLIOnly:     false,
 	}
 }
 
 func intDeclaration(canonical, description string) Declaration {
 	return Declaration{
-		Canonical: canonical, Kind: KindInt, Description: description, Required: false,
-		Values: nil, DefaultStr: "", DefaultInt: 0, DefaultBool: false, CLIOnly: false,
+		Canonical:   canonical,
+		Kind:        KindInt,
+		Description: description,
+		Required:    false,
+		Values:      nil,
+		DefaultStr:  "",
+		DefaultInt:  0,
+		DefaultBool: false,
+		CLIOnly:     false,
 	}
 }
 
 func boolDeclaration(canonical, description string, cliOnly bool) Declaration {
 	return Declaration{
-		Canonical: canonical, Kind: KindBool, Description: description, Required: false,
-		Values: nil, DefaultStr: "", DefaultInt: 0, DefaultBool: false, CLIOnly: cliOnly,
+		Canonical:   canonical,
+		Kind:        KindBool,
+		Description: description,
+		Required:    false,
+		Values:      nil,
+		DefaultStr:  "",
+		DefaultInt:  0,
+		DefaultBool: false,
+		CLIOnly:     cliOnly,
 	}
 }
 
 func enumDeclaration(canonical, description, defaultValue string, values []string) Declaration {
 	return Declaration{
-		Canonical: canonical, Kind: KindEnum, Description: description, Required: false,
-		Values: values, DefaultStr: defaultValue, DefaultInt: 0, DefaultBool: false, CLIOnly: false,
+		Canonical:   canonical,
+		Kind:        KindEnum,
+		Description: description,
+		Required:    false,
+		Values:      values,
+		DefaultStr:  defaultValue,
+		DefaultInt:  0,
+		DefaultBool: false,
+		CLIOnly:     false,
 	}
 }
 
-func enumListDeclaration(canonical, description string, values []string, required bool) Declaration {
+func enumListDeclaration(
+	canonical string,
+	description string,
+	values []string,
+	required bool,
+) Declaration {
 	return Declaration{
-		Canonical: canonical, Kind: KindEnumList, Description: description, Required: required,
-		Values: values, DefaultStr: "", DefaultInt: 0, DefaultBool: false, CLIOnly: false,
+		Canonical:   canonical,
+		Kind:        KindEnumList,
+		Description: description,
+		Required:    required,
+		Values:      values,
+		DefaultStr:  "",
+		DefaultInt:  0,
+		DefaultBool: false,
+		CLIOnly:     false,
 	}
 }
 
@@ -135,34 +175,66 @@ var contentShortcutDescriptions = map[string]string{
 // Declarations returns the export arguments in a stable order.
 func Declarations() []Declaration {
 	declarations := []Declaration{
-		enumDeclaration("format", "markdown, html, json, or plain_text.",
-			string(conversation.ExportFormatMarkdown), exportFormatValues),
-		enumDeclaration("whitespace", "preserve, tidy, compact, or dense.", "", whitespaceEnumValues),
+		enumDeclaration(
+			"format",
+			"markdown, html, json, or plain_text.",
+			string(conversation.ExportFormatMarkdown),
+			exportFormatValues,
+		),
+		enumDeclaration(
+			"whitespace",
+			"preserve, tidy, compact, or dense.",
+			"",
+			whitespaceEnumValues,
+		),
 		intDeclaration("history_start", "First message index to include."),
-		stringDeclaration("include_compactions",
-			"Compaction segments to export: 0, 0,1, 0..2, or all. Defaults to 0."),
-		boolDeclaration("full_history",
-			"Export all compaction segments. Equivalent to --include-compactions all.", false),
-		intDeclaration("last_n",
-			"Keep only the last N visible messages after compaction segment selection."),
-		intDeclaration("max_lines",
-			"Keep only the last N rendered lines after whitespace compression. Zero leaves the output uncapped."),
-		stringDeclaration("max_tokens",
-			"Cap the rendered body to a token budget, keeping the tail. Accepts human sizes like 200000, 200,000, 200k, or 1m. Empty leaves the output uncapped."),
-		stringDeclaration("token_model",
-			"Override the model whose tokenizer counts --max-tokens (for example gpt-4o). Empty derives it from the conversation's provider and model."),
-		enumListDeclaration("only",
+		stringDeclaration(
+			"include_compactions",
+			"Compaction segments to export: 0, 0,1, 0..2, or all. Defaults to 0.",
+		),
+		boolDeclaration(
+			"full_history",
+			"Export all compaction segments. Equivalent to --include-compactions all.",
+			false,
+		),
+		intDeclaration(
+			"last_n",
+			"Keep only the last N visible messages after compaction segment selection.",
+		),
+		intDeclaration(
+			"max_lines",
+			"Keep only the last N rendered lines after whitespace compression. Zero leaves the output uncapped.",
+		),
+		stringDeclaration(
+			"max_tokens",
+			"Cap the rendered body to a token budget, keeping the tail. Accepts human sizes like 200000, 200,000, 200k, or 1m. Empty leaves the output uncapped.",
+		),
+		stringDeclaration(
+			"token_model",
+			"Override the model whose tokenizer counts --max-tokens (for example gpt-4o). Empty derives it from the conversation's provider and model.",
+		),
+		enumListDeclaration(
+			"only",
 			"Content kinds to export, comma-separated: chat, thinking, tools, tool_calls, tool_outputs, system_prompts, system_messages, injected, raw_json_metadata, plus all.",
-			conversation.ContentKindSelectorValues(), true),
+			conversation.ContentKindSelectorValues(),
+			true,
+		),
 	}
+
 	for _, mode := range whitespaceShortcutModes {
-		declarations = append(declarations,
-			boolDeclaration(string(mode), "Use "+string(mode)+" whitespace.", true))
+		declarations = append(
+			declarations,
+			boolDeclaration(string(mode), "Use "+string(mode)+" whitespace.", true),
+		)
 	}
+
 	for _, selector := range conversation.ContentKindSelectorValues() {
-		declarations = append(declarations,
-			boolDeclaration(selector, contentShortcutDescription(selector), true))
+		declarations = append(
+			declarations,
+			boolDeclaration(selector, contentShortcutDescription(selector), true),
+		)
 	}
+
 	return declarations
 }
 
@@ -170,6 +242,7 @@ func contentShortcutDescription(selector string) string {
 	if described, ok := contentShortcutDescriptions[selector]; ok {
 		return described
 	}
+
 	return "Include " + selector + " content."
 }
 
@@ -196,6 +269,7 @@ func (v values) stringValue(canonical string) string {
 	if stored, ok := v.strings[canonical]; ok && stored != nil {
 		return *stored
 	}
+
 	return ""
 }
 
@@ -203,6 +277,7 @@ func (v values) intValue(canonical string) int {
 	if stored, ok := v.ints[canonical]; ok && stored != nil {
 		return *stored
 	}
+
 	return 0
 }
 
@@ -210,6 +285,7 @@ func (v values) boolValue(canonical string) bool {
 	if stored, ok := v.bools[canonical]; ok && stored != nil {
 		return *stored
 	}
+
 	return false
 }
 
@@ -217,6 +293,7 @@ func (v values) listValue(canonical string) []string {
 	if stored, ok := v.lists[canonical]; ok && stored != nil {
 		return *stored
 	}
+
 	return nil
 }
 
@@ -228,14 +305,25 @@ func Parse(args []string) (conversation.ExportOptions, error) {
 	// returned error carries the reason.
 	set.SetOutput(io.Discard)
 	stored := newValues()
+
 	for _, declaration := range Declarations() {
 		register(set, declaration, stored)
 	}
+
 	if err := set.Parse(args); err != nil {
-		slog.Warn("conversation.exportargs.parse_failed",
-			"concern", logConcern, "component", logComponent, "err", err)
+		slog.Warn(
+			"conversation.exportargs.parse_failed",
+			"concern",
+			logConcern,
+			"component",
+			logComponent,
+			"err",
+			err,
+		)
+
 		return conversation.ExportOptions{}, fmt.Errorf("parse export arguments: %w", err)
 	}
+
 	return resolve(stored)
 }
 
@@ -243,11 +331,23 @@ func register(set *pflag.FlagSet, declaration Declaration, stored values) {
 	name := declaration.flagName()
 	switch declaration.Kind {
 	case KindString, KindEnum:
-		stored.strings[declaration.Canonical] = set.String(name, declaration.DefaultStr, declaration.Description)
+		stored.strings[declaration.Canonical] = set.String(
+			name,
+			declaration.DefaultStr,
+			declaration.Description,
+		)
 	case KindInt:
-		stored.ints[declaration.Canonical] = set.Int(name, declaration.DefaultInt, declaration.Description)
+		stored.ints[declaration.Canonical] = set.Int(
+			name,
+			declaration.DefaultInt,
+			declaration.Description,
+		)
 	case KindBool:
-		stored.bools[declaration.Canonical] = set.Bool(name, declaration.DefaultBool, declaration.Description)
+		stored.bools[declaration.Canonical] = set.Bool(
+			name,
+			declaration.DefaultBool,
+			declaration.Description,
+		)
 	case KindEnumList:
 		stored.lists[declaration.Canonical] = set.StringSlice(name, nil, declaration.Description)
 	}
@@ -275,23 +375,43 @@ func resolve(stored values) (conversation.ExportOptions, error) {
 	if selectors := selectedContentKinds(stored); len(selectors) > 0 {
 		content, err := conversation.ResolveContentKinds(selectors)
 		if err != nil {
-			slog.Warn("conversation.exportargs.content_invalid",
-				"concern", logConcern, "component", logComponent, "err", err)
+			slog.Warn(
+				"conversation.exportargs.content_invalid",
+				"concern",
+				logConcern,
+				"component",
+				logComponent,
+				"err",
+				err,
+			)
+
 			return conversation.ExportOptions{}, fmt.Errorf("select content kinds: %w", err)
 		}
+
 		options.Content = content
 	}
+
 	compaction, err := conversation.NormalizeCompactionExportOptions(
 		options.Compaction,
 		options.HistoryStart,
 		options.LastN,
 	)
 	if err != nil {
-		slog.Warn("conversation.exportargs.compaction_invalid",
-			"concern", logConcern, "component", logComponent, "err", err)
+		slog.Warn(
+			"conversation.exportargs.compaction_invalid",
+			"concern",
+			logConcern,
+			"component",
+			logComponent,
+			"err",
+			err,
+		)
+
 		return conversation.ExportOptions{}, fmt.Errorf("select compaction controls: %w", err)
 	}
+
 	options.Compaction = compaction
+
 	return options, nil
 }
 
@@ -300,14 +420,17 @@ func resolve(stored values) (conversation.ExportOptions, error) {
 // that name no mode leave the rendered output untouched.
 func resolveWhitespace(stored values) conversation.WhitespaceMode {
 	mode := conversation.WhitespaceMode(stored.stringValue("whitespace"))
+
 	for _, shortcut := range whitespaceShortcutModes {
 		if stored.boolValue(string(shortcut)) {
 			mode = shortcut
 		}
 	}
+
 	if mode == "" {
 		return conversation.WhitespacePreserve
 	}
+
 	return mode
 }
 
@@ -315,10 +438,12 @@ func resolveWhitespace(stored values) conversation.WhitespaceMode {
 // the per-kind shortcuts. It returns nil when the arguments select no kind.
 func selectedContentKinds(stored values) []string {
 	selectors := append([]string(nil), stored.listValue("only")...)
+
 	for _, selector := range conversation.ContentKindSelectorValues() {
 		if stored.boolValue(selector) {
 			selectors = append(selectors, selector)
 		}
 	}
+
 	return selectors
 }

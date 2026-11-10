@@ -17,6 +17,7 @@ func zstdBytes(t *testing.T, payload []byte) []byte {
 		t.Fatalf("zstd writer: %v", err)
 	}
 	defer enc.Close()
+
 	return enc.EncodeAll(payload, nil)
 }
 
@@ -26,6 +27,7 @@ func TestDecodeForCaptureZstd(t *testing.T) {
 	if !decoded {
 		t.Fatal("expected decoded=true")
 	}
+
 	if !bytes.Equal(got, want) {
 		t.Errorf("got %q want %q", got, want)
 	}
@@ -38,9 +40,11 @@ func gzipBytes(t *testing.T, payload []byte) []byte {
 	if _, err := gw.Write(payload); err != nil {
 		t.Fatalf("gzip write: %v", err)
 	}
+
 	if err := gw.Close(); err != nil {
 		t.Fatalf("gzip close: %v", err)
 	}
+
 	return buf.Bytes()
 }
 
@@ -51,9 +55,11 @@ func zlibBytes(t *testing.T, payload []byte) []byte {
 	if _, err := zw.Write(payload); err != nil {
 		t.Fatalf("zlib write: %v", err)
 	}
+
 	if err := zw.Close(); err != nil {
 		t.Fatalf("zlib close: %v", err)
 	}
+
 	return buf.Bytes()
 }
 
@@ -64,12 +70,15 @@ func flateBytes(t *testing.T, payload []byte) []byte {
 	if err != nil {
 		t.Fatalf("flate writer: %v", err)
 	}
+
 	if _, err := fw.Write(payload); err != nil {
 		t.Fatalf("flate write: %v", err)
 	}
+
 	if err := fw.Close(); err != nil {
 		t.Fatalf("flate close: %v", err)
 	}
+
 	return buf.Bytes()
 }
 
@@ -79,6 +88,7 @@ func TestDecodeForCaptureGzip(t *testing.T) {
 	if !decoded {
 		t.Fatal("expected decoded=true")
 	}
+
 	if !bytes.Equal(got, want) {
 		t.Errorf("got %q want %q", got, want)
 	}
@@ -90,6 +100,7 @@ func TestDecodeForCaptureZlib(t *testing.T) {
 	if !decoded {
 		t.Fatal("expected decoded=true")
 	}
+
 	if !bytes.Equal(got, want) {
 		t.Errorf("got %q want %q", got, want)
 	}
@@ -101,6 +112,7 @@ func TestDecodeForCaptureRawDeflate(t *testing.T) {
 	if !decoded {
 		t.Fatal("expected decoded=true")
 	}
+
 	if !bytes.Equal(got, want) {
 		t.Errorf("got %q want %q", got, want)
 	}
@@ -112,6 +124,7 @@ func TestDecodeForCaptureUnknownEncodingReturnsRaw(t *testing.T) {
 	if decoded {
 		t.Fatal("expected decoded=false for brotli")
 	}
+
 	if !bytes.Equal(got, raw) {
 		t.Errorf("got %q want %q", got, raw)
 	}
@@ -123,6 +136,7 @@ func TestDecodeForCaptureNoEncodingReturnsRaw(t *testing.T) {
 	if decoded {
 		t.Fatal("expected decoded=false")
 	}
+
 	if !bytes.Equal(got, raw) {
 		t.Errorf("got %q want %q", got, raw)
 	}
@@ -134,6 +148,7 @@ func TestDecodeForCaptureMalformedFallsBackToRaw(t *testing.T) {
 	if decoded {
 		t.Fatal("expected decoded=false on malformed input")
 	}
+
 	if !bytes.Equal(got, raw) {
 		t.Errorf("got %q want %q", got, raw)
 	}

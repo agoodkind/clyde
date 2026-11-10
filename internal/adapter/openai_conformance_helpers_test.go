@@ -39,22 +39,29 @@ type conformanceListeners struct {
 func startConformanceServer(t *testing.T, upstream *conformanceUpstream) conformanceListeners {
 	t.Helper()
 	fakes := newRoutingFakeEndpoints(t)
-	fakes.codex = newLoopbackHTTPServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == "/backend-api/wham/usage" {
-			_, _ = writer.Write([]byte(`{}`))
-			return
-		}
-		var body adaptercodex.HTTPTransportRequest
-		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
-			t.Errorf("decode Codex request: %v", err)
-			writer.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		upstream.requests <- body
-		upstream.reply(writer)
-	}))
+	fakes.codex = newLoopbackHTTPServer(
+		t,
+		http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			if request.URL.Path == "/backend-api/wham/usage" {
+				_, _ = writer.Write([]byte(`{}`))
+				return
+			}
+
+			var body adaptercodex.HTTPTransportRequest
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Errorf("decode Codex request: %v", err)
+				writer.WriteHeader(http.StatusBadRequest)
+
+				return
+			}
+
+			upstream.requests <- body
+			upstream.reply(writer)
+		}),
+	)
 	srv := newRoutingIntegrationServer(t, fakes)
 	openAIURL, cursorURL := startRoutingListeners(t, srv)
+
 	return conformanceListeners{openAI: openAIURL, cursor: cursorURL}
 }
 
@@ -107,23 +114,32 @@ func sendConformance(t *testing.T, method string, url string, body string) confo
 	if body != "" {
 		reader = bytes.NewBufferString(body)
 	}
+
 	request, err := http.NewRequestWithContext(context.Background(), method, url, reader)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
+
 	if body != "" {
 		request.Header.Set("Content-Type", "application/json")
 	}
+
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatalf("%s %s: %v", method, url, err)
 	}
+
 	defer func() { _ = response.Body.Close() }()
 	responseBody, err := io.ReadAll(response.Body)
 	if err != nil {
 		t.Fatalf("read %s response: %v", url, err)
 	}
-	return conformanceResponse{status: response.StatusCode, header: response.Header, body: responseBody}
+
+	return conformanceResponse{
+		status: response.StatusCode,
+		header: response.Header,
+		body:   responseBody,
+	}
 }
 
 // The raw members let tests assert exact key presence and absence.
@@ -133,6 +149,7 @@ func decodeJSONObject(t *testing.T, raw []byte) map[string]json.RawMessage {
 	if err := json.Unmarshal(raw, &object); err != nil {
 		t.Fatalf("decode JSON object: %v; body=%s", err, raw)
 	}
+
 	return object
 }
 
@@ -142,6 +159,7 @@ func requireMember(t *testing.T, object map[string]json.RawMessage, key string) 
 	if !ok {
 		t.Fatalf("missing %q in %v", key, object)
 	}
+
 	return value
 }
 
@@ -151,10 +169,14 @@ func decodeErrorEnvelope(t *testing.T, body []byte) adapteropenai.ErrorBody {
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		t.Fatalf("decode error envelope: %v; body=%s", err, body)
 	}
+
 	return envelope.Error
 }
 
-func drainConformanceRequest(t *testing.T, upstream *conformanceUpstream) adaptercodex.HTTPTransportRequest {
+func drainConformanceRequest(
+	t *testing.T,
+	upstream *conformanceUpstream,
+) adaptercodex.HTTPTransportRequest {
 	t.Helper()
 	select {
 	case request := <-upstream.requests:
@@ -169,7 +191,10 @@ func requireNoUpstreamRequest(t *testing.T, upstream *conformanceUpstream) {
 	t.Helper()
 	select {
 	case request := <-upstream.requests:
-		t.Fatalf("Codex upstream received a request that should have been rejected: model=%s", request.Model)
+		t.Fatalf(
+			"Codex upstream received a request that should have been rejected: model=%s",
+			request.Model,
+		)
 	default:
 	}
 }
@@ -177,6 +202,7 @@ func requireNoUpstreamRequest(t *testing.T, upstream *conformanceUpstream) {
 func sseDataFrames(t *testing.T, body []byte) []string {
 	t.Helper()
 	var frames []string
+
 	for _, frame := range strings.Split(string(body), "\n\n") {
 		for _, line := range strings.Split(frame, "\n") {
 			if payload, ok := strings.CutPrefix(line, "data: "); ok {
@@ -184,9 +210,11 @@ func sseDataFrames(t *testing.T, body []byte) []string {
 			}
 		}
 	}
+
 	if len(frames) == 0 {
 		t.Fatalf("stream has no data frames: %s", body)
 	}
+
 	return frames
 }
 
@@ -195,14 +223,17 @@ func sseDataFrames(t *testing.T, body []byte) []string {
 func requireSingleTrailingDone(t *testing.T, frames []string) []string {
 	t.Helper()
 	doneCount := 0
+
 	for _, frame := range frames {
 		if frame == "[DONE]" {
 			doneCount++
 		}
 	}
+
 	if doneCount != 1 || frames[len(frames)-1] != "[DONE]" {
 		t.Fatalf("stream must end with exactly one [DONE]; frames=%v", frames)
 	}
+
 	return frames[:len(frames)-1]
 }
 
@@ -210,18 +241,22 @@ func responsesStreamEvents(t *testing.T, body []byte) ([]string, []map[string]js
 	t.Helper()
 	var names []string
 	var payloads []map[string]json.RawMessage
+
 	for _, frame := range strings.Split(string(body), "\n\n") {
 		var name string
+
 		for _, line := range strings.Split(frame, "\n") {
 			if value, ok := strings.CutPrefix(line, "event: "); ok {
 				name = value
 			}
+
 			if value, ok := strings.CutPrefix(line, "data: "); ok {
 				names = append(names, name)
 				payloads = append(payloads, decodeJSONObject(t, []byte(value)))
 			}
 		}
 	}
+
 	return names, payloads
 }
 
@@ -231,5 +266,6 @@ func indexOfEvent(names []string, name string) int {
 			return index
 		}
 	}
+
 	return -1
 }

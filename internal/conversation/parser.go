@@ -65,6 +65,7 @@ func ContentFingerprint(record Record, stamp FileStamp) string {
 	if ArtifactKind(record.ArtifactKind) == ArtifactKindCursorAgentTranscript {
 		return stamp.Fingerprint() + cursorAgentTranscriptCompatibilitySuffix
 	}
+
 	return stamp.Fingerprint()
 }
 
@@ -152,15 +153,26 @@ type Parser interface {
 // cache before opening a provider store again.
 type CachedDiscoveryParser interface {
 	Parser
-	DiscoverCached(ctx context.Context, prior map[string]Record, priorStamps map[string]FileStamp) ([]ScanCandidate, error)
+	DiscoverCached(
+		ctx context.Context,
+		prior map[string]Record,
+		priorStamps map[string]FileStamp,
+	) ([]ScanCandidate, error)
 }
 
 // MultiConversationParser is implemented by providers whose one physical
 // artifact contains several independently addressable conversations.
 type MultiConversationParser interface {
 	Parser
-	ScanRecords(ctx context.Context, input MultiConversationScan) (MultiConversationScanResult, bool)
-	StreamSelected(path string, selector string, opts LoadOptions) iter.Seq2[transcript.Message, error]
+	ScanRecords(
+		ctx context.Context,
+		input MultiConversationScan,
+	) (MultiConversationScanResult, bool)
+	StreamSelected(
+		path string,
+		selector string,
+		opts LoadOptions,
+	) iter.Seq2[transcript.Message, error]
 }
 
 // CollectMessages folds a streaming parse into a full slice. Use it only where a
@@ -183,26 +195,38 @@ type MultiConversationParser interface {
 // per-record mapping function and costs one record instead, and it is what
 // handles a mapping defect in practice. This catches what panics between those
 // functions: the read loop, the decode, and the turn assembly.
-func CollectMessages(stream iter.Seq2[transcript.Message, error]) (collected []transcript.Message, err error) {
+func CollectMessages(
+	stream iter.Seq2[transcript.Message, error],
+) (collected []transcript.Message, err error) {
 	defer func() {
 		recovered := recover()
 		if recovered == nil {
 			return
 		}
+
 		err = fmt.Errorf("collect conversation messages: parser panicked: %v", recovered)
-		slog.Error("conversation.collect_panic",
-			"concern", slogger.ConcernConversationLoad,
-			"component", "conversation",
-			"collected", len(collected),
-			"err", err,
-			"stack", string(debug.Stack()),
+		slog.Error(
+			"conversation.collect_panic",
+			"concern",
+			slogger.ConcernConversationLoad,
+			"component",
+			"conversation",
+			"collected",
+			len(collected),
+			"err",
+			err,
+			"stack",
+			string(debug.Stack()),
 		)
 	}()
+
 	for message, streamErr := range stream {
 		if streamErr != nil {
 			return collected, streamErr
 		}
+
 		collected = append(collected, message)
 	}
+
 	return collected, nil
 }

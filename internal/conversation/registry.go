@@ -36,10 +36,12 @@ func (r *Registry) Register(p Parser) {
 	if p == nil {
 		return
 	}
+
 	provider := p.Provider()
 	if !provider.Valid() {
 		return
 	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.parsers[provider] = p
@@ -55,6 +57,7 @@ func (r *Registry) Lookup(provider providerid.Provider) (Parser, error) {
 	if !ok {
 		return nil, ErrProviderNotRegistered
 	}
+
 	return p, nil
 }
 
@@ -63,9 +66,11 @@ func (r *Registry) Lookup(provider providerid.Provider) (Parser, error) {
 func (r *Registry) Providers() []providerid.Provider {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
 	out := make([]providerid.Provider, 0, len(r.parsers))
 	for provider := range r.parsers {
 		out = append(out, provider)
 	}
+
 	return out
 }

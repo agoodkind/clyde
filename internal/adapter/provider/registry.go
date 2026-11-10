@@ -18,8 +18,9 @@ type Registry struct {
 // providers during adapter construction.
 func NewRegistry() *Registry {
 	return &Registry{
-		providers: make(map[adapterresolver.ProviderID]Provider), mu: sync.
-				RWMutex{},
+		providers: make(map[adapterresolver.ProviderID]Provider),
+		mu: sync.
+			RWMutex{},
 	}
 }
 
@@ -30,10 +31,12 @@ func (r *Registry) Register(p Provider) {
 	if p == nil {
 		return
 	}
+
 	id := p.ID()
 	if !id.Valid() {
 		return
 	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.providers[id] = p
@@ -49,6 +52,7 @@ func (r *Registry) Lookup(id adapterresolver.ProviderID) (Provider, error) {
 	if !ok {
 		return nil, ErrProviderNotRegistered
 	}
+
 	return p, nil
 }
 
@@ -57,9 +61,11 @@ func (r *Registry) Lookup(id adapterresolver.ProviderID) (Provider, error) {
 func (r *Registry) IDs() []adapterresolver.ProviderID {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
 	out := make([]adapterresolver.ProviderID, 0, len(r.providers))
 	for id := range r.providers {
 		out = append(out, id)
 	}
+
 	return out
 }

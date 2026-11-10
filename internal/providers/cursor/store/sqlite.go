@@ -52,19 +52,42 @@ func OpenReadOnlyDatabase(ctx context.Context, path string) (*sql.DB, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("open cursor sqlite database %s: nil context", path)
 	}
+
 	dsn := readOnlyDatabaseDSN(path)
 	db, err := sql.Open(readOnlyDriverName, dsn)
 	if err != nil {
 		logger := discoveryReadLogger(ctx)
-		logger.WarnContext(ctx, "providers.cursor.store.sqlite_open_failed", "concern", concern, "path", path, "err", err)
+		logger.WarnContext(
+			ctx,
+			"providers.cursor.store.sqlite_open_failed",
+			"concern",
+			concern,
+			"path",
+			path,
+			"err",
+			err,
+		)
+
 		return nil, fmt.Errorf("open cursor sqlite database %s: %w", path, err)
 	}
+
 	if pingErr := db.PingContext(ctx); pingErr != nil {
 		_ = db.Close()
 		logger := discoveryReadLogger(ctx)
-		logger.WarnContext(ctx, "providers.cursor.store.sqlite_ping_failed", "concern", concern, "path", path, "err", pingErr)
+		logger.WarnContext(
+			ctx,
+			"providers.cursor.store.sqlite_ping_failed",
+			"concern",
+			concern,
+			"path",
+			path,
+			"err",
+			pingErr,
+		)
+
 		return nil, fmt.Errorf("ping cursor sqlite database %s: %w", path, pingErr)
 	}
+
 	return db, nil
 }
 
@@ -74,6 +97,7 @@ func readOnlyDatabaseDSN(path string) string {
 	if len(normalizedPath) >= 2 && normalizedPath[1] == ':' {
 		normalizedPath = "/" + normalizedPath
 	}
+
 	return (&url.URL{
 		Scheme:   "file",
 		Path:     normalizedPath,
@@ -109,15 +133,26 @@ func beginReadSnapshot(ctx context.Context, db *sql.DB) (readSnapshot, error) {
 	if ctx == nil {
 		return empty, fmt.Errorf("begin cursor read snapshot: nil context")
 	}
+
 	if db == nil {
 		return empty, fmt.Errorf("begin cursor read snapshot: nil database")
 	}
+
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelDefault, ReadOnly: true})
 	if err != nil {
 		logger := discoveryReadLogger(ctx)
-		logger.WarnContext(ctx, "providers.cursor.store.read_snapshot_failed", "concern", concern, "err", err)
+		logger.WarnContext(
+			ctx,
+			"providers.cursor.store.read_snapshot_failed",
+			"concern",
+			concern,
+			"err",
+			err,
+		)
+
 		return empty, fmt.Errorf("begin cursor read snapshot: %w", err)
 	}
+
 	return readSnapshot{tx: tx}, nil
 }
 
@@ -125,18 +160,33 @@ func (snapshot readSnapshot) rollback() {
 	if snapshot.tx == nil {
 		return
 	}
+
 	_ = snapshot.tx.Rollback()
 }
 
 // tableColumns answers the same question as [readTableColumns] against this
 // snapshot.
-func (snapshot readSnapshot) tableColumns(ctx context.Context, table string) (map[string]bool, error) {
+func (snapshot readSnapshot) tableColumns(
+	ctx context.Context,
+	table string,
+) (map[string]bool, error) {
 	rows, err := snapshot.tx.QueryContext(ctx, tableColumnsQuery, table)
 	if err != nil {
 		logger := discoveryReadLogger(ctx)
-		logger.WarnContext(ctx, "providers.cursor.store.table_columns_query_failed", "concern", concern, "table", table, "err", err)
+		logger.WarnContext(
+			ctx,
+			"providers.cursor.store.table_columns_query_failed",
+			"concern",
+			concern,
+			"table",
+			table,
+			"err",
+			err,
+		)
+
 		return nil, fmt.Errorf("query cursor %s columns: %w", table, err)
 	}
+
 	defer func() { _ = rows.Close() }()
 
 	return scanTableColumns(ctx, rows, table)
@@ -147,9 +197,20 @@ func (snapshot readSnapshot) tableExists(ctx context.Context, table string) (boo
 	var count int
 	if err := snapshot.tx.QueryRowContext(ctx, tableExistsQuery, table).Scan(&count); err != nil {
 		logger := discoveryReadLogger(ctx)
-		logger.WarnContext(ctx, "providers.cursor.store.sqlite_master_query_failed", "concern", concern, "table", table, "err", err)
+		logger.WarnContext(
+			ctx,
+			"providers.cursor.store.sqlite_master_query_failed",
+			"concern",
+			concern,
+			"table",
+			table,
+			"err",
+			err,
+		)
+
 		return false, fmt.Errorf("query sqlite_master for %s: %w", table, err)
 	}
+
 	return count > 0, nil
 }
 
@@ -168,11 +229,25 @@ func (snapshot readSnapshot) queryRange(
 	} else {
 		rows, err = snapshot.tx.QueryContext(ctx, query, bounds.Lower)
 	}
+
 	if err != nil {
 		logger := discoveryReadLogger(ctx)
-		logger.WarnContext(ctx, "providers.cursor.store.kv_range_query_failed", "concern", concern, "reads", reads, "key_lower", bounds.Lower, "err", err)
+		logger.WarnContext(
+			ctx,
+			"providers.cursor.store.kv_range_query_failed",
+			"concern",
+			concern,
+			"reads",
+			reads,
+			"key_lower",
+			bounds.Lower,
+			"err",
+			err,
+		)
+
 		return nil, fmt.Errorf("query cursor %s in key range %q: %w", reads, bounds.Lower, err)
 	}
+
 	return rows, nil
 }
 
@@ -188,10 +263,12 @@ func (snapshot readSnapshot) countRange(ctx context.Context, bounds keyRange) (i
 	if err != nil {
 		return 0, err
 	}
+
 	exists, err := snapshot.tableExists(ctx, sqlTableName)
 	if err != nil {
 		return 0, err
 	}
+
 	if !exists {
 		return 0, nil
 	}
@@ -203,11 +280,30 @@ func (snapshot readSnapshot) countRange(ctx context.Context, bounds keyRange) (i
 	} else {
 		err = snapshot.tx.QueryRowContext(ctx, query, bounds.Lower).Scan(&count)
 	}
+
 	if err != nil {
 		logger := discoveryReadLogger(ctx)
-		logger.WarnContext(ctx, "providers.cursor.store.kv_rows_count_failed", "concern", concern, "table", sqlTableName, "key_lower", bounds.Lower, "err", err)
-		return 0, fmt.Errorf("count cursor %s rows in key range %q: %w", sqlTableName, bounds.Lower, err)
+		logger.WarnContext(
+			ctx,
+			"providers.cursor.store.kv_rows_count_failed",
+			"concern",
+			concern,
+			"table",
+			sqlTableName,
+			"key_lower",
+			bounds.Lower,
+			"err",
+			err,
+		)
+
+		return 0, fmt.Errorf(
+			"count cursor %s rows in key range %q: %w",
+			sqlTableName,
+			bounds.Lower,
+			err,
+		)
 	}
+
 	return count, nil
 }
 
@@ -216,35 +312,57 @@ func TableExists(ctx context.Context, db *sql.DB, table string) (bool, error) {
 	if ctx == nil {
 		return false, fmt.Errorf("query sqlite_master for %s: nil context", table)
 	}
+
 	if db == nil {
 		return false, fmt.Errorf("query sqlite_master for %s: nil database", table)
 	}
+
 	var count int
 	err := db.QueryRowContext(ctx, tableExistsQuery, table).Scan(&count)
 	if err != nil {
 		logger := discoveryReadLogger(ctx)
-		logger.WarnContext(ctx, "providers.cursor.store.sqlite_master_query_failed", "concern", concern, "table", table, "err", err)
+		logger.WarnContext(
+			ctx,
+			"providers.cursor.store.sqlite_master_query_failed",
+			"concern",
+			concern,
+			"table",
+			table,
+			"err",
+			err,
+		)
+
 		return false, fmt.Errorf("query sqlite_master for %s: %w", table, err)
 	}
+
 	return count > 0, nil
 }
 
 // ReadKVValue reads one exact key from a known Cursor key-value table.
-func ReadKVValue(ctx context.Context, db *sql.DB, tableName KVTableName, key string) ([]byte, bool, error) {
+func ReadKVValue(
+	ctx context.Context,
+	db *sql.DB,
+	tableName KVTableName,
+	key string,
+) ([]byte, bool, error) {
 	if ctx == nil {
 		return nil, false, fmt.Errorf("read cursor value for key %q: nil context", key)
 	}
+
 	if db == nil {
 		return nil, false, fmt.Errorf("read cursor value for key %q: nil database", key)
 	}
+
 	sqlTableName, err := tableName.sqlTableName()
 	if err != nil {
 		return nil, false, err
 	}
+
 	exists, err := TableExists(ctx, db, sqlTableName)
 	if err != nil {
 		return nil, false, err
 	}
+
 	if !exists {
 		return nil, false, nil
 	}
@@ -279,10 +397,12 @@ func readKVRowInKnownTable(
 	if err != nil {
 		return nil, 0, false, err
 	}
+
 	query, err := tableName.selectRowByKeyQuery()
 	if err != nil {
 		return nil, 0, false, err
 	}
+
 	var value []byte
 	var writeOrder int64
 	err = db.QueryRowContext(ctx, query, key).Scan(&writeOrder, &value)
@@ -290,10 +410,29 @@ func readKVRowInKnownTable(
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, 0, false, nil
 		}
+
 		logger := discoveryReadLogger(ctx)
-		logger.WarnContext(ctx, "providers.cursor.store.kv_value_scan_failed", "concern", concern, "table", sqlTableName, "key", key, "err", err)
-		return nil, 0, false, fmt.Errorf("scan cursor %s value for key %q: %w", sqlTableName, key, err)
+		logger.WarnContext(
+			ctx,
+			"providers.cursor.store.kv_value_scan_failed",
+			"concern",
+			concern,
+			"table",
+			sqlTableName,
+			"key",
+			key,
+			"err",
+			err,
+		)
+
+		return nil, 0, false, fmt.Errorf(
+			"scan cursor %s value for key %q: %w",
+			sqlTableName,
+			key,
+			err,
+		)
 	}
+
 	return append([]byte(nil), value...), writeOrder, true, nil
 }
 
@@ -304,11 +443,17 @@ func readKVRowInKnownTable(
 // SQLite seeks the table's primary key index instead of scanning every row. That
 // distinction is load bearing: Cursor's global `cursorDiskKV` table is tens of
 // gigabytes and its key index is the only index it has.
-func ReadKVRowsByPrefix(ctx context.Context, db *sql.DB, tableName KVTableName, keyPrefix string) ([]KVRow, error) {
+func ReadKVRowsByPrefix(
+	ctx context.Context,
+	db *sql.DB,
+	tableName KVTableName,
+	keyPrefix string,
+) ([]KVRow, error) {
 	rows, err := readKVRowsInKeyRange(ctx, db, tableName, keyRangeForPrefix(keyPrefix), "")
 	if err != nil {
 		return nil, err
 	}
+
 	return rows, nil
 }
 
@@ -338,11 +483,14 @@ func keyPrefixUpperBound(keyPrefix string) (string, bool) {
 		if value == 0xFF {
 			continue
 		}
+
 		bound := make([]byte, index+1)
 		copy(bound, raw[:index+1])
 		bound[index]++
+
 		return string(bound), true
 	}
+
 	return "", false
 }
 
@@ -361,13 +509,21 @@ func readKVRowsInKeyRange(
 	valueSubstring string,
 ) ([]KVRow, error) {
 	out := make([]KVRow, 0)
-	err := forEachKVRowInKeyRange(ctx, db, tableName, bounds, valueSubstring, func(row KVRow) error {
-		out = append(out, row)
-		return nil
-	})
+	err := forEachKVRowInKeyRange(
+		ctx,
+		db,
+		tableName,
+		bounds,
+		valueSubstring,
+		func(row KVRow) error {
+			out = append(out, row)
+			return nil
+		},
+	)
 	if err != nil {
 		return nil, err
 	}
+
 	return out, nil
 }
 
@@ -386,47 +542,92 @@ func forEachKVRowInKeyRange(
 	if ctx == nil {
 		return fmt.Errorf("read cursor rows in key range %q: nil context", bounds.Lower)
 	}
+
 	if db == nil {
 		return fmt.Errorf("read cursor rows in key range %q: nil database", bounds.Lower)
 	}
+
 	sqlTableName, err := tableName.sqlTableName()
 	if err != nil {
 		return err
 	}
+
 	exists, err := TableExists(ctx, db, sqlTableName)
 	if err != nil {
 		return err
 	}
+
 	if !exists {
 		return nil
 	}
 
 	rows, err := queryKVRangeContext(
-		ctx, db,
+		ctx,
+		db,
 		selectRowsInKeyRangeQuery(sqlTableName, bounds, valueSubstring),
-		bounds, valueSubstring, sqlTableName+" rows",
+		bounds,
+		valueSubstring,
+		sqlTableName+" rows",
 	)
 	if err != nil {
 		return err
 	}
+
 	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var row KVRow
 		if err := rows.Scan(&row.RowID, &row.Key, &row.Value); err != nil {
 			logger := discoveryReadLogger(ctx)
-			logger.WarnContext(ctx, "providers.cursor.store.kv_row_scan_failed", "concern", concern, "table", sqlTableName, "key_lower", bounds.Lower, "err", err)
-			return fmt.Errorf("scan cursor %s row in key range %q: %w", sqlTableName, bounds.Lower, err)
+			logger.WarnContext(
+				ctx,
+				"providers.cursor.store.kv_row_scan_failed",
+				"concern",
+				concern,
+				"table",
+				sqlTableName,
+				"key_lower",
+				bounds.Lower,
+				"err",
+				err,
+			)
+
+			return fmt.Errorf(
+				"scan cursor %s row in key range %q: %w",
+				sqlTableName,
+				bounds.Lower,
+				err,
+			)
 		}
+
 		if err := visit(row); err != nil {
 			return err
 		}
 	}
+
 	if err := rows.Err(); err != nil {
 		logger := discoveryReadLogger(ctx)
-		logger.WarnContext(ctx, "providers.cursor.store.kv_rows_iterate_failed", "concern", concern, "table", sqlTableName, "key_lower", bounds.Lower, "err", err)
-		return fmt.Errorf("iterate cursor %s rows in key range %q: %w", sqlTableName, bounds.Lower, err)
+		logger.WarnContext(
+			ctx,
+			"providers.cursor.store.kv_rows_iterate_failed",
+			"concern",
+			concern,
+			"table",
+			sqlTableName,
+			"key_lower",
+			bounds.Lower,
+			"err",
+			err,
+		)
+
+		return fmt.Errorf(
+			"iterate cursor %s rows in key range %q: %w",
+			sqlTableName,
+			bounds.Lower,
+			err,
+		)
 	}
+
 	return nil
 }
 
@@ -449,11 +650,13 @@ func keyRangePredicate(bounds keyRange, valueSubstring string) string {
 	if bounds.HasUpper {
 		predicate.WriteString(" AND key < ?")
 	}
+
 	if valueSubstring != "" {
 		// CAST both sides to BLOB so the search compares raw bytes whatever
 		// storage class Cursor wrote the value with.
 		predicate.WriteString(" AND instr(CAST(value AS BLOB), CAST(? AS BLOB)) > 0")
 	}
+
 	return predicate.String()
 }
 
@@ -482,11 +685,25 @@ func queryKVRangeContext(
 	default:
 		rows, err = db.QueryContext(ctx, query, bounds.Lower)
 	}
+
 	if err != nil {
 		logger := discoveryReadLogger(ctx)
-		logger.WarnContext(ctx, "providers.cursor.store.kv_range_query_failed", "concern", concern, "reads", reads, "key_lower", bounds.Lower, "err", err)
+		logger.WarnContext(
+			ctx,
+			"providers.cursor.store.kv_range_query_failed",
+			"concern",
+			concern,
+			"reads",
+			reads,
+			"key_lower",
+			bounds.Lower,
+			"err",
+			err,
+		)
+
 		return nil, fmt.Errorf("query cursor %s in key range %q: %w", reads, bounds.Lower, err)
 	}
+
 	return rows, nil
 }
 

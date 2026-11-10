@@ -33,5 +33,6 @@ func NewConversationRegistry() *Registry {
 	Register(reg, updateCheckOp())
 	Register(reg, updateApplyOp())
 	Register(reg, updateStatusOp())
+
 	return reg
 }

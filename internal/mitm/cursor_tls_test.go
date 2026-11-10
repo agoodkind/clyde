@@ -33,6 +33,7 @@ func TestLoadOrCreateCertAuthorityCreatesFilesWithModes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadOrCreateCertAuthority: %v", err)
 	}
+
 	if ca == nil || ca.cert == nil || ca.key == nil {
 		t.Fatalf("loadOrCreateCertAuthority returned incomplete CA: %+v", ca)
 	}
@@ -41,6 +42,7 @@ func TestLoadOrCreateCertAuthorityCreatesFilesWithModes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat cert: %v", err)
 	}
+
 	if got := certInfo.Mode().Perm(); got != 0o644 {
 		t.Errorf("cert mode = %#o, want %#o", got, 0o644)
 	}
@@ -49,6 +51,7 @@ func TestLoadOrCreateCertAuthorityCreatesFilesWithModes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat key: %v", err)
 	}
+
 	if got := keyInfo.Mode().Perm(); got != 0o600 {
 		t.Errorf("key mode = %#o, want %#o", got, 0o600)
 	}
@@ -57,9 +60,11 @@ func TestLoadOrCreateCertAuthorityCreatesFilesWithModes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat dir: %v", err)
 	}
+
 	if !dirInfo.IsDir() {
 		t.Fatalf("expected %q to be a directory", filepath.Dir(certPath))
 	}
+
 	if got := dirInfo.Mode().Perm(); got != 0o700 {
 		t.Errorf("dir mode = %#o, want %#o", got, 0o700)
 	}
@@ -74,14 +79,17 @@ func TestLoadOrCreateCertAuthorityIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first loadOrCreateCertAuthority: %v", err)
 	}
+
 	second, err := loadOrCreateCertAuthority(certPath, keyPath, time.Now)
 	if err != nil {
 		t.Fatalf("second loadOrCreateCertAuthority: %v", err)
 	}
+
 	if first.cert.SerialNumber.Cmp(second.cert.SerialNumber) != 0 {
 		t.Fatalf(
 			"second call returned a different SerialNumber: first=%s second=%s",
-			first.cert.SerialNumber.String(), second.cert.SerialNumber.String(),
+			first.cert.SerialNumber.String(),
+			second.cert.SerialNumber.String(),
 		)
 	}
 }
@@ -95,6 +103,7 @@ func TestLoadOrCreateCertAuthorityRejectsNonCACert(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rsa.GenerateKey: %v", err)
 	}
+
 	template := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: "non-ca leaf"},
@@ -108,12 +117,20 @@ func TestLoadOrCreateCertAuthorityRejectsNonCACert(t *testing.T) {
 	if err != nil {
 		t.Fatalf("x509.CreateCertificate: %v", err)
 	}
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+
+	certPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: der,
+	})
+	keyPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	})
 
 	if err := os.WriteFile(certPath, certPEM, 0o644); err != nil {
 		t.Fatalf("write cert: %v", err)
 	}
+
 	if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
 		t.Fatalf("write key: %v", err)
 	}
@@ -122,6 +139,7 @@ func TestLoadOrCreateCertAuthorityRejectsNonCACert(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error, got CA %+v", ca)
 	}
+
 	if !strings.Contains(err.Error(), "not a CA") {
 		t.Fatalf("error = %v, want substring %q", err, "not a CA")
 	}
@@ -136,6 +154,7 @@ func TestLoadOrCreateCertAuthorityRejectsMismatchedKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rsa.GenerateKey ca: %v", err)
 	}
+
 	template := &x509.Certificate{
 		SerialNumber:          big.NewInt(2),
 		Subject:               pkix.Name{CommonName: "mismatch ca"},
@@ -149,16 +168,25 @@ func TestLoadOrCreateCertAuthorityRejectsMismatchedKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("x509.CreateCertificate: %v", err)
 	}
+
 	otherKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("rsa.GenerateKey other: %v", err)
 	}
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(otherKey)})
+
+	certPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: der,
+	})
+	keyPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(otherKey),
+	})
 
 	if err := os.WriteFile(certPath, certPEM, 0o644); err != nil {
 		t.Fatalf("write cert: %v", err)
 	}
+
 	if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
 		t.Fatalf("write key: %v", err)
 	}
@@ -167,6 +195,7 @@ func TestLoadOrCreateCertAuthorityRejectsMismatchedKey(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error, got CA %+v", ca)
 	}
+
 	if !strings.Contains(err.Error(), "do not match") {
 		t.Fatalf("error = %v, want substring %q", err, "do not match")
 	}
@@ -184,6 +213,7 @@ func TestLoadOrCreateCertAuthorityRejectsPartiallyPopulatedDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rsa.GenerateKey: %v", err)
 	}
+
 	template := &x509.Certificate{
 		SerialNumber:          big.NewInt(3),
 		Subject:               pkix.Name{CommonName: "partial ca"},
@@ -197,7 +227,11 @@ func TestLoadOrCreateCertAuthorityRejectsPartiallyPopulatedDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("x509.CreateCertificate: %v", err)
 	}
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+
+	certPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: der,
+	})
 	if err := os.WriteFile(certPath, certPEM, 0o644); err != nil {
 		t.Fatalf("write cert: %v", err)
 	}
@@ -211,6 +245,7 @@ func TestLoadOrCreateCertAuthorityRejectsPartiallyPopulatedDir(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error, got CA %+v", ca)
 	}
+
 	if !strings.Contains(err.Error(), "inconsistent") {
 		t.Fatalf("error = %v, want substring %q", err, "inconsistent")
 	}
@@ -219,9 +254,15 @@ func TestLoadOrCreateCertAuthorityRejectsPartiallyPopulatedDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read cert after call: %v", err)
 	}
+
 	if string(afterCert) != string(originalCert) {
-		t.Fatalf("cert was modified: original=%d bytes after=%d bytes", len(originalCert), len(afterCert))
+		t.Fatalf(
+			"cert was modified: original=%d bytes after=%d bytes",
+			len(originalCert),
+			len(afterCert),
+		)
 	}
+
 	if _, err := os.Stat(keyPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected key path to remain absent, got err=%v", err)
 	}
@@ -237,10 +278,12 @@ func TestLoadOrCreateCertAuthorityHonorsClock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadOrCreateCertAuthority: %v", err)
 	}
+
 	wantNotBefore := pinned.Add(-time.Hour)
 	if !ca.cert.NotBefore.Equal(wantNotBefore) {
 		t.Errorf("NotBefore = %s, want %s", ca.cert.NotBefore, wantNotBefore)
 	}
+
 	wantNotAfter := pinned.Add(caValidity)
 	if !ca.cert.NotAfter.Equal(wantNotAfter) {
 		t.Errorf("NotAfter = %s, want %s", ca.cert.NotAfter, wantNotAfter)
@@ -254,10 +297,12 @@ func parseLeaf(t *testing.T, c *tls.Certificate) *x509.Certificate {
 	if c == nil || len(c.Certificate) == 0 {
 		t.Fatalf("certificate has no DER body")
 	}
+
 	parsed, err := x509.ParseCertificate(c.Certificate[0])
 	if err != nil {
 		t.Fatalf("parse leaf: %v", err)
 	}
+
 	return parsed
 }
 
@@ -284,13 +329,19 @@ func TestLeafForHostBindsValidityToCAAndRenews(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first leafForHost: %v", err)
 	}
+
 	firstLeaf := parseLeaf(t, first)
 	wantFirstNotAfter := base.Add(leafValidity)
 	if !firstLeaf.NotAfter.Equal(wantFirstNotAfter) {
 		t.Errorf("leaf NotAfter = %s, want %s", firstLeaf.NotAfter, wantFirstNotAfter)
 	}
+
 	if firstLeaf.NotBefore.Before(ca.cert.NotBefore) {
-		t.Errorf("leaf NotBefore = %s, earlier than CA NotBefore %s", firstLeaf.NotBefore, ca.cert.NotBefore)
+		t.Errorf(
+			"leaf NotBefore = %s, earlier than CA NotBefore %s",
+			firstLeaf.NotBefore,
+			ca.cert.NotBefore,
+		)
 	}
 
 	// A request still well inside the leaf lifetime reuses the cached leaf rather
@@ -300,9 +351,13 @@ func TestLeafForHostBindsValidityToCAAndRenews(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reuse leafForHost: %v", err)
 	}
+
 	if parseLeaf(t, reused).SerialNumber.Cmp(firstLeaf.SerialNumber) != 0 {
-		t.Errorf("expected cache reuse (same serial); first=%s reused=%s",
-			firstLeaf.SerialNumber, parseLeaf(t, reused).SerialNumber)
+		t.Errorf(
+			"expected cache reuse (same serial); first=%s reused=%s",
+			firstLeaf.SerialNumber,
+			parseLeaf(t, reused).SerialNumber,
+		)
 	}
 
 	// Inside the renewal window before the leaf expires, the cached leaf is
@@ -312,10 +367,15 @@ func TestLeafForHostBindsValidityToCAAndRenews(t *testing.T) {
 	if err != nil {
 		t.Fatalf("renew leafForHost: %v", err)
 	}
+
 	renewedLeaf := parseLeaf(t, renewed)
 	if renewedLeaf.SerialNumber.Cmp(firstLeaf.SerialNumber) == 0 {
-		t.Errorf("expected re-mint (different serial), got the cached serial %s", firstLeaf.SerialNumber)
+		t.Errorf(
+			"expected re-mint (different serial), got the cached serial %s",
+			firstLeaf.SerialNumber,
+		)
 	}
+
 	wantRenewedNotAfter := current.Add(leafValidity)
 	if !renewedLeaf.NotAfter.Equal(wantRenewedNotAfter) {
 		t.Errorf("renewed leaf NotAfter = %s, want %s", renewedLeaf.NotAfter, wantRenewedNotAfter)
@@ -333,6 +393,7 @@ func TestLeafForHostClampsValidityToCAExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadOrCreateCertAuthority: %v", err)
 	}
+
 	ca.cert.NotAfter = base.Add(12 * time.Hour)
 	ca.now = fixedClock(base)
 
@@ -340,6 +401,7 @@ func TestLeafForHostClampsValidityToCAExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("leafForHost: %v", err)
 	}
+
 	parsed := parseLeaf(t, leaf)
 	if !parsed.NotAfter.Equal(ca.cert.NotAfter) {
 		t.Fatalf("leaf NotAfter = %s, want CA NotAfter %s", parsed.NotAfter, ca.cert.NotAfter)
@@ -357,6 +419,7 @@ func TestLeafForHostKeepsNotAfterAfterClampedNotBefore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadOrCreateCertAuthority: %v", err)
 	}
+
 	ca.cert.NotBefore = base.Add(leafValidity + 2*time.Hour)
 	ca.cert.NotAfter = ca.cert.NotBefore.Add(24 * time.Hour)
 	ca.now = fixedClock(base)
@@ -365,10 +428,12 @@ func TestLeafForHostKeepsNotAfterAfterClampedNotBefore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("leafForHost: %v", err)
 	}
+
 	parsed := parseLeaf(t, leaf)
 	if !parsed.NotBefore.Equal(ca.cert.NotBefore) {
 		t.Fatalf("leaf NotBefore = %s, want CA NotBefore %s", parsed.NotBefore, ca.cert.NotBefore)
 	}
+
 	if !parsed.NotAfter.After(parsed.NotBefore) {
 		t.Fatalf("leaf NotAfter = %s, want after NotBefore %s", parsed.NotAfter, parsed.NotBefore)
 	}
@@ -385,12 +450,14 @@ func TestLeafForHostUsesShortBrowserCompatibleValidity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadOrCreateCertAuthority: %v", err)
 	}
+
 	ca.now = fixedClock(base)
 
 	leaf, err := ca.leafForHost("api.anthropic.com")
 	if err != nil {
 		t.Fatalf("leafForHost: %v", err)
 	}
+
 	parsed := parseLeaf(t, leaf)
 	if got, want := parsed.NotAfter.Sub(parsed.NotBefore), leafValidity+leafBackdate; got != want {
 		t.Fatalf("leaf validity = %s, want %s", got, want)
@@ -407,10 +474,16 @@ func TestLoadOrCreateCertAuthorityValidityHorizon(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadOrCreateCertAuthority: %v", err)
 	}
+
 	tenYears := 10 * 365 * 24 * time.Hour
 	tolerance := 30 * 24 * time.Hour
 	delta := ca.cert.NotAfter.Sub(pinned)
 	if delta < tenYears-tolerance || delta > tenYears+tolerance {
-		t.Fatalf("NotAfter - now = %s, want approximately %s (tolerance %s)", delta, tenYears, tolerance)
+		t.Fatalf(
+			"NotAfter - now = %s, want approximately %s (tolerance %s)",
+			delta,
+			tenYears,
+			tolerance,
+		)
 	}
 }

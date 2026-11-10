@@ -11,12 +11,15 @@ func rawCompactionJSONHasUniqueObjectKeys(raw []byte) bool {
 	if !json.Valid(raw) {
 		return false
 	}
+
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	if !rawCompactionDecodeUniqueJSONValue(decoder) {
 		return false
 	}
+
 	var trailing json.RawMessage
+
 	return decoder.Decode(&trailing) == io.EOF
 }
 
@@ -25,22 +28,27 @@ func rawCompactionDecodeUniqueJSONValue(decoder *json.Decoder) bool {
 	if err != nil {
 		return false
 	}
+
 	delimiter, isDelimiter := token.(json.Delim)
 	if !isDelimiter {
 		return true
 	}
+
 	switch delimiter {
 	case '{':
 		keys := make(map[string]struct{})
+
 		for decoder.More() {
 			keyToken, err := decoder.Token()
 			key, ok := keyToken.(string)
 			if err != nil || !ok {
 				return false
 			}
+
 			if _, duplicate := keys[key]; duplicate {
 				return false
 			}
+
 			keys[key] = struct{}{}
 			if !rawCompactionDecodeUniqueJSONValue(decoder) {
 				return false
@@ -55,7 +63,9 @@ func rawCompactionDecodeUniqueJSONValue(decoder *json.Decoder) bool {
 	default:
 		return false
 	}
+
 	_, err = decoder.Token()
+
 	return err == nil
 }
 
@@ -63,6 +73,7 @@ func rawCompactionStrictFinalAnswerJSON(body []byte) bool {
 	if !rawCompactionJSONHasUniqueObjectKeys(body) {
 		return false
 	}
+
 	var response struct {
 		Status string            `json:"status"`
 		Output []json.RawMessage `json:"output"`
@@ -70,6 +81,7 @@ func rawCompactionStrictFinalAnswerJSON(body []byte) bool {
 	if json.Unmarshal(body, &response) != nil || response.Status != "completed" {
 		return false
 	}
+
 	return rawCompactionStrictFinalAnswerOutput(response.Output)
 }
 
@@ -78,46 +90,61 @@ func rawCompactionStrictFinalAnswerSSEFrame(frame []byte) bool {
 	if dataCount == 0 || !rawCompactionJSONHasUniqueObjectKeys(data) {
 		return false
 	}
+
 	var payload struct {
 		Response json.RawMessage `json:"response"`
 	}
 	if json.Unmarshal(data, &payload) != nil || len(payload.Response) == 0 {
 		return false
 	}
+
 	return rawCompactionStrictFinalAnswerJSON(payload.Response)
 }
 
 func rawCompactionStrictFinalAnswerOutput(output []json.RawMessage) bool {
 	found := false
+
 	for _, rawItem := range output {
 		var item map[string]json.RawMessage
 		if json.Unmarshal(rawItem, &item) != nil {
 			return false
 		}
+
 		var itemType string
 		if json.Unmarshal(item["type"], &itemType) != nil {
 			return false
 		}
+
 		if itemType == "reasoning" {
 			continue
 		}
+
 		if itemType != "message" {
 			return false
 		}
+
 		var role, phase string
-		if json.Unmarshal(item["role"], &role) != nil || json.Unmarshal(item["phase"], &phase) != nil ||
-			role != "assistant" || phase != "final_answer" {
+		if json.Unmarshal(
+			item["role"],
+			&role,
+		) != nil || json.Unmarshal(item["phase"], &phase) != nil ||
+			role != "assistant" ||
+			phase != "final_answer" {
 			return false
 		}
+
 		content, ok := item["content"]
 		if !ok || !rawCompactionStrictFinalAnswerContent(content) {
 			return false
 		}
+
 		if found {
 			return false
 		}
+
 		found = true
 	}
+
 	return found
 }
 
@@ -126,21 +153,28 @@ func rawCompactionStrictFinalAnswerContent(raw json.RawMessage) bool {
 	if json.Unmarshal(raw, &content) != nil || len(content) != 1 {
 		return false
 	}
+
 	var part map[string]json.RawMessage
 	if json.Unmarshal(content[0], &part) != nil {
 		return false
 	}
+
 	var partType, text string
-	if json.Unmarshal(part["type"], &partType) != nil || json.Unmarshal(part["text"], &text) != nil {
+	if json.Unmarshal(part["type"], &partType) != nil ||
+		json.Unmarshal(part["text"], &text) != nil {
 		return false
 	}
+
 	if partType != "output_text" {
 		return false
 	}
+
 	for key := range part {
-		if strings.EqualFold(key, "type") && key != "type" || strings.EqualFold(key, "text") && key != "text" {
+		if strings.EqualFold(key, "type") && key != "type" ||
+			strings.EqualFold(key, "text") && key != "text" {
 			return false
 		}
 	}
+
 	return true
 }

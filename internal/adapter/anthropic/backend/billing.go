@@ -30,6 +30,7 @@ func MutateBillingForProbe(canonical, cliVersion, ccEntrypoint string) string {
 	if mode == "" {
 		return canonical
 	}
+
 	const prefix = "x-anthropic-billing-header: "
 	switch billingProbeMode(mode) {
 	case billingProbeOmit:
@@ -44,6 +45,7 @@ func MutateBillingForProbe(canonical, cliVersion, ccEntrypoint string) string {
 		if cchVal == "" {
 			cchVal = "00000"
 		}
+
 		return prefix + "cc_version=" + cliVersion + "." + fp + "; cc_entrypoint=garbage; cch=" + cchVal + ";"
 	case billingProbeOmitEntrypoint:
 		fp := extractFingerprint(canonical)
@@ -51,6 +53,7 @@ func MutateBillingForProbe(canonical, cliVersion, ccEntrypoint string) string {
 		if cchVal == "" {
 			cchVal = "00000"
 		}
+
 		return prefix + "cc_version=" + cliVersion + "." + fp + "; cch=" + cchVal + ";"
 	case billingProbeCCHZero:
 		return replaceBillingCCH(canonical, "00000")
@@ -72,10 +75,12 @@ func replaceBillingCCH(line, newVal string) string {
 	if !ok {
 		return line + " cch=" + newVal + ";"
 	}
+
 	_, tail, ok2 := strings.Cut(after, ";")
 	if !ok2 {
 		return before + marker + newVal
 	}
+
 	return before + marker + newVal + ";" + tail
 }
 
@@ -85,7 +90,9 @@ func extractBillingCCH(line string) string {
 	if !ok {
 		return ""
 	}
+
 	val, _, _ := strings.Cut(after, ";")
+
 	return val
 }
 
@@ -95,13 +102,16 @@ func extractFingerprint(line string) string {
 	if !ok {
 		return ""
 	}
+
 	verPart, _, ok2 := strings.Cut(rest, ";")
 	if !ok2 {
 		return ""
 	}
+
 	dot := strings.LastIndexByte(verPart, '.')
 	if dot < 0 {
 		return ""
 	}
+
 	return verPart[dot+1:]
 }

@@ -16,7 +16,9 @@ func walkCommands(cmd *cobra.Command, visit func(*cobra.Command)) {
 	if cmd.Name() == "help" || cmd.Name() == "completion" {
 		return
 	}
+
 	visit(cmd)
+
 	for _, child := range cmd.Commands() {
 		walkCommands(child, visit)
 	}
@@ -28,18 +30,23 @@ func walkCommands(cmd *cobra.Command, visit func(*cobra.Command)) {
 func TestEveryCommandHasFullHelp(t *testing.T) {
 	factory, _, _ := testFactory()
 	root := newRoot(factory)
-	walkCommands(root, func(cmd *cobra.Command) {
-		path := cmd.CommandPath()
-		if strings.TrimSpace(cmd.Short) == "" {
-			t.Errorf("%s: missing Short", path)
-		}
-		if strings.TrimSpace(cmd.Long) == "" {
-			t.Errorf("%s: missing Long", path)
-		}
-		if strings.TrimSpace(cmd.Example) == "" {
-			t.Errorf("%s: missing Example", path)
-		}
-	})
+	walkCommands(
+		root,
+		func(cmd *cobra.Command) {
+			path := cmd.CommandPath()
+			if strings.TrimSpace(cmd.Short) == "" {
+				t.Errorf("%s: missing Short", path)
+			}
+
+			if strings.TrimSpace(cmd.Long) == "" {
+				t.Errorf("%s: missing Long", path)
+			}
+
+			if strings.TrimSpace(cmd.Example) == "" {
+				t.Errorf("%s: missing Example", path)
+			}
+		},
+	)
 }
 
 // TestEveryParentRejectsUnknownSubcommand enforces that every command with
@@ -48,27 +55,41 @@ func TestEveryCommandHasFullHelp(t *testing.T) {
 func TestEveryParentRejectsUnknownSubcommand(t *testing.T) {
 	factory, _, _ := testFactory()
 	root := newRoot(factory)
-	walkCommands(root, func(cmd *cobra.Command) {
-		if !cmd.HasSubCommands() {
-			return
-		}
-		if len(strings.Fields(cmd.Use)) > 1 {
-			return
-		}
-		if cmd.Args == nil {
-			t.Errorf("%s: parent has no argument validator, so unknown subcommands are not rejected", cmd.CommandPath())
-			return
-		}
-		if err := cmd.Args(cmd, []string{"definitely-not-a-subcommand"}); err == nil {
-			t.Errorf("%s: parent accepts an unknown subcommand instead of erroring", cmd.CommandPath())
-		}
-	})
+	walkCommands(
+		root,
+		func(cmd *cobra.Command) {
+			if !cmd.HasSubCommands() {
+				return
+			}
+
+			if len(strings.Fields(cmd.Use)) > 1 {
+				return
+			}
+
+			if cmd.Args == nil {
+				t.Errorf(
+					"%s: parent has no argument validator, so unknown subcommands are not rejected",
+					cmd.CommandPath(),
+				)
+
+				return
+			}
+
+			if err := cmd.Args(cmd, []string{"definitely-not-a-subcommand"}); err == nil {
+				t.Errorf(
+					"%s: parent accepts an unknown subcommand instead of erroring",
+					cmd.CommandPath(),
+				)
+			}
+		},
+	)
 }
 
 // TestMisuseRendersFullHelp drives the misuse classes end to end and asserts
 // each renders the offending command's full help, not a bare error line.
 func TestMisuseRendersFullHelp(t *testing.T) {
 	providerList := clispec.ConversationProviderList()
+
 	cases := []struct {
 		name     string
 		args     []string
@@ -113,22 +134,27 @@ func TestMisuseRendersFullHelp(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			factory, stdout, _ := testFactory()
-			root := newRoot(factory)
-			root.SetContext(context.Background())
-			root.SetArgs(tc.args)
-			err := root.Execute()
-			if err == nil {
-				t.Fatalf("expected an error for %q", strings.Join(tc.args, " "))
-			}
-			rendered := stdout.String()
-			if !strings.Contains(rendered, tc.wantHelp) {
-				t.Errorf("help body missing %q; got:\n%s", tc.wantHelp, rendered)
-			}
-			if !strings.Contains(rendered, "Usage:") {
-				t.Errorf("usage section missing; got:\n%s", rendered)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				factory, stdout, _ := testFactory()
+				root := newRoot(factory)
+				root.SetContext(context.Background())
+				root.SetArgs(tc.args)
+				err := root.Execute()
+				if err == nil {
+					t.Fatalf("expected an error for %q", strings.Join(tc.args, " "))
+				}
+
+				rendered := stdout.String()
+				if !strings.Contains(rendered, tc.wantHelp) {
+					t.Errorf("help body missing %q; got:\n%s", tc.wantHelp, rendered)
+				}
+
+				if !strings.Contains(rendered, "Usage:") {
+					t.Errorf("usage section missing; got:\n%s", rendered)
+				}
+			},
+		)
 	}
 }

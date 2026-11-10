@@ -41,50 +41,72 @@ import (
 func TestResponsesPassthroughForwardsToResponsesEndpoint(t *testing.T) {
 	var gotPath string
 	var gotBody []byte
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		gotBody, _ = io.ReadAll(r.Body)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"id":"resp_upstream","object":"response","status":"completed","model":"local-model","output":[{"type":"message","id":"msg_u","status":"completed","role":"assistant","content":[{"type":"output_text","text":"upstream ok","annotations":[]}]}]}`)
-	}))
+	upstream := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotPath = r.URL.Path
+			gotBody, _ = io.ReadAll(r.Body)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(
+				w,
+				`{"id":"resp_upstream","object":"response","status":"completed","model":"local-model","output":[{"type":"message","id":"msg_u","status":"completed","role":"assistant","content":[{"type":"output_text","text":"upstream ok","annotations":[]}]}]}`,
+			)
+		}),
+	)
 	defer upstream.Close()
 
 	srv := newPassthroughOverrideTestServer(t, upstream.URL+"/v1")
-	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"local-model","input":"say hi","unknown":{"keep":true},"stream":false}`))
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/responses",
+		strings.NewReader(
+			`{"model":"local-model","input":"say hi","unknown":{"keep":true},"stream":false}`,
+		),
+	)
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
+
 	if gotPath != "/v1/responses" {
 		t.Fatalf("upstream path = %q, want /v1/responses (matching endpoint)", gotPath)
 	}
+
 	// The raw Responses body is forwarded, so the upstream sees the Responses
 	// shape (input), not a chat-completions messages body.
 	if !bytes.Contains(gotBody, []byte(`"input"`)) {
 		t.Fatalf("upstream body did not carry the raw Responses input: %s", gotBody)
 	}
+
 	if !bytes.Contains(gotBody, []byte(`"unknown":{"keep":true}`)) {
 		t.Fatalf("upstream body lost unknown Responses field: %s", gotBody)
 	}
+
 	// The upstream Responses object is written back verbatim.
-	if !bytes.Contains(rec.Body.Bytes(), []byte(`"resp_upstream"`)) || !bytes.Contains(rec.Body.Bytes(), []byte(`"upstream ok"`)) {
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`"resp_upstream"`)) ||
+		!bytes.Contains(rec.Body.Bytes(), []byte(`"upstream ok"`)) {
 		t.Fatalf("response not forwarded verbatim: %s", rec.Body.String())
 	}
 }
 
 func TestResponsesPassthroughRewritesOnlyConfiguredModel(t *testing.T) {
 	var gotBody []byte
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotBody, _ = io.ReadAll(r.Body)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"id":"resp_1","object":"response","status":"completed"}`)
-	}))
+	upstream := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotBody, _ = io.ReadAll(r.Body)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"id":"resp_1","object":"response","status":"completed"}`)
+		}),
+	)
 	t.Cleanup(upstream.Close)
 
 	srv := newNamedPassthroughResponsesServer(t, upstream.URL+"/v1", "wire-model")
-	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"responses-alias","input":"hi","metadata":{"opaque":7}}`))
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/responses",
+		strings.NewReader(`{"model":"responses-alias","input":"hi","metadata":{"opaque":7}}`),
+	)
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, req)
 
@@ -92,10 +114,12 @@ func TestResponsesPassthroughRewritesOnlyConfiguredModel(t *testing.T) {
 	if err := json.Unmarshal(gotBody, &fields); err != nil {
 		t.Fatalf("decode upstream body: %v", err)
 	}
+
 	var model string
 	if err := json.Unmarshal(fields["model"], &model); err != nil {
 		t.Fatalf("decode model: %v", err)
 	}
+
 	if model != "wire-model" || string(fields["metadata"]) != `{"opaque":7}` {
 		t.Fatalf("upstream body = %s", gotBody)
 	}
@@ -106,15 +130,21 @@ func TestResponsesPassthroughPreservesZstdWireEncoding(t *testing.T) {
 	compressedRequest := zstdEncodeNativeResponseBody(t, requestBody)
 	var upstreamBody []byte
 	var upstreamEncoding string
-	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		upstreamBody, _ = io.ReadAll(request.Body)
-		upstreamEncoding = request.Header.Get("Content-Encoding")
-		_, _ = writer.Write([]byte(`{"id":"resp-passthrough"}`))
-	}))
+	upstream := httptest.NewServer(
+		http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			upstreamBody, _ = io.ReadAll(request.Body)
+			upstreamEncoding = request.Header.Get("Content-Encoding")
+			_, _ = writer.Write([]byte(`{"id":"resp-passthrough"}`))
+		}),
+	)
 	t.Cleanup(upstream.Close)
 
 	srv := newPassthroughOverrideTestServer(t, upstream.URL+"/v1")
-	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(compressedRequest))
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/responses",
+		bytes.NewReader(compressedRequest),
+	)
 	request.Header.Set("Content-Encoding", "zstd")
 	recorder := httptest.NewRecorder()
 	srv.mux.ServeHTTP(recorder, request)
@@ -122,28 +152,40 @@ func TestResponsesPassthroughPreservesZstdWireEncoding(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.Bytes())
 	}
+
 	if upstreamEncoding != "zstd" || !bytes.Equal(upstreamBody, compressedRequest) {
-		t.Fatalf("upstream encoding=%q body=%x want encoding=zstd body=%x", upstreamEncoding, upstreamBody, compressedRequest)
+		t.Fatalf(
+			"upstream encoding=%q body=%x want encoding=zstd body=%x",
+			upstreamEncoding,
+			upstreamBody,
+			compressedRequest,
+		)
 	}
 }
 
 func TestResponsesPassthroughPreservesStatusHeadersAndRequestIdentity(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("X-Upstream-Marker", "kept")
-		w.Header().Set("Connection", "close")
-		w.Header().Set(clydeingress.HeaderRequestID, "upstream-request")
-		w.Header().Set(clydeingress.HeaderTraceID, "upstream-trace")
-		w.Header().Set(clydeingress.HeaderSpanID, "upstream-span")
-		w.Header().Set(clydeingress.HeaderParentSpanID, "upstream-parent")
-		w.Header().Set(clydeingress.HeaderTraceparent, "upstream-traceparent")
-		w.WriteHeader(http.StatusCreated)
-		_, _ = io.WriteString(w, `{"id":"resp_created"}`)
-	}))
+	upstream := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Upstream-Marker", "kept")
+			w.Header().Set("Connection", "close")
+			w.Header().Set(clydeingress.HeaderRequestID, "upstream-request")
+			w.Header().Set(clydeingress.HeaderTraceID, "upstream-trace")
+			w.Header().Set(clydeingress.HeaderSpanID, "upstream-span")
+			w.Header().Set(clydeingress.HeaderParentSpanID, "upstream-parent")
+			w.Header().Set(clydeingress.HeaderTraceparent, "upstream-traceparent")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = io.WriteString(w, `{"id":"resp_created"}`)
+		}),
+	)
 	t.Cleanup(upstream.Close)
 
 	srv := newPassthroughOverrideTestServer(t, upstream.URL+"/v1")
-	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"local-model","input":"hi"}`))
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/responses",
+		strings.NewReader(`{"model":"local-model","input":"hi"}`),
+	)
 	req.Header.Set(clydeingress.HeaderRequestID, "req-stable")
 	const traceID = "0123456789abcdef0123456789abcdef"
 	req.Header.Set(clydeingress.HeaderTraceID, traceID)
@@ -155,15 +197,19 @@ func TestResponsesPassthroughPreservesStatusHeadersAndRequestIdentity(t *testing
 	if rec.Code != http.StatusCreated || rec.Header().Get("X-Upstream-Marker") != "kept" {
 		t.Fatalf("status=%d headers=%v", rec.Code, rec.Header())
 	}
+
 	if rec.Header().Get("Connection") != "" {
 		t.Fatalf("transport-owned Connection header forwarded: %v", rec.Header())
 	}
+
 	if got := rec.Header().Get(clydeingress.HeaderRequestID); got != "req-stable" {
 		t.Fatalf("request id = %q, want req-stable", got)
 	}
+
 	if got := rec.Header().Get(clydeingress.HeaderTraceID); got != traceID {
 		t.Fatalf("trace id = %q, want %s", got, traceID)
 	}
+
 	if got := rec.Header().Get(clydeingress.HeaderSpanID); got == "" || got == "upstream-span" ||
 		rec.Header().Get(clydeingress.HeaderParentSpanID) != "fedcba9876543210" ||
 		rec.Header().Get(clydeingress.HeaderTraceparent) == "" ||
@@ -183,23 +229,46 @@ func TestBufferedPassthroughUsesStreamingFramingHeaderFilter(t *testing.T) {
 		"X-Upstream-Marker": []string{"kept"},
 	}
 	recorder := httptest.NewRecorder()
-	writePassthroughOverrideResponse(correlation.Context{}, recorder, http.StatusCreated, []byte("body"), header)
+	writePassthroughOverrideResponse(
+		correlation.Context{},
+		recorder,
+		http.StatusCreated,
+		[]byte("body"),
+		header,
+	)
 
-	if recorder.Header().Get("Connection") != "" || recorder.Header().Get("Transfer-Encoding") != "" || recorder.Header().Get("Proxy-Connection") != "" ||
-		recorder.Header().Get("X-Internal") != "" || recorder.Header().Get("X-Extra") != "" {
+	if recorder.Header().Get("Connection") != "" ||
+		recorder.Header().Get("Transfer-Encoding") != "" ||
+		recorder.Header().Get("Proxy-Connection") != "" ||
+		recorder.Header().Get("X-Internal") != "" ||
+		recorder.Header().Get("X-Extra") != "" {
 		t.Fatalf("framing headers = %v", recorder.Header())
 	}
-	if recorder.Header().Get("Content-Length") != "4" || recorder.Header().Get("X-Upstream-Marker") != "kept" {
+
+	if recorder.Header().Get("Content-Length") != "4" ||
+		recorder.Header().Get("X-Upstream-Marker") != "kept" {
 		t.Fatalf("response headers = %v", recorder.Header())
 	}
 
 	streamRecorder := httptest.NewRecorder()
-	response := &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(strings.NewReader("body"))}
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     header,
+		Body:       io.NopCloser(strings.NewReader("body")),
+	}
 	srv := &Server{log: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	if _, err := srv.copyPassthroughResponse(context.Background(), streamRecorder, response, true); err != nil {
+	if _, err := srv.copyPassthroughResponse(
+		context.Background(),
+		streamRecorder,
+		response,
+		true,
+	); err != nil {
 		t.Fatalf("copy streaming response: %v", err)
 	}
-	if streamRecorder.Header().Get("X-Internal") != "" || streamRecorder.Header().Get("X-Extra") != "" || streamRecorder.Header().Get("Proxy-Connection") != "" ||
+
+	if streamRecorder.Header().Get("X-Internal") != "" ||
+		streamRecorder.Header().Get("X-Extra") != "" ||
+		streamRecorder.Header().Get("Proxy-Connection") != "" ||
 		streamRecorder.Header().Get("X-Upstream-Marker") != "kept" {
 		t.Fatalf("stream response headers = %v", streamRecorder.Header())
 	}
@@ -213,26 +282,37 @@ func TestResponsesPassthroughStreamsBeforeUpstreamCompletion(t *testing.T) {
 		releaseOnce.Do(func() { close(release) })
 	}
 	t.Cleanup(releaseUpstream)
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = io.WriteString(w, "data: {\"type\":\"response.created\"}\n\n")
-		w.(http.Flusher).Flush()
-		close(firstWritten)
-		<-release
-		_, _ = io.WriteString(w, "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":3,\"output_tokens\":2,\"total_tokens\":5}}}\n\n")
-	}))
+	upstream := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "data: {\"type\":\"response.created\"}\n\n")
+			w.(http.Flusher).Flush()
+			close(firstWritten)
+			<-release
+			_, _ = io.WriteString(
+				w,
+				"data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":3,\"output_tokens\":2,\"total_tokens\":5}}}\n\n",
+			)
+		}),
+	)
 	t.Cleanup(upstream.Close)
 
 	srv := httptest.NewServer(newPassthroughOverrideTestServer(t, upstream.URL+"/v1").mux)
 	t.Cleanup(srv.Close)
-	request, err := http.NewRequest(http.MethodPost, srv.URL+"/v1/responses", strings.NewReader(`{"model":"local-model","input":"hi","stream":true}`))
+	request, err := http.NewRequest(
+		http.MethodPost,
+		srv.URL+"/v1/responses",
+		strings.NewReader(`{"model":"local-model","input":"hi","stream":true}`),
+	)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
+
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatalf("do request: %v", err)
 	}
+
 	t.Cleanup(func() { _ = response.Body.Close() })
 	<-firstWritten
 
@@ -244,6 +324,7 @@ func TestResponsesPassthroughStreamsBeforeUpstreamCompletion(t *testing.T) {
 			readDone <- "error: " + readErr.Error()
 			return
 		}
+
 		readDone <- string(buffer[:count])
 	}()
 	select {
@@ -255,49 +336,79 @@ func TestResponsesPassthroughStreamsBeforeUpstreamCompletion(t *testing.T) {
 		releaseUpstream()
 		t.Fatal("first downstream bytes waited for upstream completion")
 	}
+
 	releaseUpstream()
 }
 
 func TestResponsesPassthroughNon2xxUsesOpenAIErrorBoundary(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_, _ = io.WriteString(w, `{"error":{"message":"backend unavailable"}}`)
-	}))
+	upstream := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(w, `{"error":{"message":"backend unavailable"}}`)
+		}),
+	)
 	t.Cleanup(upstream.Close)
 	srv := newPassthroughOverrideTestServer(t, upstream.URL+"/v1")
 	rec := httptest.NewRecorder()
-	srv.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"local-model","input":"hi"}`)))
+	srv.mux.ServeHTTP(
+		rec,
+		httptest.NewRequest(
+			http.MethodPost,
+			"/v1/responses",
+			strings.NewReader(`{"model":"local-model","input":"hi"}`),
+		),
+	)
 
 	var envelope adapteropenai.ErrorResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
 		t.Fatalf("decode error envelope: %v body=%s", err, rec.Body.String())
 	}
-	if rec.Code != http.StatusBadRequest || envelope.Error.Type != "invalid_request_error" || !strings.Contains(envelope.Error.Message, "backend unavailable") {
+
+	if rec.Code != http.StatusBadRequest || envelope.Error.Type != "invalid_request_error" ||
+		!strings.Contains(envelope.Error.Message, "backend unavailable") {
 		t.Fatalf("status=%d envelope=%+v", rec.Code, envelope)
 	}
 }
 
 func TestResponsesPassthroughRedirectUsesOpenAIErrorBoundary(t *testing.T) {
 	redirectTargetReached := false
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/redirected" {
-			redirectTargetReached = true
-			_, _ = io.WriteString(w, `{"id":"must-not-follow"}`)
-			return
-		}
-		http.Redirect(w, r, "/redirected", http.StatusTemporaryRedirect)
-	}))
+	upstream := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/redirected" {
+				redirectTargetReached = true
+				_, _ = io.WriteString(w, `{"id":"must-not-follow"}`)
+
+				return
+			}
+
+			http.Redirect(w, r, "/redirected", http.StatusTemporaryRedirect)
+		}),
+	)
 	t.Cleanup(upstream.Close)
 	srv := newPassthroughOverrideTestServer(t, upstream.URL+"/v1")
 	recorder := httptest.NewRecorder()
-	srv.mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"local-model","input":"hi"}`)))
+	srv.mux.ServeHTTP(
+		recorder,
+		httptest.NewRequest(
+			http.MethodPost,
+			"/v1/responses",
+			strings.NewReader(`{"model":"local-model","input":"hi"}`),
+		),
+	)
 
 	var envelope adapteropenai.ErrorResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
 		t.Fatalf("decode error envelope: %v body=%s", err, recorder.Body.String())
 	}
-	if redirectTargetReached || recorder.Code != http.StatusBadRequest || envelope.Error.Type != "invalid_request_error" {
-		t.Fatalf("target_reached=%t status=%d envelope=%+v", redirectTargetReached, recorder.Code, envelope)
+
+	if redirectTargetReached || recorder.Code != http.StatusBadRequest ||
+		envelope.Error.Type != "invalid_request_error" {
+		t.Fatalf(
+			"target_reached=%t status=%d envelope=%+v",
+			redirectTargetReached,
+			recorder.Code,
+			envelope,
+		)
 	}
 }
 
@@ -308,31 +419,45 @@ func TestResponsesPassthroughSwitchingProtocolsUsesOpenAIErrorBoundary(t *testin
 	release := func() {
 		releaseOnce.Do(func() { close(releaseUpgrade) })
 	}
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		connection, readWriter, err := w.(http.Hijacker).Hijack()
-		if err != nil {
-			t.Errorf("hijack upgraded connection: %v", err)
-			return
-		}
-		defer func() { _ = connection.Close() }()
-		if _, err := readWriter.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: test\r\n\r\n"); err != nil {
-			t.Errorf("write upgrade response: %v", err)
-			return
-		}
-		if err := readWriter.Flush(); err != nil {
-			t.Errorf("flush upgrade response: %v", err)
-			return
-		}
-		close(upgradeSent)
-		<-releaseUpgrade
-	}))
+	upstream := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			connection, readWriter, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Errorf("hijack upgraded connection: %v", err)
+				return
+			}
+
+			defer func() { _ = connection.Close() }()
+			if _, err := readWriter.WriteString(
+				"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: test\r\n\r\n",
+			); err != nil {
+				t.Errorf("write upgrade response: %v", err)
+				return
+			}
+
+			if err := readWriter.Flush(); err != nil {
+				t.Errorf("flush upgrade response: %v", err)
+				return
+			}
+
+			close(upgradeSent)
+			<-releaseUpgrade
+		}),
+	)
 	t.Cleanup(upstream.Close)
 	t.Cleanup(release)
 	srv := newPassthroughOverrideTestServer(t, upstream.URL+"/v1")
 	responseDone := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
 		recorder := httptest.NewRecorder()
-		srv.mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"local-model","input":"hi"}`)))
+		srv.mux.ServeHTTP(
+			recorder,
+			httptest.NewRequest(
+				http.MethodPost,
+				"/v1/responses",
+				strings.NewReader(`{"model":"local-model","input":"hi"}`),
+			),
+		)
 		responseDone <- recorder
 	}()
 	select {
@@ -353,6 +478,7 @@ func TestResponsesPassthroughSwitchingProtocolsUsesOpenAIErrorBoundary(t *testin
 	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
 		t.Fatalf("decode error envelope: %v body=%s", err, recorder.Body.String())
 	}
+
 	if recorder.Code != http.StatusBadRequest || envelope.Error.Type != "invalid_request_error" {
 		t.Fatalf("status=%d envelope=%+v", recorder.Code, envelope)
 	}
@@ -361,26 +487,39 @@ func TestResponsesPassthroughSwitchingProtocolsUsesOpenAIErrorBoundary(t *testin
 func TestResponsesPassthroughRejectsFailedStreamBeforeStreamOpened(t *testing.T) {
 	statuses := []int{http.StatusTemporaryRedirect, http.StatusTooManyRequests}
 	for _, status := range statuses {
-		t.Run(http.StatusText(status), func(t *testing.T) {
-			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.Header().Set("Content-Type", "text/event-stream")
-				w.WriteHeader(status)
-				_, _ = io.WriteString(w, `{"error":{"message":"upstream rejected stream"}}`)
-			}))
-			t.Cleanup(upstream.Close)
-			srv := newPassthroughOverrideTestServer(t, upstream.URL+"/v1")
-			stages := make([]adapterruntime.RequestStage, 0, 3)
-			srv.deps.RequestEvents = func(_ context.Context, event adapterruntime.RequestEvent) {
-				stages = append(stages, event.Stage)
-			}
+		t.Run(
+			http.StatusText(status),
+			func(t *testing.T) {
+				upstream := httptest.NewServer(
+					http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+						w.Header().Set("Content-Type", "text/event-stream")
+						w.WriteHeader(status)
+						_, _ = io.WriteString(w, `{"error":{"message":"upstream rejected stream"}}`)
+					}),
+				)
+				t.Cleanup(upstream.Close)
+				srv := newPassthroughOverrideTestServer(t, upstream.URL+"/v1")
+				stages := make([]adapterruntime.RequestStage, 0, 3)
+				srv.deps.RequestEvents = func(_ context.Context, event adapterruntime.RequestEvent) {
+					stages = append(stages, event.Stage)
+				}
 
-			recorder := httptest.NewRecorder()
-			srv.mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"local-model","input":"hi","stream":true}`)))
+				recorder := httptest.NewRecorder()
+				srv.mux.ServeHTTP(
+					recorder,
+					httptest.NewRequest(
+						http.MethodPost,
+						"/v1/responses",
+						strings.NewReader(`{"model":"local-model","input":"hi","stream":true}`),
+					),
+				)
 
-			if len(stages) != 2 || stages[0] != adapterruntime.RequestStageStarted || stages[1] != adapterruntime.RequestStageFailed {
-				t.Fatalf("lifecycle stages = %v, want started then failed", stages)
-			}
-		})
+				if len(stages) != 2 || stages[0] != adapterruntime.RequestStageStarted ||
+					stages[1] != adapterruntime.RequestStageFailed {
+					t.Fatalf("lifecycle stages = %v, want started then failed", stages)
+				}
+			},
+		)
 	}
 }
 
@@ -389,22 +528,36 @@ func TestResponsesPassthroughUsageParsesObjectAndTerminalSSE(t *testing.T) {
 		name string
 		body string
 	}{
-		{name: "object", body: `{"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18,"input_tokens_details":{"cached_tokens":4}}}`},
-		{name: "terminal SSE", body: "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":11,\"output_tokens\":7,\"total_tokens\":18,\"input_tokens_details\":{\"cached_tokens\":4}}}}\n\n"},
+		{
+			name: "object",
+			body: `{"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18,"input_tokens_details":{"cached_tokens":4}}}`,
+		},
+		{
+			name: "terminal SSE",
+			body: "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":11,\"output_tokens\":7,\"total_tokens\":18,\"input_tokens_details\":{\"cached_tokens\":4}}}}\n\n",
+		},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			usage := passthroughOverrideUsageFromBody([]byte(test.body))
-			if usage.InputTokens != 11 || usage.OutputTokens != 7 || usage.TotalTokens != 18 || usage.CachedTokens() != 4 {
-				t.Fatalf("usage = %+v", usage)
-			}
-		})
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				usage := passthroughOverrideUsageFromBody([]byte(test.body))
+				if usage.InputTokens != 11 || usage.OutputTokens != 7 || usage.TotalTokens != 18 ||
+					usage.CachedTokens() != 4 {
+					t.Fatalf("usage = %+v", usage)
+				}
+			},
+		)
 	}
 }
 
 func TestResponsesProviderAssembledContentUsesTextPartsOnly(t *testing.T) {
-	content := json.RawMessage(`[{"type":"text","text":"before"},{"type":"image_url","image_url":{"url":"https://example.invalid/x.png"}},{"type":"text","text":" after"}]`)
-	response := &adapteropenai.ChatResponse{Choices: []adapteropenai.ChatChoice{{Message: adapteropenai.ChatMessage{Content: content}}}}
+	content := json.RawMessage(
+		`[{"type":"text","text":"before"},{"type":"image_url","image_url":{"url":"https://example.invalid/x.png"}},{"type":"text","text":" after"}]`,
+	)
+	response := &adapteropenai.ChatResponse{
+		Choices: []adapteropenai.ChatChoice{{Message: adapteropenai.ChatMessage{Content: content}}},
+	}
 	text, _, _, _ := responsesFieldsFromChatResponse(response)
 	if text != "before after" {
 		t.Fatalf("text = %q, want only actual text parts", text)
@@ -414,36 +567,66 @@ func TestResponsesProviderAssembledContentUsesTextPartsOnly(t *testing.T) {
 func TestResponsesPassthroughResolvedSnapshotSurvivesHotApply(t *testing.T) {
 	var mutex sync.Mutex
 	paths := make([]string, 0, 2)
-	oldUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mutex.Lock()
-		paths = append(paths, "old")
-		mutex.Unlock()
-		_, _ = io.WriteString(w, `{"id":"old"}`)
-	}))
+	oldUpstream := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mutex.Lock()
+			paths = append(paths, "old")
+			mutex.Unlock()
+			_, _ = io.WriteString(w, `{"id":"old"}`)
+		}),
+	)
 	t.Cleanup(oldUpstream.Close)
-	newUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mutex.Lock()
-		paths = append(paths, "new")
-		mutex.Unlock()
-		_, _ = io.WriteString(w, `{"id":"new"}`)
-	}))
+	newUpstream := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mutex.Lock()
+			paths = append(paths, "new")
+			mutex.Unlock()
+			_, _ = io.WriteString(w, `{"id":"new"}`)
+		}),
+	)
 	t.Cleanup(newUpstream.Close)
 
-	srv, err := New(context.Background(), passthroughSnapshotConfig(oldUpstream.URL), config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	srv, err := New(
+		context.Background(),
+		passthroughSnapshotConfig(oldUpstream.URL),
+		config.LoggingConfig{},
+		Deps{},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	resolved, err := adapterresolver.Resolve(adapterresolver.IngressOpenAI, responsesCursorRequest("snapshot-alias"), adapterresolver.NewModelRegistryAdapter(srv.modelRegistry()))
+
+	resolved, err := adapterresolver.Resolve(
+		adapterresolver.IngressOpenAI,
+		responsesCursorRequest("snapshot-alias"),
+		adapterresolver.NewModelRegistryAdapter(srv.modelRegistry()),
+	)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
+
 	if err := srv.ApplyConfig(passthroughSnapshotConfig(newUpstream.URL)); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
+
 	first := httptest.NewRecorder()
-	srv.forwardPassthroughResponses(first, httptest.NewRequest(http.MethodPost, "/v1/responses", nil), "req-old", &resolved, []byte(`{"model":"snapshot-alias","input":"hi"}`))
+	srv.forwardPassthroughResponses(
+		first,
+		httptest.NewRequest(http.MethodPost, "/v1/responses", nil),
+		"req-old",
+		&resolved,
+		[]byte(`{"model":"snapshot-alias","input":"hi"}`),
+	)
 	second := httptest.NewRecorder()
-	srv.mux.ServeHTTP(second, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"snapshot-alias","input":"hi"}`)))
+	srv.mux.ServeHTTP(
+		second,
+		httptest.NewRequest(
+			http.MethodPost,
+			"/v1/responses",
+			strings.NewReader(`{"model":"snapshot-alias","input":"hi"}`),
+		),
+	)
 	mutex.Lock()
 	defer mutex.Unlock()
 	if strings.Join(paths, ",") != "old,new" {
@@ -452,13 +635,18 @@ func TestResponsesPassthroughResolvedSnapshotSurvivesHotApply(t *testing.T) {
 }
 
 func TestResponsesPassthroughCapturesIngressAndSanitizedEgress(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Set-Cookie", "response-secret")
-		w.Header().Set("X-Upstream-Marker", "kept")
-		w.Header().Set("X-Request-Id", "resp-request-id")
-		_, _ = io.WriteString(w, `{"id":"captured","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`)
-	}))
+	upstream := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Set-Cookie", "response-secret")
+			w.Header().Set("X-Upstream-Marker", "kept")
+			w.Header().Set("X-Request-Id", "resp-request-id")
+			_, _ = io.WriteString(
+				w,
+				`{"id":"captured","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`,
+			)
+		}),
+	)
 	t.Cleanup(upstream.Close)
 
 	dbPath := filepath.Join(t.TempDir(), "capture.db")
@@ -466,6 +654,7 @@ func TestResponsesPassthroughCapturesIngressAndSanitizedEgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open capture store: %v", err)
 	}
+
 	storeClosed := false
 	t.Cleanup(func() {
 		if !storeClosed {
@@ -477,59 +666,88 @@ func TestResponsesPassthroughCapturesIngressAndSanitizedEgress(t *testing.T) {
 	override := cfg.PassthroughOverrides["snapshot"]
 	override.APIKey = "egress-secret"
 	cfg.PassthroughOverrides["snapshot"] = override
-	srv, err := New(context.Background(), cfg, config.LoggingConfig{}, Deps{CaptureStore: store}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	srv, err := New(
+		context.Background(),
+		cfg,
+		config.LoggingConfig{},
+		Deps{CaptureStore: store},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"snapshot-alias","input":"capture me"}`))
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/responses",
+		strings.NewReader(`{"model":"snapshot-alias","input":"capture me"}`),
+	)
 	request.Header.Set("Authorization", "Bearer ingress-secret")
 	recorder := httptest.NewRecorder()
 	srv.mux.ServeHTTP(recorder, request)
 	if err := store.Close(context.Background(), "test"); err != nil {
 		t.Fatalf("close capture store: %v", err)
 	}
+
 	storeClosed = true
 
 	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("open capture database: %v", err)
 	}
+
 	t.Cleanup(func() { _ = db.Close() })
-	rows, err := db.Query(`SELECT client, path, req_headers, resp_headers, upstream_request_id FROM requests ORDER BY id`)
+	rows, err := db.Query(
+		`SELECT client, path, req_headers, resp_headers, upstream_request_id FROM requests ORDER BY id`,
+	)
 	if err != nil {
 		t.Fatalf("query captures: %v", err)
 	}
+
 	defer func() { _ = rows.Close() }()
 	seen := make(map[string]string)
 	responseHeaders := make(map[string]string)
 	upstreamRequestIDs := make(map[string]string)
+
 	for rows.Next() {
 		var client string
 		var path string
 		var headers string
 		var responseHeader string
 		var upstreamRequestID string
-		if err := rows.Scan(&client, &path, &headers, &responseHeader, &upstreamRequestID); err != nil {
+		if err := rows.Scan(
+			&client,
+			&path,
+			&headers,
+			&responseHeader,
+			&upstreamRequestID,
+		); err != nil {
 			t.Fatalf("scan capture: %v", err)
 		}
+
 		seen[client] = path + " " + headers
 		responseHeaders[client] = responseHeader
 		upstreamRequestIDs[client] = upstreamRequestID
 	}
+
 	if !strings.HasPrefix(seen["adapter.ingress"], "/v1/responses ") {
 		t.Fatalf("ingress capture = %q", seen["adapter.ingress"])
 	}
+
 	if !strings.HasPrefix(seen["adapter.passthrough"], "/responses ") {
 		t.Fatalf("egress capture = %q", seen["adapter.passthrough"])
 	}
+
 	if upstreamRequestIDs["adapter.passthrough"] != "resp-request-id" {
 		t.Fatalf("upstream request id = %q", upstreamRequestIDs["adapter.passthrough"])
 	}
+
 	for client, value := range seen {
 		if strings.Contains(value, "ingress-secret") || strings.Contains(value, "egress-secret") {
 			t.Fatalf("%s capture leaked secret: %s", client, value)
 		}
 	}
+
 	for _, client := range []string{"adapter.ingress", "adapter.passthrough"} {
 		if strings.Contains(responseHeaders[client], "response-secret") ||
 			!strings.Contains(responseHeaders[client], "X-Upstream-Marker") {
@@ -541,11 +759,15 @@ func TestResponsesPassthroughCapturesIngressAndSanitizedEgress(t *testing.T) {
 func TestPassthroughStreamCaptureRetainsTerminalUsagePastCap(t *testing.T) {
 	prefix := bytes.Repeat([]byte("x"), capture.DefaultMaxBodyBytes+1024)
 	padding := strings.Repeat("p", 96*1024)
-	terminal := []byte("\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"padding\":\"" + padding + "\",\"response\":{\"usage\":{\"input_tokens\":11,\"output_tokens\":7,\"total_tokens\":18}}}\n\n")
+	terminal := []byte(
+		"\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"padding\":\"" + padding + "\",\"response\":{\"usage\":{\"input_tokens\":11,\"output_tokens\":7,\"total_tokens\":18}}}\n\n",
+	)
 	response := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
-		Body:       io.NopCloser(io.MultiReader(bytes.NewReader(prefix), bytes.NewReader(terminal))),
+		Body: io.NopCloser(
+			io.MultiReader(bytes.NewReader(prefix), bytes.NewReader(terminal)),
+		),
 	}
 	recorder := httptest.NewRecorder()
 	srv := passthroughStreamRecordingServer(t)
@@ -553,10 +775,20 @@ func TestPassthroughStreamCaptureRetainsTerminalUsagePastCap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("copy response: %v", err)
 	}
-	if len(result.body) != capture.DefaultMaxBodyBytes || result.totalBytes != len(prefix)+len(terminal) || !result.truncated {
-		t.Fatalf("capture result = body:%d total:%d truncated:%t", len(result.body), result.totalBytes, result.truncated)
+
+	if len(result.body) != capture.DefaultMaxBodyBytes ||
+		result.totalBytes != len(prefix)+len(terminal) ||
+		!result.truncated {
+		t.Fatalf(
+			"capture result = body:%d total:%d truncated:%t",
+			len(result.body),
+			result.totalBytes,
+			result.truncated,
+		)
 	}
-	if result.usage.InputTokens != 11 || result.usage.OutputTokens != 7 || result.usage.TotalTokens != 18 {
+
+	if result.usage.InputTokens != 11 || result.usage.OutputTokens != 7 ||
+		result.usage.TotalTokens != 18 {
 		t.Fatalf("terminal usage = %+v", result.usage)
 	}
 }
@@ -566,9 +798,11 @@ func TestPassthroughStreamCaptureMarksReaderFailureTruncated(t *testing.T) {
 	response := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
-		Body: &passthroughTestReadCloser{steps: []passthroughStreamReadStep{
-			{body: []byte(partialStream), err: io.ErrUnexpectedEOF},
-		}},
+		Body: &passthroughTestReadCloser{
+			steps: []passthroughStreamReadStep{
+				{body: []byte(partialStream), err: io.ErrUnexpectedEOF},
+			},
+		},
 	}
 	recorder := httptest.NewRecorder()
 	srv := passthroughStreamRecordingServer(t)
@@ -576,8 +810,16 @@ func TestPassthroughStreamCaptureMarksReaderFailureTruncated(t *testing.T) {
 	if !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("copy error = %v, want unexpected EOF", err)
 	}
-	if !bytes.Equal(result.body, []byte(partialStream)) || result.totalBytes != len(partialStream) || !result.truncated {
-		t.Fatalf("capture result = body:%q total:%d truncated:%t", result.body, result.totalBytes, result.truncated)
+
+	if !bytes.Equal(result.body, []byte(partialStream)) ||
+		result.totalBytes != len(partialStream) ||
+		!result.truncated {
+		t.Fatalf(
+			"capture result = body:%q total:%d truncated:%t",
+			result.body,
+			result.totalBytes,
+			result.truncated,
+		)
 	}
 }
 
@@ -587,10 +829,12 @@ func TestPassthroughStreamCaptureMarksDownstreamWriteFailureTruncated(t *testing
 	response := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
-		Body: &passthroughTestReadCloser{steps: []passthroughStreamReadStep{
-			{body: []byte(firstChunk)},
-			{body: []byte(secondChunk), err: io.EOF},
-		}},
+		Body: &passthroughTestReadCloser{
+			steps: []passthroughStreamReadStep{
+				{body: []byte(firstChunk)},
+				{body: []byte(secondChunk), err: io.EOF},
+			},
+		},
 	}
 	writer := &passthroughPartialWriter{header: make(http.Header), failAfter: 1}
 	srv := passthroughStreamRecordingServer(t)
@@ -598,10 +842,18 @@ func TestPassthroughStreamCaptureMarksDownstreamWriteFailureTruncated(t *testing
 	if !errors.Is(err, errPassthroughDownstreamWrite) {
 		t.Fatalf("copy error = %v, want downstream write error", err)
 	}
+
 	wantCaptured := []byte(firstChunk + secondChunk)
-	if !bytes.Equal(result.body, wantCaptured) || result.totalBytes != len(wantCaptured) || !result.truncated {
-		t.Fatalf("capture result = body:%q total:%d truncated:%t", result.body, result.totalBytes, result.truncated)
+	if !bytes.Equal(result.body, wantCaptured) || result.totalBytes != len(wantCaptured) ||
+		!result.truncated {
+		t.Fatalf(
+			"capture result = body:%q total:%d truncated:%t",
+			result.body,
+			result.totalBytes,
+			result.truncated,
+		)
 	}
+
 	if got := writer.body.String(); got != firstChunk {
 		t.Fatalf("downstream body = %q, want %q", got, firstChunk)
 	}
@@ -620,36 +872,69 @@ func TestPassthroughStreamCaptureLeavesSuccessfulBelowCapStreamComplete(t *testi
 	if err != nil {
 		t.Fatalf("copy response: %v", err)
 	}
-	if !bytes.Equal(result.body, []byte(stream)) || result.totalBytes != len(stream) || result.truncated {
-		t.Fatalf("capture result = body:%q total:%d truncated:%t", result.body, result.totalBytes, result.truncated)
+
+	if !bytes.Equal(result.body, []byte(stream)) || result.totalBytes != len(stream) ||
+		result.truncated {
+		t.Fatalf(
+			"capture result = body:%q total:%d truncated:%t",
+			result.body,
+			result.totalBytes,
+			result.truncated,
+		)
 	}
 }
 
 func TestPassthroughWithoutRecordingPreservesStreamUsage(t *testing.T) {
 	const stream = "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":11,\"output_tokens\":7,\"total_tokens\":18}}}\n\n"
-	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		writer.Header().Set("Content-Type", "text/event-stream")
-		_, _ = io.WriteString(writer, stream)
-	}))
+	upstream := httptest.NewServer(
+		http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			writer.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(writer, stream)
+		}),
+	)
 	t.Cleanup(upstream.Close)
-	store, err := capture.Open(context.Background(), capture.Config{DBPath: filepath.Join(t.TempDir(), "capture.db"), RecordingDisabled: true}, nil)
+	store, err := capture.Open(
+		context.Background(),
+		capture.Config{DBPath: filepath.Join(t.TempDir(), "capture.db"), RecordingDisabled: true},
+		nil,
+	)
 	if err != nil {
 		t.Fatalf("open capture store: %v", err)
 	}
+
 	t.Cleanup(func() { _ = store.Close(context.Background(), "test cleanup") })
 	var logs bytes.Buffer
-	srv, err := New(context.Background(), passthroughSnapshotConfig(upstream.URL), config.LoggingConfig{}, Deps{CaptureStore: store}, slog.New(slog.NewJSONHandler(&logs, nil)))
+	srv, err := New(
+		context.Background(),
+		passthroughSnapshotConfig(upstream.URL),
+		config.LoggingConfig{},
+		Deps{CaptureStore: store},
+		slog.New(slog.NewJSONHandler(&logs, nil)),
+	)
 	if err != nil {
 		t.Fatalf("new adapter: %v", err)
 	}
+
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"snapshot-alias","input":"usage probe","stream":true}`))
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/responses",
+		strings.NewReader(`{"model":"snapshot-alias","input":"usage probe","stream":true}`),
+	)
 	srv.mux.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK || recorder.Body.String() != stream {
-		t.Fatalf("forwarded status=%d stream=%q, want status=%d stream=%q", recorder.Code, recorder.Body.String(), http.StatusOK, stream)
+		t.Fatalf(
+			"forwarded status=%d stream=%q, want status=%d stream=%q",
+			recorder.Code,
+			recorder.Body.String(),
+			http.StatusOK,
+			stream,
+		)
 	}
+
 	decoder := json.NewDecoder(&logs)
 	completed := false
+
 	for {
 		var event struct {
 			Message          string `json:"msg"`
@@ -660,9 +945,11 @@ func TestPassthroughWithoutRecordingPreservesStreamUsage(t *testing.T) {
 		if errors.Is(decodeErr, io.EOF) {
 			break
 		}
+
 		if decodeErr != nil {
 			t.Fatalf("read operational log: %v", decodeErr)
 		}
+
 		if event.Message == "adapter.request.completed" {
 			completed = true
 			if event.PromptTokens != 11 || event.CompletionTokens != 7 {
@@ -670,6 +957,7 @@ func TestPassthroughWithoutRecordingPreservesStreamUsage(t *testing.T) {
 			}
 		}
 	}
+
 	if !completed {
 		t.Fatal("adapter did not log completed request usage")
 	}
@@ -679,7 +967,11 @@ func passthroughStreamRecordingServer(t *testing.T) *Server {
 	t.Helper()
 	store, _ := openIngressTestStore(t)
 	t.Cleanup(func() { _ = store.Close(context.Background(), "test cleanup") })
-	return &Server{log: slog.New(slog.NewTextHandler(io.Discard, nil)), deps: Deps{CaptureStore: store}}
+
+	return &Server{
+		log:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		deps: Deps{CaptureStore: store},
+	}
 }
 
 func TestNativeCompactionV2DoesNotArmAfterPublicWriteFailure(t *testing.T) {
@@ -688,87 +980,110 @@ func TestNativeCompactionV2DoesNotArmAfterPublicWriteFailure(t *testing.T) {
 	firstFinished := make(chan struct{})
 	secondBody := make(chan []byte, 1)
 	var requestCount atomic.Int32
-	candidatePrefix := []byte(`{"output":[{"type":"compaction","encrypted_content":"encrypted-state"}],"padding":"`)
+	candidatePrefix := []byte(
+		`{"output":[{"type":"compaction","encrypted_content":"encrypted-state"}],"padding":"`,
+	)
 	candidateSuffix := []byte(strings.Repeat("x", 2*1024*1024) + `"}`)
-	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		count := requestCount.Add(1)
-		if count == 1 {
-			writer.Header().Set("Content-Type", "application/json")
-			writer.WriteHeader(http.StatusOK)
-			writer.(http.Flusher).Flush()
-			_, _ = writer.Write(candidatePrefix)
-			writer.(http.Flusher).Flush()
-			close(firstHeaders)
-			<-releaseBody
-			_, _ = writer.Write(candidateSuffix)
-			close(firstFinished)
-			return
-		}
-		body, _ := io.ReadAll(request.Body)
-		secondBody <- body
-		_, _ = io.WriteString(writer, `{"output":[]}`)
-	}))
+	upstream := httptest.NewServer(
+		http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			count := requestCount.Add(1)
+			if count == 1 {
+				writer.Header().Set("Content-Type", "application/json")
+				writer.WriteHeader(http.StatusOK)
+				writer.(http.Flusher).Flush()
+				_, _ = writer.Write(candidatePrefix)
+				writer.(http.Flusher).Flush()
+				close(firstHeaders)
+				<-releaseBody
+				_, _ = writer.Write(candidateSuffix)
+				close(firstFinished)
+
+				return
+			}
+
+			body, _ := io.ReadAll(request.Body)
+			secondBody <- body
+			_, _ = io.WriteString(writer, `{"output":[]}`)
+		}),
+	)
 	t.Cleanup(upstream.Close)
 	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
 	srv.deps.RawResponsesCompaction = nativeCodexSplitter(10_000)
 	terminalEvents := make(chan adapterruntime.RequestEvent, 8)
 	srv.deps.RequestEvents = func(_ context.Context, event adapterruntime.RequestEvent) {
-		if event.Stage == adapterruntime.RequestStageFailed || event.Stage == adapterruntime.RequestStageCancelled || event.Stage == adapterruntime.RequestStageCompleted {
+		if event.Stage == adapterruntime.RequestStageFailed ||
+			event.Stage == adapterruntime.RequestStageCancelled ||
+			event.Stage == adapterruntime.RequestStageCompleted {
 			terminalEvents <- event
 		}
 	}
 	front := httptest.NewServer(srv.mux)
 	t.Cleanup(front.Close)
-	compactionRequestBody := []byte(`{"model":"gpt-native","stream":true,"input":[{"type":"additional_tools","role":"developer"},{"type":"message","role":"developer","content":[{"type":"input_text","text":"setup"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"older"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"current"}]},{"type":"reasoning","summary":[],"encrypted_content":"cipher"},{"type":"custom_tool_call","call_id":"call-1","name":"apply_patch","input":"patch"},{"type":"custom_tool_call_output","call_id":"call-1","output":[{"type":"input_text","text":"result"}]},{"type":"compaction_trigger"}]}`)
+	compactionRequestBody := []byte(
+		`{"model":"gpt-native","stream":true,"input":[{"type":"additional_tools","role":"developer"},{"type":"message","role":"developer","content":[{"type":"input_text","text":"setup"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"older"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"current"}]},{"type":"reasoning","summary":[],"encrypted_content":"cipher"},{"type":"custom_tool_call","call_id":"call-1","name":"apply_patch","input":"patch"},{"type":"custom_tool_call_output","call_id":"call-1","output":[{"type":"input_text","text":"result"}]},{"type":"compaction_trigger"}]}`,
+	)
 	if err := json.Unmarshal(compactionRequestBody, &struct{}{}); err != nil {
 		t.Fatalf("compaction request fixture is invalid JSON: %v", err)
 	}
+
 	address := strings.TrimPrefix(front.URL, "http://")
 	connection, err := net.Dial("tcp", address)
 	if err != nil {
 		t.Fatalf("dial public response boundary: %v", err)
 	}
+
 	tcpConnection, ok := connection.(*net.TCPConn)
 	if !ok {
 		_ = connection.Close()
 		t.Fatal("public response boundary is not TCP")
 	}
-	request := "POST /v1/responses HTTP/1.1\r\nHost: " + address + "\r\nContent-Type: application/json\r\nContent-Length: " + strconv.Itoa(len(compactionRequestBody)) + "\r\n" + adaptercodex.CodexTurnMetadataHeader + ": " + nativeCompactionV2TurnMetadata() + "\r\n\r\n"
+
+	request := "POST /v1/responses HTTP/1.1\r\nHost: " + address + "\r\nContent-Type: application/json\r\nContent-Length: " + strconv.Itoa(
+		len(compactionRequestBody),
+	) + "\r\n" + adaptercodex.CodexTurnMetadataHeader + ": " + nativeCompactionV2TurnMetadata() + "\r\n\r\n"
 	if _, err := io.WriteString(tcpConnection, request); err != nil {
 		_ = tcpConnection.Close()
 		t.Fatalf("write public request headers: %v", err)
 	}
+
 	if _, err := tcpConnection.Write(compactionRequestBody); err != nil {
 		_ = tcpConnection.Close()
 		t.Fatalf("write public request body: %v", err)
 	}
+
 	reader := bufio.NewReader(tcpConnection)
 	statusLine, err := reader.ReadString('\n')
 	if err != nil {
 		_ = tcpConnection.Close()
 		t.Fatalf("read public response status: %v", err)
 	}
+
 	if !strings.HasPrefix(statusLine, "HTTP/1.1 200 ") {
 		_ = tcpConnection.Close()
 		t.Fatalf("public response status = %q", statusLine)
 	}
+
 	for {
 		line, readErr := reader.ReadString('\n')
 		if readErr != nil {
 			_ = tcpConnection.Close()
 			t.Fatalf("read public response headers: %v", readErr)
 		}
+
 		if line == "\r\n" {
 			break
 		}
 	}
+
 	if err := tcpConnection.SetLinger(0); err != nil {
 		_ = tcpConnection.Close()
 		t.Fatalf("set response reset: %v", err)
 	}
+
 	if err := tcpConnection.Close(); err != nil {
 		t.Fatalf("close failed response: %v", err)
 	}
+
 	select {
 	case <-firstHeaders:
 		close(releaseBody)
@@ -776,25 +1091,39 @@ func TestNativeCompactionV2DoesNotArmAfterPublicWriteFailure(t *testing.T) {
 		close(releaseBody)
 		t.Fatal("upstream did not send the first response headers")
 	}
+
 	select {
 	case <-firstFinished:
 	case <-time.After(5 * time.Second):
 		t.Fatal("upstream did not finish the failed response")
 	}
+
 	select {
 	case event := <-terminalEvents:
-		if event.Stage != adapterruntime.RequestStageFailed && event.Stage != adapterruntime.RequestStageCancelled {
+		if event.Stage != adapterruntime.RequestStageFailed &&
+			event.Stage != adapterruntime.RequestStageCancelled {
 			t.Fatalf("public response terminal stage = %s, want failed or cancelled", event.Stage)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("public response handler did not finish after downstream failure")
 	}
-	finalRequestBody := []byte(`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"encrypted-state"}]}`)
-	secondRequest, err := http.NewRequest(http.MethodPost, front.URL+"/v1/responses", bytes.NewReader(finalRequestBody))
+
+	finalRequestBody := []byte(
+		`{"model":"gpt-native","input":[{"type":"compaction","encrypted_content":"encrypted-state"}]}`,
+	)
+	secondRequest, err := http.NewRequest(
+		http.MethodPost,
+		front.URL+"/v1/responses",
+		bytes.NewReader(finalRequestBody),
+	)
 	if err != nil {
 		t.Fatalf("build matching request: %v", err)
 	}
-	secondRequest.Header.Set(adaptercodex.CodexTurnMetadataHeader, `{"session_id":"native-session","thread_source":"user","sandbox":"none","request_kind":"turn","compaction":{"phase":"final_answer"}}`)
+
+	secondRequest.Header.Set(
+		adaptercodex.CodexTurnMetadataHeader,
+		`{"session_id":"native-session","thread_source":"user","sandbox":"none","request_kind":"turn","compaction":{"phase":"final_answer"}}`,
+	)
 	secondResponse, err := http.DefaultClient.Do(secondRequest)
 	if err != nil {
 		t.Fatalf("post matching request: %v", err)
@@ -804,28 +1133,50 @@ func TestNativeCompactionV2DoesNotArmAfterPublicWriteFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read matching response: %v", err)
 	}
+
 	var gotSecondBody []byte
 	select {
 	case gotSecondBody = <-secondBody:
 	case <-time.After(5 * time.Second):
 		t.Fatal("matching request did not reach upstream")
 	}
-	if secondResponse.StatusCode != http.StatusOK || !bytes.Equal(secondResponseBody, []byte(`{"output":[]}`)) || !bytes.Equal(gotSecondBody, finalRequestBody) {
-		t.Fatalf("matching response status=%d body=%s upstream=%s", secondResponse.StatusCode, secondResponseBody, gotSecondBody)
+
+	if secondResponse.StatusCode != http.StatusOK ||
+		!bytes.Equal(secondResponseBody, []byte(`{"output":[]}`)) ||
+		!bytes.Equal(gotSecondBody, finalRequestBody) {
+		t.Fatalf(
+			"matching response status=%d body=%s upstream=%s",
+			secondResponse.StatusCode,
+			secondResponseBody,
+			gotSecondBody,
+		)
 	}
 }
 
 func TestNativeCompactionV2DoesNotArmAfterPublicCompactionWriteFailure(t *testing.T) {
-	compactionResponseBody := []byte(`{"id":"resp-compact","status":"completed","output":[{"type":"compaction","encrypted_content":"encrypted-state"}]}`)
-	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		_, _ = writer.Write(compactionResponseBody)
-	}))
+	compactionResponseBody := []byte(
+		`{"id":"resp-compact","status":"completed","output":[{"type":"compaction","encrypted_content":"encrypted-state"}]}`,
+	)
+	upstream := httptest.NewServer(
+		http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			_, _ = writer.Write(compactionResponseBody)
+		}),
+	)
 	t.Cleanup(upstream.Close)
 	srv := newNativeResponsesServer(t, upstream.URL, &nativeRawRefreshAuth{})
 	srv.deps.RawResponsesCompaction = nativeCodexSplitter(10_000)
-	compactionRequestBody := []byte(`{"model":"gpt-native","input":[{"type":"additional_tools","role":"developer"},{"type":"message","role":"developer","content":[{"type":"input_text","text":"setup"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"oldest"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"oldest answer"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"older"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"older answer"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"current"}]},{"type":"reasoning","summary":[],"encrypted_content":"cipher"},{"type":"custom_tool_call","call_id":"call-1","name":"apply_patch","input":"patch"},{"type":"custom_tool_call_output","call_id":"call-1","output":[{"type":"input_text","text":"result"}]},{"type":"compaction_trigger"}]}`)
-	compactionRequest := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(compactionRequestBody))
-	compactionRequest.Header.Set(adaptercodex.CodexTurnMetadataHeader, nativeCompactionV2TurnMetadata())
+	compactionRequestBody := []byte(
+		`{"model":"gpt-native","input":[{"type":"additional_tools","role":"developer"},{"type":"message","role":"developer","content":[{"type":"input_text","text":"setup"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"oldest"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"oldest answer"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"older"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"older answer"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"current"}]},{"type":"reasoning","summary":[],"encrypted_content":"cipher"},{"type":"custom_tool_call","call_id":"call-1","name":"apply_patch","input":"patch"},{"type":"custom_tool_call_output","call_id":"call-1","output":[{"type":"input_text","text":"result"}]},{"type":"compaction_trigger"}]}`,
+	)
+	compactionRequest := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/responses",
+		bytes.NewReader(compactionRequestBody),
+	)
+	compactionRequest.Header.Set(
+		adaptercodex.CodexTurnMetadataHeader,
+		nativeCompactionV2TurnMetadata(),
+	)
 	failingWriter := &passthroughPartialWriter{header: make(http.Header), failAfter: 0}
 	srv.mux.ServeHTTP(failingWriter, compactionRequest)
 	if _, ok := srv.compactionV2.Match("native-session", "encrypted-state"); ok {
@@ -849,8 +1200,10 @@ func (r *passthroughTestReadCloser) Read(destination []byte) (int, error) {
 	if r.index >= len(r.steps) {
 		return 0, io.EOF
 	}
+
 	step := r.steps[r.index]
 	r.index++
+
 	return copy(destination, step.body), step.err
 }
 
@@ -871,34 +1224,45 @@ func (w *passthroughPartialWriter) Write(body []byte) (int, error) {
 	if w.writes == w.failAfter {
 		return 0, errPassthroughDownstreamWrite
 	}
+
 	w.writes++
+
 	return w.body.Write(body)
 }
 
 func TestPassthroughSSEUsageReadsOnlyTerminalResponseUsage(t *testing.T) {
 	padding := strings.Repeat("p", 96*1024)
-	payload := []byte("event: response.completed\r\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":11,\"output_tokens\":7,\"total_tokens\":18,\"input_tokens_details\":{\"cached_tokens\":4}},\"metadata\":{\"input_tokens\":101},\"output\":[{\"content\":{\"output_tokens\":102},\"tool\":{\"total_tokens\":103}}]},\"metadata\":{\"cached_tokens\":104},\"padding\":\"" + padding + "\"}\r\n\r\n")
+	payload := []byte(
+		"event: response.completed\r\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":11,\"output_tokens\":7,\"total_tokens\":18,\"input_tokens_details\":{\"cached_tokens\":4}},\"metadata\":{\"input_tokens\":101},\"output\":[{\"content\":{\"output_tokens\":102},\"tool\":{\"total_tokens\":103}}]},\"metadata\":{\"cached_tokens\":104},\"padding\":\"" + padding + "\"}\r\n\r\n",
+	)
 
 	parser := newPassthroughSSEUsageParser()
+
 	for offset := 0; offset < len(payload); {
 		chunkSize := (offset % 17) + 1
 		end := offset + chunkSize
 		if end > len(payload) {
 			end = len(payload)
 		}
+
 		parser.Write(payload[offset:end])
 		offset = end
 	}
+
 	usage := parser.Usage()
-	if usage.InputTokens != 11 || usage.OutputTokens != 7 || usage.TotalTokens != 18 || usage.CachedTokens() != 4 {
+	if usage.InputTokens != 11 || usage.OutputTokens != 7 || usage.TotalTokens != 18 ||
+		usage.CachedTokens() != 4 {
 		t.Fatalf("usage = %+v", usage)
 	}
 
-	allocations := testing.AllocsPerRun(3, func() {
-		streamParser := newPassthroughSSEUsageParser()
-		streamParser.Write(payload)
-		_ = streamParser.Usage()
-	})
+	allocations := testing.AllocsPerRun(
+		3,
+		func() {
+			streamParser := newPassthroughSSEUsageParser()
+			streamParser.Write(payload)
+			_ = streamParser.Usage()
+		},
+	)
 	if allocations > 32 {
 		t.Fatalf("parser allocations = %.0f, want bounded allocation behavior", allocations)
 	}
@@ -907,53 +1271,132 @@ func TestPassthroughSSEUsageReadsOnlyTerminalResponseUsage(t *testing.T) {
 func TestPassthroughSSEUsageRequiresRootResponseUsage(t *testing.T) {
 	rootUsage := `"response":{"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18,"input_tokens_details":{"cached_tokens":4}}}`
 	nestedUsage := `"metadata":{"response":{"usage":{"input_tokens":101,"output_tokens":102,"total_tokens":203,"input_tokens_details":{"cached_tokens":104}}}},"output":[{"response":{"usage":{"input_tokens":201,"output_tokens":202,"total_tokens":403}}}],"tools":[{"response":{"usage":{"input_tokens":301,"output_tokens":302,"total_tokens":603}}}]`
+
 	tests := []struct {
 		name    string
 		payload string
 	}{
-		{name: "nested usage before root response", payload: `{"type":"response.completed","note":"valid \"quoted\" string",` + nestedUsage + `,` + rootUsage + `}`},
-		{name: "nested usage after root response", payload: `{"type":"response.completed",` + rootUsage + `,` + nestedUsage + `}`},
+		{
+			name:    "nested usage before root response",
+			payload: `{"type":"response.completed","note":"valid \"quoted\" string",` + nestedUsage + `,` + rootUsage + `}`,
+		},
+		{
+			name:    "nested usage after root response",
+			payload: `{"type":"response.completed",` + rootUsage + `,` + nestedUsage + `}`,
+		},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			usage := passthroughTerminalSSEUsage(t, test.payload, "\r\n")
-			assertPassthroughUsage(t, usage, 11, 7, 18, 4)
-		})
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				usage := passthroughTerminalSSEUsage(t, test.payload, "\r\n")
+				assertPassthroughUsage(t, usage, 11, 7, 18, 4)
+			},
+		)
 	}
 }
 
 func TestPassthroughSSEUsageRejectsMalformedTerminalJSON(t *testing.T) {
 	validUsage := `"response":{"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18,"input_tokens_details":{"cached_tokens":4}}}`
-	deepMetadata := strings.Repeat("[", passthroughMaxJSONDepth+1) + "0" + strings.Repeat("]", passthroughMaxJSONDepth+1)
+	deepMetadata := strings.Repeat("[", passthroughMaxJSONDepth+1) + "0" + strings.Repeat(
+		"]",
+		passthroughMaxJSONDepth+1,
+	)
+
 	tests := []struct {
 		name    string
 		payload string
 		lineEnd string
 		want    Usage
 	}{
-		{name: "valid escaped strings", payload: `{"type":"response.completed","note":"quote \" slash \\ unicode \u263A",` + validUsage + `}`, lineEnd: "\n", want: usageWithValues(11, 7, 18, 4)},
-		{name: "missing object close", payload: `{"type":"response.completed",` + validUsage, lineEnd: "\r\n"},
-		{name: "mismatched delimiter", payload: `{"type":"response.completed",` + validUsage + `]}`, lineEnd: "\n"},
-		{name: "missing comma", payload: `{"type":"response.completed","response":{"usage":{"input_tokens":11 "output_tokens":7}}}`, lineEnd: "\r\n"},
-		{name: "missing colon", payload: `{"type":"response.completed","response":{"usage":{"input_tokens" 11}}}`, lineEnd: "\n"},
-		{name: "trailing garbage", payload: `{"type":"response.completed",` + validUsage + `} nope`, lineEnd: "\r\n"},
-		{name: "unterminated string", payload: `{"type":"response.completed","note":"unterminated,` + validUsage + `}`, lineEnd: "\n"},
-		{name: "invalid escape", payload: `{"type":"response.completed","note":"\q",` + validUsage + `}`, lineEnd: "\r\n"},
-		{name: "invalid unicode escape", payload: `{"type":"response.completed","note":"\u12G4",` + validUsage + `}`, lineEnd: "\n"},
-		{name: "invalid literal", payload: `{"type":"response.completed","flag":truee,` + validUsage + `}`, lineEnd: "\r\n"},
-		{name: "invalid number", payload: `{"type":"response.completed","response":{"usage":{"input_tokens":1e,"output_tokens":7}}}`, lineEnd: "\n"},
-		{name: "extra root value", payload: `{"type":"response.completed",` + validUsage + `}{}`, lineEnd: "\r\n"},
-		{name: "depth overflow", payload: `{"type":"response.completed","metadata":` + deepMetadata + `,` + validUsage + `}`, lineEnd: "\n"},
+		{
+			name:    "valid escaped strings",
+			payload: `{"type":"response.completed","note":"quote \" slash \\ unicode \u263A",` + validUsage + `}`,
+			lineEnd: "\n",
+			want:    usageWithValues(11, 7, 18, 4),
+		},
+		{
+			name:    "missing object close",
+			payload: `{"type":"response.completed",` + validUsage,
+			lineEnd: "\r\n",
+		},
+		{
+			name:    "mismatched delimiter",
+			payload: `{"type":"response.completed",` + validUsage + `]}`,
+			lineEnd: "\n",
+		},
+		{
+			name:    "missing comma",
+			payload: `{"type":"response.completed","response":{"usage":{"input_tokens":11 "output_tokens":7}}}`,
+			lineEnd: "\r\n",
+		},
+		{
+			name:    "missing colon",
+			payload: `{"type":"response.completed","response":{"usage":{"input_tokens" 11}}}`,
+			lineEnd: "\n",
+		},
+		{
+			name:    "trailing garbage",
+			payload: `{"type":"response.completed",` + validUsage + `} nope`,
+			lineEnd: "\r\n",
+		},
+		{
+			name:    "unterminated string",
+			payload: `{"type":"response.completed","note":"unterminated,` + validUsage + `}`,
+			lineEnd: "\n",
+		},
+		{
+			name:    "invalid escape",
+			payload: `{"type":"response.completed","note":"\q",` + validUsage + `}`,
+			lineEnd: "\r\n",
+		},
+		{
+			name:    "invalid unicode escape",
+			payload: `{"type":"response.completed","note":"\u12G4",` + validUsage + `}`,
+			lineEnd: "\n",
+		},
+		{
+			name:    "invalid literal",
+			payload: `{"type":"response.completed","flag":truee,` + validUsage + `}`,
+			lineEnd: "\r\n",
+		},
+		{
+			name:    "invalid number",
+			payload: `{"type":"response.completed","response":{"usage":{"input_tokens":1e,"output_tokens":7}}}`,
+			lineEnd: "\n",
+		},
+		{
+			name:    "extra root value",
+			payload: `{"type":"response.completed",` + validUsage + `}{}`,
+			lineEnd: "\r\n",
+		},
+		{
+			name:    "depth overflow",
+			payload: `{"type":"response.completed","metadata":` + deepMetadata + `,` + validUsage + `}`,
+			lineEnd: "\n",
+		},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			usage := passthroughTerminalSSEUsage(t, test.payload, test.lineEnd)
-			if test.want.TotalTokens != 0 {
-				assertPassthroughUsage(t, usage, test.want.InputTokens, test.want.OutputTokens, test.want.TotalTokens, test.want.CachedTokens())
-				return
-			}
-			assertPassthroughUsage(t, usage, 0, 0, 0, 0)
-		})
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				usage := passthroughTerminalSSEUsage(t, test.payload, test.lineEnd)
+				if test.want.TotalTokens != 0 {
+					assertPassthroughUsage(
+						t,
+						usage,
+						test.want.InputTokens,
+						test.want.OutputTokens,
+						test.want.TotalTokens,
+						test.want.CachedTokens(),
+					)
+
+					return
+				}
+
+				assertPassthroughUsage(t, usage, 0, 0, 0, 0)
+			},
+		)
 	}
 }
 
@@ -962,34 +1405,61 @@ func TestPassthroughSSEUsageRejectsNegativeCounters(t *testing.T) {
 		name    string
 		payload string
 	}{
-		{name: "input tokens", payload: `{"type":"response.completed","response":{"usage":{"input_tokens":-11,"output_tokens":7,"total_tokens":18,"input_tokens_details":{"cached_tokens":4}}}}`},
-		{name: "output tokens", payload: `{"type":"response.completed","response":{"usage":{"input_tokens":11,"output_tokens":-7,"total_tokens":18,"input_tokens_details":{"cached_tokens":4}}}}`},
-		{name: "total tokens", payload: `{"type":"response.completed","response":{"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":-18,"input_tokens_details":{"cached_tokens":4}}}}`},
-		{name: "cached tokens", payload: `{"type":"response.completed","response":{"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18,"input_tokens_details":{"cached_tokens":-4}}}}`},
+		{
+			name:    "input tokens",
+			payload: `{"type":"response.completed","response":{"usage":{"input_tokens":-11,"output_tokens":7,"total_tokens":18,"input_tokens_details":{"cached_tokens":4}}}}`,
+		},
+		{
+			name:    "output tokens",
+			payload: `{"type":"response.completed","response":{"usage":{"input_tokens":11,"output_tokens":-7,"total_tokens":18,"input_tokens_details":{"cached_tokens":4}}}}`,
+		},
+		{
+			name:    "total tokens",
+			payload: `{"type":"response.completed","response":{"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":-18,"input_tokens_details":{"cached_tokens":4}}}}`,
+		},
+		{
+			name:    "cached tokens",
+			payload: `{"type":"response.completed","response":{"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18,"input_tokens_details":{"cached_tokens":-4}}}}`,
+		},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			usage := passthroughTerminalSSEUsage(t, test.payload, "\r\n")
-			assertPassthroughUsage(t, usage, 0, 0, 0, 0)
-		})
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				usage := passthroughTerminalSSEUsage(t, test.payload, "\r\n")
+				assertPassthroughUsage(t, usage, 0, 0, 0, 0)
+			},
+		)
 	}
 }
 
 func TestPassthroughSSEUsageRequiresMatchingTerminalMarkers(t *testing.T) {
 	payload := `{"type":"response.completed","response":{"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18,"input_tokens_details":{"cached_tokens":4}}}}`
+
 	tests := []struct {
 		name      string
 		eventType string
 		payload   string
 	}{
-		{name: "created event with completed JSON type", eventType: "response.created", payload: payload},
-		{name: "completed event with created JSON type", eventType: "response.completed", payload: strings.Replace(payload, "response.completed", "response.created", 1)},
+		{
+			name:      "created event with completed JSON type",
+			eventType: "response.created",
+			payload:   payload,
+		},
+		{
+			name:      "completed event with created JSON type",
+			eventType: "response.completed",
+			payload:   strings.Replace(payload, "response.completed", "response.created", 1),
+		},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			usage := passthroughSSEUsage(t, test.eventType, test.payload, "\n")
-			assertPassthroughUsage(t, usage, 0, 0, 0, 0)
-		})
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				usage := passthroughSSEUsage(t, test.eventType, test.payload, "\n")
+				assertPassthroughUsage(t, usage, 0, 0, 0, 0)
+			},
+		)
 	}
 }
 
@@ -1036,19 +1506,24 @@ func TestPassthroughSSEUsageAcceptsMatchingCompletedAndIncompleteEvents(t *testi
 		},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			usage := passthroughSSEFieldsUsage(t, test.eventFields, test.payload, test.lineEnd)
-			if test.wantUsage {
-				assertPassthroughUsage(t, usage, 11, 7, 18, 0)
-				return
-			}
-			assertPassthroughUsage(t, usage, 0, 0, 0, 0)
-		})
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				usage := passthroughSSEFieldsUsage(t, test.eventFields, test.payload, test.lineEnd)
+				if test.wantUsage {
+					assertPassthroughUsage(t, usage, 11, 7, 18, 0)
+					return
+				}
+
+				assertPassthroughUsage(t, usage, 0, 0, 0, 0)
+			},
+		)
 	}
 }
 
 func TestPassthroughSSEUsageUsesLastEventField(t *testing.T) {
 	payload := `{"type":"response.completed","response":{"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}}}`
+
 	tests := []struct {
 		name        string
 		eventFields []string
@@ -1056,19 +1531,32 @@ func TestPassthroughSSEUsageUsesLastEventField(t *testing.T) {
 		wantOutput  int
 		wantTotal   int
 	}{
-		{name: "completed then created", eventFields: []string{"response.completed", "response.created"}},
-		{name: "created then completed", eventFields: []string{"response.created", "response.completed"}, wantInput: 11, wantOutput: 7, wantTotal: 18},
+		{
+			name:        "completed then created",
+			eventFields: []string{"response.completed", "response.created"},
+		},
+		{
+			name:        "created then completed",
+			eventFields: []string{"response.created", "response.completed"},
+			wantInput:   11,
+			wantOutput:  7,
+			wantTotal:   18,
+		},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			usage := passthroughSSEFieldsUsage(t, test.eventFields, payload, "\r\n")
-			assertPassthroughUsage(t, usage, test.wantInput, test.wantOutput, test.wantTotal, 0)
-		})
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				usage := passthroughSSEFieldsUsage(t, test.eventFields, payload, "\r\n")
+				assertPassthroughUsage(t, usage, test.wantInput, test.wantOutput, test.wantTotal, 0)
+			},
+		)
 	}
 }
 
 func TestPassthroughSSEUsageTreatsEmptyEventFieldAsFinalValue(t *testing.T) {
 	payload := `{"type":"response.completed","response":{"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}}}`
+
 	tests := []struct {
 		name       string
 		eventLines []string
@@ -1076,38 +1564,71 @@ func TestPassthroughSSEUsageTreatsEmptyEventFieldAsFinalValue(t *testing.T) {
 		wantOutput int
 		wantTotal  int
 	}{
-		{name: "completed then bare event", eventLines: []string{"event: response.completed", "event"}},
-		{name: "bare event then completed", eventLines: []string{"event", "event: response.completed"}, wantInput: 11, wantOutput: 7, wantTotal: 18},
-		{name: "completed then empty event", eventLines: []string{"event: response.completed", "event:"}},
-		{name: "empty event then completed", eventLines: []string{"event:", "event: response.completed"}, wantInput: 11, wantOutput: 7, wantTotal: 18},
+		{
+			name:       "completed then bare event",
+			eventLines: []string{"event: response.completed", "event"},
+		},
+		{
+			name:       "bare event then completed",
+			eventLines: []string{"event", "event: response.completed"},
+			wantInput:  11,
+			wantOutput: 7,
+			wantTotal:  18,
+		},
+		{
+			name:       "completed then empty event",
+			eventLines: []string{"event: response.completed", "event:"},
+		},
+		{
+			name:       "empty event then completed",
+			eventLines: []string{"event:", "event: response.completed"},
+			wantInput:  11,
+			wantOutput: 7,
+			wantTotal:  18,
+		},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			usage := passthroughSSEEventLinesUsage(t, test.eventLines, payload, "\n")
-			assertPassthroughUsage(t, usage, test.wantInput, test.wantOutput, test.wantTotal, 0)
-		})
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				usage := passthroughSSEEventLinesUsage(t, test.eventLines, payload, "\n")
+				assertPassthroughUsage(t, usage, test.wantInput, test.wantOutput, test.wantTotal, 0)
+			},
+		)
 	}
 }
 
 func TestPassthroughSSEUsageUsesLastRootTypeValue(t *testing.T) {
 	usage := `"response":{"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}}`
+
 	tests := []struct {
 		name    string
 		payload string
 		want    bool
 	}{
-		{name: "completed then created", payload: `{"type":"response.completed","type":"response.created",` + usage + `}`},
-		{name: "created then completed", payload: `{"type":"response.created","type":"response.completed",` + usage + `}`, want: true},
+		{
+			name:    "completed then created",
+			payload: `{"type":"response.completed","type":"response.created",` + usage + `}`,
+		},
+		{
+			name:    "created then completed",
+			payload: `{"type":"response.created","type":"response.completed",` + usage + `}`,
+			want:    true,
+		},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			result := passthroughTerminalSSEUsage(t, test.payload, "\n")
-			if test.want {
-				assertPassthroughUsage(t, result, 11, 7, 18, 0)
-				return
-			}
-			assertPassthroughUsage(t, result, 0, 0, 0, 0)
-		})
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				result := passthroughTerminalSSEUsage(t, test.payload, "\n")
+				if test.want {
+					assertPassthroughUsage(t, result, 11, 7, 18, 0)
+					return
+				}
+
+				assertPassthroughUsage(t, result, 0, 0, 0, 0)
+			},
+		)
 	}
 }
 
@@ -1117,21 +1638,49 @@ func TestPassthroughSSEUsageReplacesOrRejectsRepeatedCounters(t *testing.T) {
 		payload string
 		want    Usage
 	}{
-		{name: "later integers replace earlier values", payload: `{"type":"response.completed","response":{"usage":{"input_tokens":1,"input_tokens":11,"output_tokens":2,"output_tokens":7,"total_tokens":3,"total_tokens":18,"input_tokens_details":{"cached_tokens":1},"input_tokens_details":{"cached_tokens":4}}}}`, want: usageWithValues(11, 7, 18, 4)},
-		{name: "later decimal input invalidates event", payload: `{"type":"response.completed","response":{"usage":{"input_tokens":11,"input_tokens":1.5}}}`},
-		{name: "later overflow output invalidates event", payload: `{"type":"response.completed","response":{"usage":{"output_tokens":7,"output_tokens":999999999999999999999999999999}}}`},
-		{name: "later string total invalidates event", payload: `{"type":"response.completed","response":{"usage":{"total_tokens":18,"total_tokens":"invalid"}}}`},
-		{name: "later negative cached invalidates event", payload: `{"type":"response.completed","response":{"usage":{"input_tokens_details":{"cached_tokens":4},"input_tokens_details":{"cached_tokens":-5}}}}`},
+		{
+			name:    "later integers replace earlier values",
+			payload: `{"type":"response.completed","response":{"usage":{"input_tokens":1,"input_tokens":11,"output_tokens":2,"output_tokens":7,"total_tokens":3,"total_tokens":18,"input_tokens_details":{"cached_tokens":1},"input_tokens_details":{"cached_tokens":4}}}}`,
+			want:    usageWithValues(11, 7, 18, 4),
+		},
+		{
+			name:    "later decimal input invalidates event",
+			payload: `{"type":"response.completed","response":{"usage":{"input_tokens":11,"input_tokens":1.5}}}`,
+		},
+		{
+			name:    "later overflow output invalidates event",
+			payload: `{"type":"response.completed","response":{"usage":{"output_tokens":7,"output_tokens":999999999999999999999999999999}}}`,
+		},
+		{
+			name:    "later string total invalidates event",
+			payload: `{"type":"response.completed","response":{"usage":{"total_tokens":18,"total_tokens":"invalid"}}}`,
+		},
+		{
+			name:    "later negative cached invalidates event",
+			payload: `{"type":"response.completed","response":{"usage":{"input_tokens_details":{"cached_tokens":4},"input_tokens_details":{"cached_tokens":-5}}}}`,
+		},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			result := passthroughTerminalSSEUsage(t, test.payload, "\r\n")
-			if test.want.TotalTokens != 0 {
-				assertPassthroughUsage(t, result, test.want.InputTokens, test.want.OutputTokens, test.want.TotalTokens, test.want.CachedTokens())
-				return
-			}
-			assertPassthroughUsage(t, result, 0, 0, 0, 0)
-		})
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				result := passthroughTerminalSSEUsage(t, test.payload, "\r\n")
+				if test.want.TotalTokens != 0 {
+					assertPassthroughUsage(
+						t,
+						result,
+						test.want.InputTokens,
+						test.want.OutputTokens,
+						test.want.TotalTokens,
+						test.want.CachedTokens(),
+					)
+
+					return
+				}
+
+				assertPassthroughUsage(t, result, 0, 0, 0, 0)
+			},
+		)
 	}
 }
 
@@ -1141,31 +1690,63 @@ func TestPassthroughSSEUsageClearsSupersededStructuralValues(t *testing.T) {
 		payload string
 		want    Usage
 	}{
-		{name: "response null replaces response object", payload: `{"type":"response.completed","response":{"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}},"response":null}`},
-		{name: "response array replaces response object", payload: `{"type":"response.completed","response":{"usage":{"input_tokens":11}},"response":[]}`},
-		{name: "usage null replaces usage object", payload: `{"type":"response.completed","response":{"usage":{"input_tokens":11},"usage":null}}`},
-		{name: "details null replaces cached details", payload: `{"type":"response.completed","response":{"usage":{"input_tokens_details":{"cached_tokens":4},"input_tokens_details":null}}}`},
-		{name: "replacement response object drops prior counters", payload: `{"type":"response.completed","response":{"usage":{"input_tokens":11,"total_tokens":18}},"response":{"usage":{"output_tokens":7}}}`, want: usageWithValues(0, 7, 0, 0)},
+		{
+			name:    "response null replaces response object",
+			payload: `{"type":"response.completed","response":{"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}},"response":null}`,
+		},
+		{
+			name:    "response array replaces response object",
+			payload: `{"type":"response.completed","response":{"usage":{"input_tokens":11}},"response":[]}`,
+		},
+		{
+			name:    "usage null replaces usage object",
+			payload: `{"type":"response.completed","response":{"usage":{"input_tokens":11},"usage":null}}`,
+		},
+		{
+			name:    "details null replaces cached details",
+			payload: `{"type":"response.completed","response":{"usage":{"input_tokens_details":{"cached_tokens":4},"input_tokens_details":null}}}`,
+		},
+		{
+			name:    "replacement response object drops prior counters",
+			payload: `{"type":"response.completed","response":{"usage":{"input_tokens":11,"total_tokens":18}},"response":{"usage":{"output_tokens":7}}}`,
+			want:    usageWithValues(0, 7, 0, 0),
+		},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			result := passthroughTerminalSSEUsage(t, test.payload, "\n")
-			if test.want.OutputTokens != 0 {
-				assertPassthroughUsage(t, result, test.want.InputTokens, test.want.OutputTokens, test.want.TotalTokens, test.want.CachedTokens())
-				return
-			}
-			assertPassthroughUsage(t, result, 0, 0, 0, 0)
-		})
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				result := passthroughTerminalSSEUsage(t, test.payload, "\n")
+				if test.want.OutputTokens != 0 {
+					assertPassthroughUsage(
+						t,
+						result,
+						test.want.InputTokens,
+						test.want.OutputTokens,
+						test.want.TotalTokens,
+						test.want.CachedTokens(),
+					)
+
+					return
+				}
+
+				assertPassthroughUsage(t, result, 0, 0, 0, 0)
+			},
+		)
 	}
 }
 
 func TestPassthroughSSEUsageRejectsTerminalEventTrailingWhitespace(t *testing.T) {
 	payload := `{"type":"response.completed","response":{"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}}}`
+
 	for _, eventLine := range []string{"event: response.completed ", "event: response.completed\t"} {
-		t.Run(eventLine, func(t *testing.T) {
-			result := passthroughSSEEventLinesUsage(t, []string{eventLine}, payload, "\r\n")
-			assertPassthroughUsage(t, result, 0, 0, 0, 0)
-		})
+		t.Run(
+			eventLine,
+			func(t *testing.T) {
+				result := passthroughSSEEventLinesUsage(t, []string{eventLine}, payload, "\r\n")
+				assertPassthroughUsage(t, result, 0, 0, 0, 0)
+			},
+		)
 	}
 }
 
@@ -1176,22 +1757,50 @@ func TestPassthroughSSEUsageAcceptsOnlyLeadingBOM(t *testing.T) {
 		stream []byte
 		want   Usage
 	}{
-		{name: "without BOM", stream: []byte("event: response.completed\ndata: " + payload + "\n\n"), want: usageWithValues(11, 7, 18, 0)},
-		{name: "leading BOM", stream: append([]byte{0xef, 0xbb, 0xbf}, []byte("event: response.completed\ndata: "+payload+"\n\n")...), want: usageWithValues(11, 7, 18, 0)},
-		{name: "middle BOM", stream: []byte("event: response.completed\n\xef\xbb\xbfdata: " + payload + "\n\n")},
+		{
+			name:   "without BOM",
+			stream: []byte("event: response.completed\ndata: " + payload + "\n\n"),
+			want:   usageWithValues(11, 7, 18, 0),
+		},
+		{
+			name: "leading BOM",
+			stream: append(
+				[]byte{0xef, 0xbb, 0xbf},
+				[]byte("event: response.completed\ndata: "+payload+"\n\n")...,
+			),
+			want: usageWithValues(11, 7, 18, 0),
+		},
+		{
+			name:   "middle BOM",
+			stream: []byte("event: response.completed\n\xef\xbb\xbfdata: " + payload + "\n\n"),
+		},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			parser := newPassthroughSSEUsageParser()
-			for offset := 0; offset < len(test.stream); offset++ {
-				parser.Write(test.stream[offset : offset+1])
-			}
-			usage := parser.Usage()
-			if test.want.TotalTokens != 0 {
-				assertPassthroughUsage(t, usage, test.want.InputTokens, test.want.OutputTokens, test.want.TotalTokens, test.want.CachedTokens())
-				return
-			}
-			assertPassthroughUsage(t, usage, 0, 0, 0, 0)
-		})
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				parser := newPassthroughSSEUsageParser()
+
+				for offset := 0; offset < len(test.stream); offset++ {
+					parser.Write(test.stream[offset : offset+1])
+				}
+
+				usage := parser.Usage()
+				if test.want.TotalTokens != 0 {
+					assertPassthroughUsage(
+						t,
+						usage,
+						test.want.InputTokens,
+						test.want.OutputTokens,
+						test.want.TotalTokens,
+						test.want.CachedTokens(),
+					)
+
+					return
+				}
+
+				assertPassthroughUsage(t, usage, 0, 0, 0, 0)
+			},
+		)
 	}
 }
 
@@ -1203,51 +1812,90 @@ func passthroughSSEUsage(t *testing.T, eventType string, payload string, lineEnd
 	return passthroughSSEFieldsUsage(t, []string{eventType}, payload, lineEnd)
 }
 
-func passthroughSSEFieldsUsage(t *testing.T, eventFields []string, payload string, lineEnd string) Usage {
+func passthroughSSEFieldsUsage(
+	t *testing.T,
+	eventFields []string,
+	payload string,
+	lineEnd string,
+) Usage {
 	eventLines := make([]string, 0, len(eventFields))
 	for _, eventType := range eventFields {
 		eventLines = append(eventLines, "event: "+eventType)
 	}
+
 	return passthroughSSEEventLinesUsage(t, eventLines, payload, lineEnd)
 }
 
-func passthroughSSEEventLinesUsage(t *testing.T, eventLines []string, payload string, lineEnd string) Usage {
+func passthroughSSEEventLinesUsage(
+	t *testing.T,
+	eventLines []string,
+	payload string,
+	lineEnd string,
+) Usage {
 	t.Helper()
 	var streamBuilder strings.Builder
+
 	for _, eventLine := range eventLines {
 		streamBuilder.WriteString(eventLine)
 		streamBuilder.WriteString(lineEnd)
 	}
+
 	streamBuilder.WriteString("data: ")
 	streamBuilder.WriteString(payload)
 	streamBuilder.WriteString(lineEnd)
 	streamBuilder.WriteString(lineEnd)
 	stream := []byte(streamBuilder.String())
 	parser := newPassthroughSSEUsageParser()
+
 	for offset := 0; offset < len(stream); {
 		chunkSize := (offset % 13) + 1
 		end := offset + chunkSize
 		if end > len(stream) {
 			end = len(stream)
 		}
+
 		parser.Write(stream[offset:end])
 		offset = end
 	}
+
 	return parser.Usage()
 }
 
 func usageWithValues(input int, output int, total int, cached int) Usage {
 	return Usage{
-		PromptTokens: input, CompletionTokens: output, TotalTokens: total,
-		PromptTokensDetails: &PromptTokensDetails{CachedTokens: cached}, InputTokens: input, OutputTokens: output,
-		CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0,
+		PromptTokens:     input,
+		CompletionTokens: output,
+		TotalTokens:      total,
+		PromptTokensDetails: &PromptTokensDetails{
+			CachedTokens: cached,
+		},
+		InputTokens:      input,
+		OutputTokens:     output,
+		CacheReadTokens:  0,
+		CacheWriteTokens: 0,
+		MaxTokens:        0,
 	}
 }
 
-func assertPassthroughUsage(t *testing.T, usage Usage, input int, output int, total int, cached int) {
+func assertPassthroughUsage(
+	t *testing.T,
+	usage Usage,
+	input int,
+	output int,
+	total int,
+	cached int,
+) {
 	t.Helper()
-	if usage.InputTokens != input || usage.OutputTokens != output || usage.TotalTokens != total || usage.CachedTokens() != cached {
-		t.Fatalf("usage = %+v, want input=%d output=%d total=%d cached=%d", usage, input, output, total, cached)
+	if usage.InputTokens != input || usage.OutputTokens != output || usage.TotalTokens != total ||
+		usage.CachedTokens() != cached {
+		t.Fatalf(
+			"usage = %+v, want input=%d output=%d total=%d cached=%d",
+			usage,
+			input,
+			output,
+			total,
+			cached,
+		)
 	}
 }
 
@@ -1269,12 +1917,23 @@ func (w *failingPassthroughWriter) Flush() {}
 func TestResponsesPassthroughCopyFailureUsesTypedStreamBoundary(t *testing.T) {
 	writer := &failingPassthroughWriter{header: make(http.Header)}
 	srv := &Server{log: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	ctx := correlation.WithContext(context.Background(), correlation.Context{RequestID: "req-copy-123"})
+	ctx := correlation.WithContext(
+		context.Background(),
+		correlation.Context{RequestID: "req-copy-123"},
+	)
 	resolved := &adapterresolver.ResolvedRequest{}
-	err := srv.respondPassthroughStreamCopyError(ctx, writer, resolved, "req-copy-123", time.Now(), errors.New("upstream stream failed"))
+	err := srv.respondPassthroughStreamCopyError(
+		ctx,
+		writer,
+		resolved,
+		"req-copy-123",
+		time.Now(),
+		errors.New("upstream stream failed"),
+	)
 	if err != nil {
 		t.Fatalf("respond stream copy error: %v", err)
 	}
+
 	body := writer.body.String()
 	if !strings.Contains(body, `"code":"upstream_network_error"`) ||
 		!strings.Contains(body, "req-copy-123") || !strings.Contains(body, `"clyde"`) ||
@@ -1285,23 +1944,27 @@ func TestResponsesPassthroughCopyFailureUsesTypedStreamBoundary(t *testing.T) {
 
 func TestStructuredOutputRetryFailureCapturesMatchingAttemptsAndUsesBoundary(t *testing.T) {
 	requestCount := 0
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestCount++
-		w.Header().Set("Content-Type", "application/json")
-		if requestCount == 1 {
-			_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"not json"}}]}`)
-			return
-		}
-		w.Header().Set("X-Retry-Attempt", "true")
-		w.WriteHeader(http.StatusTooManyRequests)
-		_, _ = io.WriteString(w, `{"error":{"message":"retry rejected"}}`)
-	}))
+	upstream := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestCount++
+			w.Header().Set("Content-Type", "application/json")
+			if requestCount == 1 {
+				_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"not json"}}]}`)
+				return
+			}
+
+			w.Header().Set("X-Retry-Attempt", "true")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(w, `{"error":{"message":"retry rejected"}}`)
+		}),
+	)
 	t.Cleanup(upstream.Close)
 	dbPath := filepath.Join(t.TempDir(), "retry-capture.db")
 	store, err := capture.Open(context.Background(), capture.Config{DBPath: dbPath}, nil)
 	if err != nil {
 		t.Fatalf("open capture store: %v", err)
 	}
+
 	storeClosed := false
 	t.Cleanup(func() {
 		if !storeClosed {
@@ -1310,53 +1973,77 @@ func TestStructuredOutputRetryFailureCapturesMatchingAttemptsAndUsesBoundary(t *
 	})
 	srv := newPassthroughOverrideTestServer(t, upstream.URL+"/v1")
 	srv.deps.CaptureStore = store
-	resolved, err := adapterresolver.Resolve(adapterresolver.IngressOpenAI, responsesCursorRequest("local-model"), adapterresolver.NewModelRegistryAdapter(srv.modelRegistry()))
+	resolved, err := adapterresolver.Resolve(
+		adapterresolver.IngressOpenAI,
+		responsesCursorRequest("local-model"),
+		adapterresolver.NewModelRegistryAdapter(srv.modelRegistry()),
+	)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	body := []byte(`{"model":"local-model","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"json_object"}}`)
+
+	body := []byte(
+		`{"model":"local-model","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"json_object"}}`,
+	)
 	recorder := httptest.NewRecorder()
-	srv.forwardPassthroughOverride(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil), &resolved, body)
+	srv.forwardPassthroughOverride(
+		recorder,
+		httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil),
+		&resolved,
+		body,
+	)
 	var envelope adapteropenai.ErrorResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
 		t.Fatalf("decode error envelope: %v body=%s", err, recorder.Body.String())
 	}
+
 	if recorder.Code != http.StatusBadRequest || envelope.Error.Type != "invalid_request_error" ||
 		!strings.Contains(envelope.Error.Message, "retry rejected") {
 		t.Fatalf("status=%d envelope=%+v", recorder.Code, envelope)
 	}
+
 	if err := store.Close(context.Background(), "test"); err != nil {
 		t.Fatalf("close capture store: %v", err)
 	}
+
 	storeClosed = true
 
 	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("open capture database: %v", err)
 	}
+
 	t.Cleanup(func() { _ = db.Close() })
-	rows, err := db.Query(`SELECT status, resp_headers FROM requests WHERE client = 'adapter.passthrough' ORDER BY id`)
+	rows, err := db.Query(
+		`SELECT status, resp_headers FROM requests WHERE client = 'adapter.passthrough' ORDER BY id`,
+	)
 	if err != nil {
 		t.Fatalf("query captures: %v", err)
 	}
+
 	defer func() { _ = rows.Close() }()
 	statuses := make([]int, 0, 2)
 	retryHeaders := ""
+
 	for rows.Next() {
 		var status int
 		var headers string
 		if err := rows.Scan(&status, &headers); err != nil {
 			t.Fatalf("scan capture: %v", err)
 		}
+
 		statuses = append(statuses, status)
 		if status == http.StatusTooManyRequests {
 			retryHeaders = headers
 		}
 	}
+
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate captures: %v", err)
 	}
-	if requestCount != 2 || len(statuses) != 2 || statuses[0] != http.StatusOK || statuses[1] != http.StatusTooManyRequests ||
+
+	if requestCount != 2 || len(statuses) != 2 || statuses[0] != http.StatusOK ||
+		statuses[1] != http.StatusTooManyRequests ||
 		!strings.Contains(retryHeaders, "X-Retry-Attempt") {
 		t.Fatalf("requests=%d statuses=%v retry_headers=%q", requestCount, statuses, retryHeaders)
 	}
@@ -1366,25 +2053,31 @@ func TestStructuredOutputRetryTransportFailureCapturesRequestAttempt(t *testing.
 	requestCount := 0
 	retryRequestHandled := make(chan struct{})
 	var retryRequestBody []byte
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestCount++
-		if requestCount == 1 {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"not json"}}]}`)
-			return
-		}
-		defer close(retryRequestHandled)
-		retryRequestBody, _ = io.ReadAll(r.Body)
-		hijacker, ok := w.(http.Hijacker)
-		if !ok {
-			t.Fatal("response writer does not support hijacking")
-		}
-		connection, _, err := hijacker.Hijack()
-		if err != nil {
-			t.Fatalf("hijack retry request: %v", err)
-		}
-		_ = connection.Close()
-	}))
+	upstream := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestCount++
+			if requestCount == 1 {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"not json"}}]}`)
+
+				return
+			}
+
+			defer close(retryRequestHandled)
+			retryRequestBody, _ = io.ReadAll(r.Body)
+			hijacker, ok := w.(http.Hijacker)
+			if !ok {
+				t.Fatal("response writer does not support hijacking")
+			}
+
+			connection, _, err := hijacker.Hijack()
+			if err != nil {
+				t.Fatalf("hijack retry request: %v", err)
+			}
+
+			_ = connection.Close()
+		}),
+	)
 	t.Cleanup(upstream.Close)
 
 	dbPath := filepath.Join(t.TempDir(), "retry-transport-capture.db")
@@ -1392,6 +2085,7 @@ func TestStructuredOutputRetryTransportFailureCapturesRequestAttempt(t *testing.
 	if err != nil {
 		t.Fatalf("open capture store: %v", err)
 	}
+
 	storeClosed := false
 	t.Cleanup(func() {
 		if !storeClosed {
@@ -1404,31 +2098,48 @@ func TestStructuredOutputRetryTransportFailureCapturesRequestAttempt(t *testing.
 	srv.deps.RequestEvents = func(_ context.Context, event adapterruntime.RequestEvent) {
 		stages = append(stages, event.Stage)
 	}
-	resolved, err := adapterresolver.Resolve(adapterresolver.IngressOpenAI, responsesCursorRequest("local-model"), adapterresolver.NewModelRegistryAdapter(srv.modelRegistry()))
+	resolved, err := adapterresolver.Resolve(
+		adapterresolver.IngressOpenAI,
+		responsesCursorRequest("local-model"),
+		adapterresolver.NewModelRegistryAdapter(srv.modelRegistry()),
+	)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	body := []byte(`{"model":"local-model","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"json_object"}}`)
+
+	body := []byte(
+		`{"model":"local-model","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"json_object"}}`,
+	)
 	recorder := httptest.NewRecorder()
-	srv.forwardPassthroughOverride(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil), &resolved, body)
+	srv.forwardPassthroughOverride(
+		recorder,
+		httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil),
+		&resolved,
+		body,
+	)
 	select {
 	case <-retryRequestHandled:
 	case <-time.After(time.Second):
 		t.Fatal("retry upstream handler did not complete within 1s")
 	}
+
 	if err := store.Close(context.Background(), "test"); err != nil {
 		t.Fatalf("close capture store: %v", err)
 	}
+
 	storeClosed = true
 
 	var envelope adapteropenai.ErrorResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
 		t.Fatalf("decode error envelope: %v body=%s", err, recorder.Body.String())
 	}
+
 	if recorder.Code != http.StatusBadRequest || envelope.Error.Type != "invalid_request_error" {
 		t.Fatalf("status=%d envelope=%+v", recorder.Code, envelope)
 	}
-	if len(stages) != 2 || stages[0] != adapterruntime.RequestStageStarted || stages[1] != adapterruntime.RequestStageFailed {
+
+	if len(stages) != 2 || stages[0] != adapterruntime.RequestStageStarted ||
+		stages[1] != adapterruntime.RequestStageFailed {
 		t.Fatalf("lifecycle stages = %v, want started then failed", stages)
 	}
 
@@ -1436,11 +2147,15 @@ func TestStructuredOutputRetryTransportFailureCapturesRequestAttempt(t *testing.
 	if err != nil {
 		t.Fatalf("open capture database: %v", err)
 	}
+
 	t.Cleanup(func() { _ = db.Close() })
-	rows, err := db.Query(`SELECT r.status, r.host, r.method, r.path, r.request_id, r.req_headers, r.resp_headers, r.req_bytes, COALESCE((SELECT length(data) FROM bodies WHERE request_row_id=r.id AND which='response'), 0), b.data FROM requests r LEFT JOIN bodies b ON b.request_row_id=r.id AND b.which='request' WHERE r.client='adapter.passthrough' ORDER BY r.id`)
+	rows, err := db.Query(
+		`SELECT r.status, r.host, r.method, r.path, r.request_id, r.req_headers, r.resp_headers, r.req_bytes, COALESCE((SELECT length(data) FROM bodies WHERE request_row_id=r.id AND which='response'), 0), b.data FROM requests r LEFT JOIN bodies b ON b.request_row_id=r.id AND b.which='request' WHERE r.client='adapter.passthrough' ORDER BY r.id`,
+	)
 	if err != nil {
 		t.Fatalf("query captures: %v", err)
 	}
+
 	defer func() { _ = rows.Close() }()
 	type retryCaptureRow struct {
 		status          int
@@ -1455,25 +2170,47 @@ func TestStructuredOutputRetryTransportFailureCapturesRequestAttempt(t *testing.
 		body            []byte
 	}
 	captures := make([]retryCaptureRow, 0, 2)
+
 	for rows.Next() {
 		var captureRow retryCaptureRow
-		if err := rows.Scan(&captureRow.status, &captureRow.host, &captureRow.method, &captureRow.path, &captureRow.requestID, &captureRow.headers, &captureRow.responseHeaders, &captureRow.requestBytes, &captureRow.responseBytes, &captureRow.body); err != nil {
+		if err := rows.Scan(
+			&captureRow.status,
+			&captureRow.host,
+			&captureRow.method,
+			&captureRow.path,
+			&captureRow.requestID,
+			&captureRow.headers,
+			&captureRow.responseHeaders,
+			&captureRow.requestBytes,
+			&captureRow.responseBytes,
+			&captureRow.body,
+		); err != nil {
 			t.Fatalf("scan capture: %v", err)
 		}
+
 		captures = append(captures, captureRow)
 	}
+
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate captures: %v", err)
 	}
+
 	if requestCount != 2 || len(captures) != 2 {
 		t.Fatalf("requests=%d captures=%d", requestCount, len(captures))
 	}
+
 	retry := captures[1]
-	if retry.status != 0 || retry.method != http.MethodPost || retry.path != "/v1/chat/completions" || retry.host == "" ||
-		retry.requestID == "" || retry.requestID != captures[0].requestID || retry.requestBytes != len(retry.body) ||
-		!bytes.Equal(retry.body, retryRequestBody) || retry.responseBytes != 0 ||
+	if retry.status != 0 || retry.method != http.MethodPost ||
+		retry.path != "/v1/chat/completions" ||
+		retry.host == "" ||
+		retry.requestID == "" ||
+		retry.requestID != captures[0].requestID ||
+		retry.requestBytes != len(retry.body) ||
+		!bytes.Equal(retry.body, retryRequestBody) ||
+		retry.responseBytes != 0 ||
 		(retry.responseHeaders != "" && retry.responseHeaders != "{}") ||
-		!bytes.Contains(retry.body, []byte("respond with ONLY raw JSON")) || strings.Contains(retry.headers, "Bearer") {
+		!bytes.Contains(retry.body, []byte("respond with ONLY raw JSON")) ||
+		strings.Contains(retry.headers, "Bearer") {
 		t.Fatalf("retry capture = %+v", retry)
 	}
 }
@@ -1481,19 +2218,23 @@ func TestStructuredOutputRetryTransportFailureCapturesRequestAttempt(t *testing.
 func TestResponsesPassthroughPrimaryTransportFailureCapturesSafeAttempt(t *testing.T) {
 	requestCount := 0
 	requestHandled := make(chan struct{})
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer close(requestHandled)
-		requestCount++
-		hijacker, ok := w.(http.Hijacker)
-		if !ok {
-			t.Fatal("response writer does not support hijacking")
-		}
-		connection, _, err := hijacker.Hijack()
-		if err != nil {
-			t.Fatalf("hijack primary request: %v", err)
-		}
-		_ = connection.Close()
-	}))
+	upstream := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer close(requestHandled)
+			requestCount++
+			hijacker, ok := w.(http.Hijacker)
+			if !ok {
+				t.Fatal("response writer does not support hijacking")
+			}
+
+			connection, _, err := hijacker.Hijack()
+			if err != nil {
+				t.Fatalf("hijack primary request: %v", err)
+			}
+
+			_ = connection.Close()
+		}),
+	)
 	t.Cleanup(upstream.Close)
 
 	dbPath := filepath.Join(t.TempDir(), "primary-transport-capture.db")
@@ -1501,6 +2242,7 @@ func TestResponsesPassthroughPrimaryTransportFailureCapturesSafeAttempt(t *testi
 	if err != nil {
 		t.Fatalf("open capture store: %v", err)
 	}
+
 	storeClosed := false
 	t.Cleanup(func() {
 		if !storeClosed {
@@ -1509,40 +2251,62 @@ func TestResponsesPassthroughPrimaryTransportFailureCapturesSafeAttempt(t *testi
 	})
 	const userinfoMarker = "url-user-marker"
 	const queryMarker = "url-query-marker"
-	sensitiveBaseURL := strings.Replace(upstream.URL, "http://", "http://"+userinfoMarker+"@", 1) + "/v1?marker=" + queryMarker
+	sensitiveBaseURL := strings.Replace(
+		upstream.URL,
+		"http://",
+		"http://"+userinfoMarker+"@",
+		1,
+	) + "/v1?marker=" + queryMarker
 	var logs bytes.Buffer
 	stages := make([]adapterruntime.RequestEvent, 0, 2)
 	cfg := baseConfig()
 	cfg.Enabled = true
 	cfg.OpenAICompatPassthrough = config.AdapterOpenAICompatPassthrough{BaseURL: sensitiveBaseURL}
-	srv, err := New(context.Background(), cfg, config.LoggingConfig{}, Deps{
-		CaptureStore: store,
-		RequestEvents: func(_ context.Context, event adapterruntime.RequestEvent) {
-			stages = append(stages, event)
+	srv, err := New(
+		context.Background(),
+		cfg,
+		config.LoggingConfig{},
+		Deps{
+			CaptureStore: store,
+			RequestEvents: func(_ context.Context, event adapterruntime.RequestEvent) {
+				stages = append(stages, event)
+			},
 		},
-	}, slog.New(slog.NewJSONHandler(&logs, nil)))
+		slog.New(slog.NewJSONHandler(&logs, nil)),
+	)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
+
 	body := `{"model":"local-model","input":"capture primary transport failure"}`
 	recorder := httptest.NewRecorder()
-	srv.mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body)))
+	srv.mux.ServeHTTP(
+		recorder,
+		httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body)),
+	)
 	select {
 	case <-requestHandled:
 	case <-time.After(time.Second):
 		t.Fatal("upstream handler did not complete within 1s")
 	}
+
 	if err := store.Close(context.Background(), "test"); err != nil {
 		t.Fatalf("close capture store: %v", err)
 	}
+
 	storeClosed = true
 
-	if recorder.Code != http.StatusBadRequest || len(stages) != 2 || stages[1].Stage != adapterruntime.RequestStageFailed {
+	if recorder.Code != http.StatusBadRequest || len(stages) != 2 ||
+		stages[1].Stage != adapterruntime.RequestStageFailed {
 		t.Fatalf("status=%d stages=%v", recorder.Code, stages)
 	}
-	if strings.Contains(recorder.Body.String(), userinfoMarker) || strings.Contains(recorder.Body.String(), queryMarker) ||
-		strings.Contains(logs.String(), userinfoMarker) || strings.Contains(logs.String(), queryMarker) ||
-		strings.Contains(stages[1].Err, userinfoMarker) || strings.Contains(stages[1].Err, queryMarker) {
+
+	if strings.Contains(recorder.Body.String(), userinfoMarker) ||
+		strings.Contains(recorder.Body.String(), queryMarker) ||
+		strings.Contains(logs.String(), userinfoMarker) ||
+		strings.Contains(logs.String(), queryMarker) ||
+		strings.Contains(stages[1].Err, userinfoMarker) ||
+		strings.Contains(stages[1].Err, queryMarker) {
 		t.Fatalf("transport diagnostics leaked configured URL secret")
 	}
 
@@ -1550,6 +2314,7 @@ func TestResponsesPassthroughPrimaryTransportFailureCapturesSafeAttempt(t *testi
 	if err != nil {
 		t.Fatalf("open capture database: %v", err)
 	}
+
 	t.Cleanup(func() { _ = db.Close() })
 	var status int
 	var host string
@@ -1557,24 +2322,44 @@ func TestResponsesPassthroughPrimaryTransportFailureCapturesSafeAttempt(t *testi
 	var requestHeaders string
 	var responseHeaders string
 	var requestBody []byte
-	row := db.QueryRow(`SELECT r.status, r.host, r.path, r.req_headers, r.resp_headers, b.data FROM requests r LEFT JOIN bodies b ON b.request_row_id=r.id AND b.which='request' WHERE r.client='adapter.passthrough'`)
-	if err := row.Scan(&status, &host, &path, &requestHeaders, &responseHeaders, &requestBody); err != nil {
+	row := db.QueryRow(
+		`SELECT r.status, r.host, r.path, r.req_headers, r.resp_headers, b.data FROM requests r LEFT JOIN bodies b ON b.request_row_id=r.id AND b.which='request' WHERE r.client='adapter.passthrough'`,
+	)
+	if err := row.Scan(
+		&status,
+		&host,
+		&path,
+		&requestHeaders,
+		&responseHeaders,
+		&requestBody,
+	); err != nil {
 		t.Fatalf("scan primary capture: %v", err)
 	}
+
 	captureMetadata := host + path + requestHeaders + responseHeaders + string(requestBody)
-	if requestCount != 1 || status != 0 || path != "/v1/responses" || !bytes.Equal(requestBody, []byte(body)) ||
-		strings.Contains(captureMetadata, userinfoMarker) || strings.Contains(captureMetadata, queryMarker) {
-		t.Fatalf("primary capture status=%d host=%q path=%q metadata=%q", status, host, path, captureMetadata)
+	if requestCount != 1 || status != 0 || path != "/v1/responses" ||
+		!bytes.Equal(requestBody, []byte(body)) ||
+		strings.Contains(captureMetadata, userinfoMarker) ||
+		strings.Contains(captureMetadata, queryMarker) {
+		t.Fatalf(
+			"primary capture status=%d host=%q path=%q metadata=%q",
+			status,
+			host,
+			path,
+			captureMetadata,
+		)
 	}
 }
 
 func TestResponsesPassthroughBodyReadFailureCapturesPartialResponse(t *testing.T) {
 	const partialBody = `{"id":"partial"}`
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Content-Length", "128")
-		_, _ = io.WriteString(w, partialBody)
-	}))
+	upstream := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Content-Length", "128")
+			_, _ = io.WriteString(w, partialBody)
+		}),
+	)
 	t.Cleanup(upstream.Close)
 
 	dbPath := filepath.Join(t.TempDir(), "primary-read-capture.db")
@@ -1582,6 +2367,7 @@ func TestResponsesPassthroughBodyReadFailureCapturesPartialResponse(t *testing.T
 	if err != nil {
 		t.Fatalf("open capture store: %v", err)
 	}
+
 	storeClosed := false
 	t.Cleanup(func() {
 		if !storeClosed {
@@ -1591,10 +2377,18 @@ func TestResponsesPassthroughBodyReadFailureCapturesPartialResponse(t *testing.T
 	srv := newPassthroughOverrideTestServer(t, upstream.URL+"/v1")
 	srv.deps.CaptureStore = store
 	recorder := httptest.NewRecorder()
-	srv.mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"local-model","input":"read failure"}`)))
+	srv.mux.ServeHTTP(
+		recorder,
+		httptest.NewRequest(
+			http.MethodPost,
+			"/v1/responses",
+			strings.NewReader(`{"model":"local-model","input":"read failure"}`),
+		),
+	)
 	if err := store.Close(context.Background(), "test"); err != nil {
 		t.Fatalf("close capture store: %v", err)
 	}
+
 	storeClosed = true
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
@@ -1604,33 +2398,47 @@ func TestResponsesPassthroughBodyReadFailureCapturesPartialResponse(t *testing.T
 	if err != nil {
 		t.Fatalf("open capture database: %v", err)
 	}
+
 	t.Cleanup(func() { _ = db.Close() })
 	var status int
 	var responseBytes int
 	var truncated int
 	var capturedBody []byte
-	row := db.QueryRow(`SELECT r.status, r.resp_bytes, b.truncated, b.data FROM requests r JOIN bodies b ON b.request_row_id=r.id AND b.which='response' WHERE r.client='adapter.passthrough'`)
+	row := db.QueryRow(
+		`SELECT r.status, r.resp_bytes, b.truncated, b.data FROM requests r JOIN bodies b ON b.request_row_id=r.id AND b.which='response' WHERE r.client='adapter.passthrough'`,
+	)
 	if err := row.Scan(&status, &responseBytes, &truncated, &capturedBody); err != nil {
 		t.Fatalf("scan partial capture: %v", err)
 	}
-	if status != http.StatusOK || responseBytes != len(partialBody) || truncated != 1 || !bytes.Equal(capturedBody, []byte(partialBody)) {
-		t.Fatalf("partial capture status=%d bytes=%d truncated=%d body=%q", status, responseBytes, truncated, capturedBody)
+
+	if status != http.StatusOK || responseBytes != len(partialBody) || truncated != 1 ||
+		!bytes.Equal(capturedBody, []byte(partialBody)) {
+		t.Fatalf(
+			"partial capture status=%d bytes=%d truncated=%d body=%q",
+			status,
+			responseBytes,
+			truncated,
+			capturedBody,
+		)
 	}
 }
 
 func TestStructuredOutputRetryBodyReadFailureCapturesPartialResponse(t *testing.T) {
 	const partialBody = `{"choices":[`
 	requestCount := 0
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestCount++
-		w.Header().Set("Content-Type", "application/json")
-		if requestCount == 1 {
-			_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"not json"}}]}`)
-			return
-		}
-		w.Header().Set("Content-Length", "128")
-		_, _ = io.WriteString(w, partialBody)
-	}))
+	upstream := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestCount++
+			w.Header().Set("Content-Type", "application/json")
+			if requestCount == 1 {
+				_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"not json"}}]}`)
+				return
+			}
+
+			w.Header().Set("Content-Length", "128")
+			_, _ = io.WriteString(w, partialBody)
+		}),
+	)
 	t.Cleanup(upstream.Close)
 
 	dbPath := filepath.Join(t.TempDir(), "retry-read-capture.db")
@@ -1638,6 +2446,7 @@ func TestStructuredOutputRetryBodyReadFailureCapturesPartialResponse(t *testing.
 	if err != nil {
 		t.Fatalf("open capture store: %v", err)
 	}
+
 	storeClosed := false
 	t.Cleanup(func() {
 		if !storeClosed {
@@ -1646,36 +2455,65 @@ func TestStructuredOutputRetryBodyReadFailureCapturesPartialResponse(t *testing.
 	})
 	srv := newPassthroughOverrideTestServer(t, upstream.URL+"/v1")
 	srv.deps.CaptureStore = store
-	resolved, err := adapterresolver.Resolve(adapterresolver.IngressOpenAI, responsesCursorRequest("local-model"), adapterresolver.NewModelRegistryAdapter(srv.modelRegistry()))
+	resolved, err := adapterresolver.Resolve(
+		adapterresolver.IngressOpenAI,
+		responsesCursorRequest("local-model"),
+		adapterresolver.NewModelRegistryAdapter(srv.modelRegistry()),
+	)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
+
 	recorder := httptest.NewRecorder()
-	body := []byte(`{"model":"local-model","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"json_object"}}`)
-	srv.forwardPassthroughOverride(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil), &resolved, body)
+	body := []byte(
+		`{"model":"local-model","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"json_object"}}`,
+	)
+	srv.forwardPassthroughOverride(
+		recorder,
+		httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil),
+		&resolved,
+		body,
+	)
 	if err := store.Close(context.Background(), "test"); err != nil {
 		t.Fatalf("close capture store: %v", err)
 	}
+
 	storeClosed = true
 	if recorder.Code != http.StatusBadRequest || requestCount != 2 {
-		t.Fatalf("status=%d requests=%d body=%s", recorder.Code, requestCount, recorder.Body.String())
+		t.Fatalf(
+			"status=%d requests=%d body=%s",
+			recorder.Code,
+			requestCount,
+			recorder.Body.String(),
+		)
 	}
 
 	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("open capture database: %v", err)
 	}
+
 	t.Cleanup(func() { _ = db.Close() })
 	var status int
 	var responseBytes int
 	var truncated int
 	var capturedBody []byte
-	row := db.QueryRow(`SELECT r.status, r.resp_bytes, b.truncated, b.data FROM requests r JOIN bodies b ON b.request_row_id=r.id AND b.which='response' WHERE r.client='adapter.passthrough' ORDER BY r.id DESC LIMIT 1`)
+	row := db.QueryRow(
+		`SELECT r.status, r.resp_bytes, b.truncated, b.data FROM requests r JOIN bodies b ON b.request_row_id=r.id AND b.which='response' WHERE r.client='adapter.passthrough' ORDER BY r.id DESC LIMIT 1`,
+	)
 	if err := row.Scan(&status, &responseBytes, &truncated, &capturedBody); err != nil {
 		t.Fatalf("scan retry partial capture: %v", err)
 	}
-	if status != http.StatusOK || responseBytes != len(partialBody) || truncated != 1 || !bytes.Equal(capturedBody, []byte(partialBody)) {
-		t.Fatalf("retry partial capture status=%d bytes=%d truncated=%d body=%q", status, responseBytes, truncated, capturedBody)
+
+	if status != http.StatusOK || responseBytes != len(partialBody) || truncated != 1 ||
+		!bytes.Equal(capturedBody, []byte(partialBody)) {
+		t.Fatalf(
+			"retry partial capture status=%d bytes=%d truncated=%d body=%q",
+			status,
+			responseBytes,
+			truncated,
+			capturedBody,
+		)
 	}
 }
 
@@ -1689,10 +2527,17 @@ func newNamedPassthroughResponsesServer(t *testing.T, baseURL string, wireModel 
 	declaration := cfg.Models["responses-alias"]
 	declaration.WireModel = wireModel
 	cfg.Models["responses-alias"] = declaration
-	srv, err := New(context.Background(), cfg, config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	srv, err := New(
+		context.Background(),
+		cfg,
+		config.LoggingConfig{},
+		Deps{},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+
 	return srv
 }
 

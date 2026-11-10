@@ -45,32 +45,52 @@ func (c *fakeConversationSemanticClient) JobState(_ context.Context, jobID strin
 	if state, found := c.jobStates[jobID]; found {
 		return state, nil
 	}
+
 	return "completed", nil
 }
 
-func (c *fakeConversationSemanticClient) SyncConversationManifest(_ context.Context, collectionID string, manifest []semsearch.Fingerprint) ([]string, error) {
-	c.syncCalls = append(c.syncCalls, semanticSyncCall{
-		CollectionID: collectionID,
-		Manifest:     append([]semsearch.Fingerprint(nil), manifest...),
-	})
+func (c *fakeConversationSemanticClient) SyncConversationManifest(
+	_ context.Context,
+	collectionID string,
+	manifest []semsearch.Fingerprint,
+) ([]string, error) {
+	c.syncCalls = append(
+		c.syncCalls,
+		semanticSyncCall{
+			CollectionID: collectionID,
+			Manifest:     append([]semsearch.Fingerprint(nil), manifest...),
+		},
+	)
+
 	return append([]string(nil), c.needed...), nil
 }
 
-func (c *fakeConversationSemanticClient) UpsertConversationDocuments(_ context.Context, collectionID string, docs []semsearch.SemDoc, manifest []semsearch.Fingerprint) (string, error) {
-	c.upsertCalls = append(c.upsertCalls, semanticUpsertCall{
-		CollectionID: collectionID,
-		Docs:         append([]semsearch.SemDoc(nil), docs...),
-		Manifest:     append([]semsearch.Fingerprint(nil), manifest...),
-	})
+func (c *fakeConversationSemanticClient) UpsertConversationDocuments(
+	_ context.Context,
+	collectionID string,
+	docs []semsearch.SemDoc,
+	manifest []semsearch.Fingerprint,
+) (string, error) {
+	c.upsertCalls = append(
+		c.upsertCalls,
+		semanticUpsertCall{
+			CollectionID: collectionID,
+			Docs:         append([]semsearch.SemDoc(nil), docs...),
+			Manifest:     append([]semsearch.Fingerprint(nil), manifest...),
+		},
+	)
 	if c.upsertErr != nil {
 		return "", c.upsertErr
 	}
+
 	return "upsert-job", nil
 }
 
 // staticSemanticSyncClient adapts one fixed fake client to the per-pass
 // resolver the sync worker calls, for the tests that are not about recovery.
-func staticSemanticSyncClient(client conversationSemanticClient) conversationSemanticClientResolver {
+func staticSemanticSyncClient(
+	client conversationSemanticClient,
+) conversationSemanticClientResolver {
 	return func() conversationSemanticClient {
 		return client
 	}
@@ -88,11 +108,16 @@ type fakeConversationSemanticIndex struct {
 	tally transcript.HarnessStrips
 }
 
-func (idx *fakeConversationSemanticIndex) ListWithStamps(_ context.Context) ([]conversation.StampedRecord, error) {
+func (idx *fakeConversationSemanticIndex) ListWithStamps(
+	_ context.Context,
+) ([]conversation.StampedRecord, error) {
 	return append([]conversation.StampedRecord(nil), idx.records...), nil
 }
 
-func (idx *fakeConversationSemanticIndex) LoadMessagesWithOptions(record conversation.Record, opts conversation.LoadOptions) ([]transcript.Message, error) {
+func (idx *fakeConversationSemanticIndex) LoadMessagesWithOptions(
+	record conversation.Record,
+	opts conversation.LoadOptions,
+) ([]transcript.Message, error) {
 	idx.loadMu.Lock()
 	idx.loadOptions = append(idx.loadOptions, opts)
 	idx.loadMu.Unlock()
@@ -100,10 +125,12 @@ func (idx *fakeConversationSemanticIndex) LoadMessagesWithOptions(record convers
 		opts.HarnessTally.Injected += idx.tally.Injected
 		opts.HarnessTally.System += idx.tally.System
 	}
+
 	messages, ok := idx.messagesByID[record.ID]
 	if !ok {
 		return nil, fmt.Errorf("messages for %s not found", record.ID)
 	}
+
 	return append([]transcript.Message(nil), messages...), nil
 }
 
@@ -113,7 +140,9 @@ func (idx *fakeConversationSemanticIndex) LoadMessagesWithOptions(record convers
 func TestConversationSemanticSyncCarriesToolStructureIntoDocs(t *testing.T) {
 	conversationID := "codex:tools"
 	index := &fakeConversationSemanticIndex{
-		records: []conversation.StampedRecord{{Record: semanticTestRecord(conversationID), Stamp: semanticTestStamp(50, 500)}},
+		records: []conversation.StampedRecord{
+			{Record: semanticTestRecord(conversationID), Stamp: semanticTestStamp(50, 500)},
+		},
 		messagesByID: map[string][]transcript.Message{
 			conversationID: {
 				{
@@ -124,18 +153,22 @@ func TestConversationSemanticSyncCarriesToolStructureIntoDocs(t *testing.T) {
 					HasTools:  true,
 					Tools: []transcript.ToolCall{
 						{
-							ID:          "tool-1",
-							Name:        "shell",
-							Input:       transcript.ToolInputJSON{Raw: json.RawMessage(`{"cmd":"date"}`)},
+							ID:   "tool-1",
+							Name: "shell",
+							Input: transcript.ToolInputJSON{
+								Raw: json.RawMessage(`{"cmd":"date"}`),
+							},
 							Display:     "date",
 							DisplayLang: "bash",
 							Output:      "Mon Jul 6",
 							IsError:     true,
 						},
 						{
-							ID:          "tool-2",
-							Name:        "file reader",
-							Input:       transcript.ToolInputJSON{Raw: json.RawMessage(`{"file_path":"/repo/main.go"}`)},
+							ID:   "tool-2",
+							Name: "file reader",
+							Input: transcript.ToolInputJSON{
+								Raw: json.RawMessage(`{"file_path":"/repo/main.go"}`),
+							},
 							Display:     "main.go",
 							DisplayLang: "",
 							Output:      "",
@@ -148,7 +181,13 @@ func TestConversationSemanticSyncCarriesToolStructureIntoDocs(t *testing.T) {
 		loadOptions: nil,
 	}
 	client := &fakeConversationSemanticClient{needed: []string{conversationID}}
-	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentKinds())
+	worker := newConversationSemanticSyncWorker(
+		index,
+		staticSemanticSyncClient(client),
+		"collection-test",
+		semanticTestLogger(),
+		semanticTestContentKinds(),
+	)
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("runPass returned error: %v", err)
@@ -157,37 +196,61 @@ func TestConversationSemanticSyncCarriesToolStructureIntoDocs(t *testing.T) {
 	if len(index.loadOptions) != 1 {
 		t.Fatalf("load options calls = %d, want 1", len(index.loadOptions))
 	}
+
 	if index.loadOptions[0].IncludeToolOutputs {
-		t.Fatalf("IncludeToolOutputs = true, want false; tool_output is not a default indexed class")
+		t.Fatalf(
+			"IncludeToolOutputs = true, want false; tool_output is not a default indexed class",
+		)
 	}
+
 	if len(client.upsertCalls) != 1 || len(client.upsertCalls[0].Docs) != 1 {
 		t.Fatalf("upsert calls = %+v", client.upsertCalls)
 	}
+
 	doc := client.upsertCalls[0].Docs[0]
 	if doc.Text != "prose only" {
 		t.Fatalf("doc text = %q, want prose only", doc.Text)
 	}
+
 	if doc.Thinking != "" {
-		t.Fatalf("doc thinking = %q, want empty; reasoning is not a default indexed class", doc.Thinking)
+		t.Fatalf(
+			"doc thinking = %q, want empty; reasoning is not a default indexed class",
+			doc.Thinking,
+		)
 	}
+
 	if len(doc.Tools) != 2 {
 		t.Fatalf("doc tools = %d, want 2", len(doc.Tools))
 	}
+
 	shell := doc.Tools[0]
-	if shell.Name != "shell" || shell.Display != "date" || shell.LangHint != "bash" || !shell.IsError {
+	if shell.Name != "shell" || shell.Display != "date" || shell.LangHint != "bash" ||
+		!shell.IsError {
 		t.Fatalf("shell = %+v, want display text, bash hint, and error flag", shell)
 	}
+
 	fileRead := doc.Tools[1]
 	if fileRead.Name != "file reader" || fileRead.Display != "main.go" || fileRead.LangHint != "" {
 		t.Fatalf("file read = %+v, want display text and no language hint", fileRead)
 	}
-	for _, value := range []string{fileRead.Name, fileRead.Display, fileRead.LangHint, fileRead.Output} {
+
+	for _, value := range []string{
+		fileRead.Name,
+		fileRead.Display,
+		fileRead.LangHint,
+		fileRead.Output,
+	} {
 		if strings.Contains(value, "file_path") {
 			t.Fatalf("projected field = %q contains raw input key", value)
 		}
 	}
+
 	if shell.Output != "" || fileRead.Output != "" {
-		t.Fatalf("tool outputs = %q, %q, want empty; tool_output is not a default indexed class", shell.Output, fileRead.Output)
+		t.Fatalf(
+			"tool outputs = %q, %q, want empty; tool_output is not a default indexed class",
+			shell.Output,
+			fileRead.Output,
+		)
 	}
 }
 
@@ -211,7 +274,13 @@ func TestConversationSemanticSyncSendsNeededConversations(t *testing.T) {
 		loadOptions: nil,
 	}
 	client := &fakeConversationSemanticClient{needed: []string{conversationID}}
-	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentKinds())
+	worker := newConversationSemanticSyncWorker(
+		index,
+		staticSemanticSyncClient(client),
+		"collection-test",
+		semanticTestLogger(),
+		semanticTestContentKinds(),
+	)
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("runPass returned error: %v", err)
@@ -220,13 +289,16 @@ func TestConversationSemanticSyncSendsNeededConversations(t *testing.T) {
 	if len(client.syncCalls) != 1 {
 		t.Fatalf("sync calls = %d, want 1", len(client.syncCalls))
 	}
+
 	manifest := client.syncCalls[0].Manifest
 	if len(manifest) != 1 {
 		t.Fatalf("manifest size = %d, want 1", len(manifest))
 	}
+
 	if manifest[0].ConversationID != conversationID {
 		t.Fatalf("manifest id = %q, want %q", manifest[0].ConversationID, conversationID)
 	}
+
 	if manifest[0].Value != newStamp.Fingerprint() {
 		t.Fatalf("manifest fingerprint = %q, want %q", manifest[0].Value, newStamp.Fingerprint())
 	}
@@ -234,31 +306,46 @@ func TestConversationSemanticSyncSendsNeededConversations(t *testing.T) {
 	if len(client.upsertCalls) != 1 {
 		t.Fatalf("upsert calls = %d, want 1", len(client.upsertCalls))
 	}
+
 	call := client.upsertCalls[0]
 	if call.CollectionID != "collection-test" {
 		t.Fatalf("collection id = %q, want collection-test", call.CollectionID)
 	}
+
 	if len(call.Manifest) != 1 {
 		t.Fatalf("upsert manifest size = %d, want 1", len(call.Manifest))
 	}
+
 	if len(call.Docs) != 2 {
 		t.Fatalf("upsert docs = %d, want 2", len(call.Docs))
 	}
+
 	if call.Docs[0].MessageIndex != 0 || call.Docs[1].MessageIndex != 1 {
-		t.Fatalf("message indices = %d, %d; want 0, 1", call.Docs[0].MessageIndex, call.Docs[1].MessageIndex)
+		t.Fatalf(
+			"message indices = %d, %d; want 0, 1",
+			call.Docs[0].MessageIndex,
+			call.Docs[1].MessageIndex,
+		)
 	}
+
 	if call.Docs[0].Role != "user" || call.Docs[1].Role != "assistant" {
 		t.Fatalf("roles = %q, %q; want user, assistant", call.Docs[0].Role, call.Docs[1].Role)
 	}
+
 	if call.Docs[0].Text != "first" || call.Docs[1].Text != "second" {
 		t.Fatalf("texts = %q, %q; want first, second", call.Docs[0].Text, call.Docs[1].Text)
 	}
+
 	if len(index.loadOptions) != 1 {
 		t.Fatalf("load options calls = %d, want 1", len(index.loadOptions))
 	}
+
 	opts := index.loadOptions[0]
 	if opts.IncludeSystemPrompts || opts.IncludeSystemMessages || opts.IncludeToolOutputs {
-		t.Fatalf("load options = %+v, want every opt-in class off under the default content policy", opts)
+		t.Fatalf(
+			"load options = %+v, want every opt-in class off under the default content policy",
+			opts,
+		)
 	}
 }
 
@@ -269,12 +356,20 @@ func TestConversationSemanticSyncSendsNothingWhenEngineNeedsNothing(t *testing.T
 	conversationID := "codex:stable"
 	stamp := semanticTestStamp(30, 300)
 	index := &fakeConversationSemanticIndex{
-		records:      []conversation.StampedRecord{{Record: semanticTestRecord(conversationID), Stamp: stamp}},
+		records: []conversation.StampedRecord{
+			{Record: semanticTestRecord(conversationID), Stamp: stamp},
+		},
 		messagesByID: map[string][]transcript.Message{},
 		loadOptions:  nil,
 	}
 	client := &fakeConversationSemanticClient{needed: nil}
-	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentKinds())
+	worker := newConversationSemanticSyncWorker(
+		index,
+		staticSemanticSyncClient(client),
+		"collection-test",
+		semanticTestLogger(),
+		semanticTestContentKinds(),
+	)
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("runPass returned error: %v", err)
@@ -283,9 +378,11 @@ func TestConversationSemanticSyncSendsNothingWhenEngineNeedsNothing(t *testing.T
 	if len(client.syncCalls) != 1 {
 		t.Fatalf("sync calls = %d, want 1", len(client.syncCalls))
 	}
+
 	if len(client.upsertCalls) != 0 {
 		t.Fatalf("upsert calls = %d, want 0", len(client.upsertCalls))
 	}
+
 	if len(index.loadOptions) != 0 {
 		t.Fatalf("load calls = %d, want 0", len(index.loadOptions))
 	}
@@ -299,12 +396,20 @@ func TestConversationSemanticSyncManifestReflectsCurrentRecordsOnly(t *testing.T
 	presentID := "codex:present"
 	presentStamp := semanticTestStamp(40, 400)
 	index := &fakeConversationSemanticIndex{
-		records:      []conversation.StampedRecord{{Record: semanticTestRecord(presentID), Stamp: presentStamp}},
+		records: []conversation.StampedRecord{
+			{Record: semanticTestRecord(presentID), Stamp: presentStamp},
+		},
 		messagesByID: map[string][]transcript.Message{},
 		loadOptions:  nil,
 	}
 	client := &fakeConversationSemanticClient{needed: nil}
-	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentKinds())
+	worker := newConversationSemanticSyncWorker(
+		index,
+		staticSemanticSyncClient(client),
+		"collection-test",
+		semanticTestLogger(),
+		semanticTestContentKinds(),
+	)
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("runPass returned error: %v", err)
@@ -313,6 +418,7 @@ func TestConversationSemanticSyncManifestReflectsCurrentRecordsOnly(t *testing.T
 	if len(client.syncCalls) != 1 {
 		t.Fatalf("sync calls = %d, want 1", len(client.syncCalls))
 	}
+
 	manifest := client.syncCalls[0].Manifest
 	if len(manifest) != 1 || manifest[0].ConversationID != presentID {
 		t.Fatalf("manifest = %+v, want only %q", manifest, presentID)
@@ -342,7 +448,13 @@ func TestConversationSemanticSyncBatchesNeededConversations(t *testing.T) {
 		loadOptions: nil,
 	}
 	client := &fakeConversationSemanticClient{needed: []string{firstID, secondID}}
-	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentKinds())
+	worker := newConversationSemanticSyncWorker(
+		index,
+		staticSemanticSyncClient(client),
+		"collection-test",
+		semanticTestLogger(),
+		semanticTestContentKinds(),
+	)
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("runPass returned error: %v", err)
@@ -351,19 +463,29 @@ func TestConversationSemanticSyncBatchesNeededConversations(t *testing.T) {
 	if len(client.upsertCalls) != 1 {
 		t.Fatalf("upsert calls = %d, want 1 (single batched call)", len(client.upsertCalls))
 	}
+
 	call := client.upsertCalls[0]
 	if len(call.Docs) != 3 {
 		t.Fatalf("batched docs = %d, want 3 across both conversations", len(call.Docs))
 	}
+
 	if len(call.Manifest) != 2 {
 		t.Fatalf("upsert manifest size = %d, want 2", len(call.Manifest))
 	}
+
 	docConversationIDs := map[string]int{}
+
 	for _, doc := range call.Docs {
 		docConversationIDs[doc.ConversationID]++
 	}
+
 	if docConversationIDs[firstID] != 1 || docConversationIDs[secondID] != 2 {
-		t.Fatalf("docs per conversation = %v, want %s:1 %s:2", docConversationIDs, firstID, secondID)
+		t.Fatalf(
+			"docs per conversation = %v, want %s:1 %s:2",
+			docConversationIDs,
+			firstID,
+			secondID,
+		)
 	}
 }
 
@@ -373,7 +495,9 @@ func TestConversationSemanticSyncBatchesNeededConversations(t *testing.T) {
 func TestConversationSemanticSyncEngineBusyIsBenign(t *testing.T) {
 	conversationID := "codex:one"
 	index := &fakeConversationSemanticIndex{
-		records: []conversation.StampedRecord{{Record: semanticTestRecord(conversationID), Stamp: semanticTestStamp(20, 200)}},
+		records: []conversation.StampedRecord{
+			{Record: semanticTestRecord(conversationID), Stamp: semanticTestStamp(20, 200)},
+		},
 		messagesByID: map[string][]transcript.Message{
 			conversationID: {
 				{Role: "user", Timestamp: time.Unix(1710000000, 0), Text: "first"},
@@ -382,14 +506,23 @@ func TestConversationSemanticSyncEngineBusyIsBenign(t *testing.T) {
 		loadOptions: nil,
 	}
 	client := &fakeConversationSemanticClient{
-		needed:    []string{conversationID},
-		upsertErr: errors.New(`upsert semantic conversation documents for collection "collection-test": conflicting active job j1 for conversation collection chat:///collection-test`),
+		needed: []string{conversationID},
+		upsertErr: errors.New(
+			`upsert semantic conversation documents for collection "collection-test": conflicting active job j1 for conversation collection chat:///collection-test`,
+		),
 	}
-	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentKinds())
+	worker := newConversationSemanticSyncWorker(
+		index,
+		staticSemanticSyncClient(client),
+		"collection-test",
+		semanticTestLogger(),
+		semanticTestContentKinds(),
+	)
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("runPass returned error on a busy engine, want nil: %v", err)
 	}
+
 	if len(client.upsertCalls) != 1 {
 		t.Fatalf("upsert attempts = %d, want 1", len(client.upsertCalls))
 	}
@@ -409,6 +542,7 @@ func TestConversationSemanticSyncCarriesForkParentIntoDocs(t *testing.T) {
 	if !ok || wantParentID == "" {
 		t.Fatalf("expected resolvable fork parent id, got (%q, %v)", wantParentID, ok)
 	}
+
 	index := &fakeConversationSemanticIndex{
 		records: []conversation.StampedRecord{{Record: record, Stamp: stamp}},
 		messagesByID: map[string][]transcript.Message{
@@ -420,7 +554,13 @@ func TestConversationSemanticSyncCarriesForkParentIntoDocs(t *testing.T) {
 		loadOptions: nil,
 	}
 	client := &fakeConversationSemanticClient{needed: []string{conversationID}}
-	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentKinds())
+	worker := newConversationSemanticSyncWorker(
+		index,
+		staticSemanticSyncClient(client),
+		"collection-test",
+		semanticTestLogger(),
+		semanticTestContentKinds(),
+	)
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("runPass returned error: %v", err)
@@ -429,13 +569,20 @@ func TestConversationSemanticSyncCarriesForkParentIntoDocs(t *testing.T) {
 	if len(client.upsertCalls) != 1 {
 		t.Fatalf("upsert calls = %d, want 1", len(client.upsertCalls))
 	}
+
 	docs := client.upsertCalls[0].Docs
 	if len(docs) != 2 {
 		t.Fatalf("upsert docs = %d, want 2", len(docs))
 	}
+
 	for index, doc := range docs {
 		if doc.ParentConversationID != wantParentID {
-			t.Fatalf("doc[%d] ParentConversationID = %q, want %q", index, doc.ParentConversationID, wantParentID)
+			t.Fatalf(
+				"doc[%d] ParentConversationID = %q, want %q",
+				index,
+				doc.ParentConversationID,
+				wantParentID,
+			)
 		}
 	}
 }
@@ -447,6 +594,7 @@ func TestConversationSemanticSyncLeavesParentEmptyWithoutLineage(t *testing.T) {
 	if _, ok := conversation.ParentConversationID(record); ok {
 		t.Fatalf("expected no resolvable parent for record without lineage")
 	}
+
 	index := &fakeConversationSemanticIndex{
 		records: []conversation.StampedRecord{{Record: record, Stamp: stamp}},
 		messagesByID: map[string][]transcript.Message{
@@ -457,7 +605,13 @@ func TestConversationSemanticSyncLeavesParentEmptyWithoutLineage(t *testing.T) {
 		loadOptions: nil,
 	}
 	client := &fakeConversationSemanticClient{needed: []string{conversationID}}
-	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentKinds())
+	worker := newConversationSemanticSyncWorker(
+		index,
+		staticSemanticSyncClient(client),
+		"collection-test",
+		semanticTestLogger(),
+		semanticTestContentKinds(),
+	)
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("runPass returned error: %v", err)
@@ -466,10 +620,12 @@ func TestConversationSemanticSyncLeavesParentEmptyWithoutLineage(t *testing.T) {
 	if len(client.upsertCalls) != 1 {
 		t.Fatalf("upsert calls = %d, want 1", len(client.upsertCalls))
 	}
+
 	docs := client.upsertCalls[0].Docs
 	if len(docs) != 1 {
 		t.Fatalf("upsert docs = %d, want 1", len(docs))
 	}
+
 	if docs[0].ParentConversationID != "" {
 		t.Fatalf("doc ParentConversationID = %q, want empty", docs[0].ParentConversationID)
 	}
@@ -482,7 +638,12 @@ func TestConversationSemanticSyncCarriesZedWorkspaceAndArchivedFlags(t *testing.
 	record.WorkspaceRoot = "/repo/zed"
 	record.Archived = true
 	index := &fakeConversationSemanticIndex{
-		records: []conversation.StampedRecord{{Record: record, Stamp: semanticTestStamp(22, 220)}},
+		records: []conversation.StampedRecord{
+			{
+				Record: record,
+				Stamp:  semanticTestStamp(22, 220),
+			},
+		},
 		messagesByID: map[string][]transcript.Message{
 			conversationID: {
 				{Role: "user", Timestamp: time.Unix(1710001000, 0), Text: "zed text"},
@@ -491,14 +652,22 @@ func TestConversationSemanticSyncCarriesZedWorkspaceAndArchivedFlags(t *testing.
 		loadOptions: nil,
 	}
 	client := &fakeConversationSemanticClient{needed: []string{conversationID}}
-	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentKinds())
+	worker := newConversationSemanticSyncWorker(
+		index,
+		staticSemanticSyncClient(client),
+		"collection-test",
+		semanticTestLogger(),
+		semanticTestContentKinds(),
+	)
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("runPass returned error: %v", err)
 	}
+
 	if len(client.upsertCalls) != 1 || len(client.upsertCalls[0].Docs) != 1 {
 		t.Fatalf("upsert calls = %+v", client.upsertCalls)
 	}
+
 	doc := client.upsertCalls[0].Docs[0]
 	if doc.ConversationID != conversationID || doc.WorkspaceRoot != "/repo/zed" || !doc.Archived {
 		t.Fatalf("doc = %+v", doc)
@@ -542,6 +711,7 @@ func semanticTestContentKinds() conversation.ContentKindSet {
 	if err != nil {
 		panic(err)
 	}
+
 	return kinds
 }
 
@@ -550,16 +720,21 @@ func semanticTestContentKinds() conversation.ContentKindSet {
 // whose text length the test controls.
 func semanticTestIndexWithTexts(textsByID map[string]string) *fakeConversationSemanticIndex {
 	records := make([]conversation.StampedRecord, 0, len(textsByID))
+
 	messagesByID := make(map[string][]transcript.Message, len(textsByID))
 	for conversationID, text := range textsByID {
-		records = append(records, conversation.StampedRecord{
-			Record: semanticTestRecord(conversationID),
-			Stamp:  semanticTestStamp(int64(len(text)), 200),
-		})
+		records = append(
+			records,
+			conversation.StampedRecord{
+				Record: semanticTestRecord(conversationID),
+				Stamp:  semanticTestStamp(int64(len(text)), 200),
+			},
+		)
 		messagesByID[conversationID] = []transcript.Message{
 			{Role: "user", Timestamp: time.Unix(1710000000, 0), Text: text},
 		}
 	}
+
 	return &fakeConversationSemanticIndex{
 		records:      records,
 		messagesByID: messagesByID,
@@ -576,7 +751,13 @@ func TestConversationSemanticSyncSharesBatchForSmallConversations(t *testing.T) 
 		secondID: "0123456789",
 	})
 	client := &fakeConversationSemanticClient{needed: []string{firstID, secondID}}
-	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentKinds())
+	worker := newConversationSemanticSyncWorker(
+		index,
+		staticSemanticSyncClient(client),
+		"collection-test",
+		semanticTestLogger(),
+		semanticTestContentKinds(),
+	)
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("runPass returned error: %v", err)
@@ -585,11 +766,14 @@ func TestConversationSemanticSyncSharesBatchForSmallConversations(t *testing.T) 
 	if len(client.upsertCalls) != 1 {
 		t.Fatalf("upsert calls = %d, want 1 (single streamed upsert)", len(client.upsertCalls))
 	}
+
 	docs := client.upsertCalls[0].Docs
 	deliveredIDs := map[string]bool{}
+
 	for _, doc := range docs {
 		deliveredIDs[doc.ConversationID] = true
 	}
+
 	if !deliveredIDs[firstID] || !deliveredIDs[secondID] {
 		t.Fatalf("delivered docs = %+v, want both %s and %s in one stream", docs, firstID, secondID)
 	}
@@ -598,32 +782,59 @@ func TestConversationSemanticSyncSharesBatchForSmallConversations(t *testing.T) 
 func TestConversationSemanticSyncSubmitsBeforePreparingNextBatch(t *testing.T) {
 	const artifactBytes = 5 << 20
 	ids := []string{"codex:aaa", "codex:bbb", "codex:ccc"}
-	index := semanticTestIndexWithTexts(map[string]string{ids[0]: "first", ids[1]: "second", ids[2]: "third"})
+
+	index := semanticTestIndexWithTexts(map[string]string{
+		ids[0]: "first",
+		ids[1]: "second",
+		ids[2]: "third",
+	})
 	for i := range index.records {
 		index.records[i].Stamp.Size = artifactBytes
 	}
-	client := &fakeConversationSemanticClient{needed: ids, jobStates: map[string]string{"upsert-job": "running"}}
-	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentKinds())
+
+	client := &fakeConversationSemanticClient{
+		needed:    ids,
+		jobStates: map[string]string{"upsert-job": "running"},
+	}
+	worker := newConversationSemanticSyncWorker(
+		index,
+		staticSemanticSyncClient(client),
+		"collection-test",
+		semanticTestLogger(),
+		semanticTestContentKinds(),
+	)
+
 	for batch := range ids {
 		client.needed = ids[batch:]
 		client.jobStates["upsert-job"] = "completed"
 		if err := worker.runPass(context.Background()); err != nil {
 			t.Fatal(err)
 		}
+
 		if len(index.loadOptions) != batch+1 {
-			t.Fatalf("batch %d loaded %d conversations before submission, want %d", batch, len(index.loadOptions), batch+1)
+			t.Fatalf(
+				"batch %d loaded %d conversations before submission, want %d",
+				batch,
+				len(index.loadOptions),
+				batch+1,
+			)
 		}
+
 		if len(client.upsertCalls) != batch+1 {
 			t.Fatalf("upserts = %d, want %d", len(client.upsertCalls), batch+1)
 		}
+
 		call := client.upsertCalls[batch]
-		if len(call.Docs) != 1 || call.Docs[0].ConversationID != ids[batch] || len(call.Manifest) != len(ids) {
+		if len(call.Docs) != 1 || call.Docs[0].ConversationID != ids[batch] ||
+			len(call.Manifest) != len(ids) {
 			t.Fatalf("batch %d = %+v", batch, call)
 		}
+
 		client.jobStates["upsert-job"] = "running"
 		if err := worker.runPass(context.Background()); err != nil {
 			t.Fatal(err)
 		}
+
 		if len(index.loadOptions) != batch+1 || len(client.syncCalls) != batch+1 {
 			t.Fatal("active job allowed preparation or manifest work")
 		}
@@ -632,34 +843,64 @@ func TestConversationSemanticSyncSubmitsBeforePreparingNextBatch(t *testing.T) {
 
 func TestConversationSemanticSyncIsolatesLargeConversation(t *testing.T) {
 	ids := []string{"codex:aaa", "codex:bbb", "codex:ccc"}
-	index := semanticTestIndexWithTexts(map[string]string{ids[0]: "first", ids[1]: "large", ids[2]: "last"})
+
+	index := semanticTestIndexWithTexts(map[string]string{
+		ids[0]: "first",
+		ids[1]: "large",
+		ids[2]: "last",
+	})
 	for i := range index.records {
 		if index.records[i].Record.ID == ids[1] {
 			index.records[i].Stamp.Size = 12 << 20
 		}
 	}
+
 	index.messagesByID[ids[1]] = nil
+
 	for i := range 20 {
-		index.messagesByID[ids[1]] = append(index.messagesByID[ids[1]], transcript.Message{
-			Role: "assistant", Text: strings.Repeat("text ", 100000), Timestamp: time.Unix(int64(i), 0),
-		})
+		index.messagesByID[ids[1]] = append(
+			index.messagesByID[ids[1]],
+			transcript.Message{
+				Role:      "assistant",
+				Text:      strings.Repeat("text ", 100000),
+				Timestamp: time.Unix(int64(i), 0),
+			},
+		)
 	}
+
 	client := &fakeConversationSemanticClient{needed: ids}
-	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentKinds())
+	worker := newConversationSemanticSyncWorker(
+		index,
+		staticSemanticSyncClient(client),
+		"collection-test",
+		semanticTestLogger(),
+		semanticTestContentKinds(),
+	)
+
 	for batch := range ids {
 		client.needed = ids[batch:]
 		if err := worker.runPass(context.Background()); err != nil {
 			t.Fatal(err)
 		}
+
 		if len(client.upsertCalls) != batch+1 || len(index.loadOptions) != batch+1 {
-			t.Fatalf("batch %d: upserts=%d loads=%d, want %d each", batch, len(client.upsertCalls), len(index.loadOptions), batch+1)
+			t.Fatalf(
+				"batch %d: upserts=%d loads=%d, want %d each",
+				batch,
+				len(client.upsertCalls),
+				len(index.loadOptions),
+				batch+1,
+			)
 		}
+
 		call := client.upsertCalls[batch]
 		if len(call.Docs) != len(index.messagesByID[ids[batch]]) {
 			t.Fatalf("batch %d delivered %d messages", batch, len(call.Docs))
 		}
+
 		for i, doc := range call.Docs {
-			if doc.ConversationID != ids[batch] || doc.MessageIndex != int32(i) || doc.Text != index.messagesByID[ids[batch]][i].Text {
+			if doc.ConversationID != ids[batch] || doc.MessageIndex != int32(i) ||
+				doc.Text != index.messagesByID[ids[batch]][i].Text {
 				t.Fatalf("batch %d changed message %d", batch, i)
 			}
 		}
@@ -677,32 +918,50 @@ func TestConversationSemanticSyncSkipsPassWhileEngineJobRuns(t *testing.T) {
 		needed:    []string{conversationID},
 		jobStates: map[string]string{"upsert-job": "running"},
 	}
-	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentKinds())
+	worker := newConversationSemanticSyncWorker(
+		index,
+		staticSemanticSyncClient(client),
+		"collection-test",
+		semanticTestLogger(),
+		semanticTestContentKinds(),
+	)
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("first runPass returned error: %v", err)
 	}
+
 	if len(client.upsertCalls) != 1 {
 		t.Fatalf("upsert calls after first pass = %d, want 1", len(client.upsertCalls))
 	}
+
 	loadsAfterFirstPass := len(index.loadOptions)
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("second runPass returned error: %v", err)
 	}
+
 	if len(client.syncCalls) != 1 {
 		t.Fatalf("sync calls after busy pass = %d, want 1 (pass skipped)", len(client.syncCalls))
 	}
+
 	if len(index.loadOptions) != loadsAfterFirstPass {
-		t.Fatalf("transcript loads after busy pass = %d, want unchanged %d", len(index.loadOptions), loadsAfterFirstPass)
+		t.Fatalf(
+			"transcript loads after busy pass = %d, want unchanged %d",
+			len(index.loadOptions),
+			loadsAfterFirstPass,
+		)
 	}
 
 	client.jobStates["upsert-job"] = "completed"
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("third runPass returned error: %v", err)
 	}
+
 	if len(client.syncCalls) != 2 {
-		t.Fatalf("sync calls after job completion = %d, want 2 (pass resumed)", len(client.syncCalls))
+		t.Fatalf(
+			"sync calls after job completion = %d, want 2 (pass resumed)",
+			len(client.syncCalls),
+		)
 	}
 }
 
@@ -715,25 +974,38 @@ func TestConversationSemanticSyncDefersActivelyGrowingConversation(t *testing.T)
 	conversationID := "codex:active"
 	fixedNow := time.Unix(1710000600, 0)
 	index := &fakeConversationSemanticIndex{
-		records: []conversation.StampedRecord{{
-			Record: semanticTestRecord(conversationID),
-			Stamp:  conversation.FileStamp{Size: 10, Mtime: fixedNow.Add(-2 * time.Second)},
-		}},
+		records: []conversation.StampedRecord{
+			{
+				Record: semanticTestRecord(conversationID),
+				Stamp:  conversation.FileStamp{Size: 10, Mtime: fixedNow.Add(-2 * time.Second)},
+			},
+		},
 		messagesByID: map[string][]transcript.Message{
 			conversationID: {{Role: "user", Timestamp: time.Unix(1710000000, 0), Text: "growing"}},
 		},
 		loadOptions: nil,
 	}
 	client := &fakeConversationSemanticClient{needed: []string{conversationID}}
-	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentKinds())
+	worker := newConversationSemanticSyncWorker(
+		index,
+		staticSemanticSyncClient(client),
+		"collection-test",
+		semanticTestLogger(),
+		semanticTestContentKinds(),
+	)
 	worker.now = func() time.Time { return fixedNow }
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("runPass returned error: %v", err)
 	}
+
 	if len(client.upsertCalls) != 0 {
-		t.Fatalf("upsert calls = %d, want 0 (active conversation deferred)", len(client.upsertCalls))
+		t.Fatalf(
+			"upsert calls = %d, want 0 (active conversation deferred)",
+			len(client.upsertCalls),
+		)
 	}
+
 	if len(index.loadOptions) != 0 {
 		t.Fatalf("transcript loads = %d, want 0 (deferred before load)", len(index.loadOptions))
 	}
@@ -743,6 +1015,7 @@ func TestConversationSemanticSyncDefersActivelyGrowingConversation(t *testing.T)
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("second runPass returned error: %v", err)
 	}
+
 	if len(client.upsertCalls) != 1 {
 		t.Fatalf("upsert calls after quiet interval = %d, want 1", len(client.upsertCalls))
 	}
@@ -758,7 +1031,13 @@ func TestConversationSemanticSyncDeliversEveryNeededConversation(t *testing.T) {
 		"codex:c": "text-c",
 	})
 	client := &fakeConversationSemanticClient{needed: []string{"codex:a", "codex:b", "codex:c"}}
-	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentKinds())
+	worker := newConversationSemanticSyncWorker(
+		index,
+		staticSemanticSyncClient(client),
+		"collection-test",
+		semanticTestLogger(),
+		semanticTestContentKinds(),
+	)
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("runPass returned error: %v", err)
@@ -767,15 +1046,19 @@ func TestConversationSemanticSyncDeliversEveryNeededConversation(t *testing.T) {
 	if len(client.upsertCalls) != 1 {
 		t.Fatalf("upsert calls = %d, want 1 (all needed in one stream)", len(client.upsertCalls))
 	}
+
 	deliveredIDs := map[string]bool{}
+
 	for _, doc := range client.upsertCalls[0].Docs {
 		deliveredIDs[doc.ConversationID] = true
 	}
+
 	for _, wantID := range []string{"codex:a", "codex:b", "codex:c"} {
 		if !deliveredIDs[wantID] {
 			t.Fatalf("delivered ids = %v, missing %s", deliveredIDs, wantID)
 		}
 	}
+
 	if worker.deliveryCursor != "codex:c" {
 		t.Fatalf("delivery cursor = %q, want codex:c (last delivered)", worker.deliveryCursor)
 	}
@@ -802,17 +1085,32 @@ func TestConversationSemanticSyncOmitsZeroDocumentConversation(t *testing.T) {
 		loadOptions: nil,
 	}
 	client := &fakeConversationSemanticClient{needed: []string{emptyID, realID}}
-	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentKinds())
+	worker := newConversationSemanticSyncWorker(
+		index,
+		staticSemanticSyncClient(client),
+		"collection-test",
+		semanticTestLogger(),
+		semanticTestContentKinds(),
+	)
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("first runPass returned error: %v", err)
 	}
+
 	if len(client.syncCalls[0].Manifest) != 2 {
-		t.Fatalf("first manifest size = %d, want 2 (both conversations advertised)", len(client.syncCalls[0].Manifest))
+		t.Fatalf(
+			"first manifest size = %d, want 2 (both conversations advertised)",
+			len(client.syncCalls[0].Manifest),
+		)
 	}
+
 	if len(client.upsertCalls) != 1 {
-		t.Fatalf("upsert calls = %d, want 1 (only the real conversation delivers)", len(client.upsertCalls))
+		t.Fatalf(
+			"upsert calls = %d, want 1 (only the real conversation delivers)",
+			len(client.upsertCalls),
+		)
 	}
+
 	for _, doc := range client.upsertCalls[0].Docs {
 		if doc.ConversationID == emptyID {
 			t.Fatalf("zero-document conversation was delivered: %+v", doc)
@@ -822,12 +1120,18 @@ func TestConversationSemanticSyncOmitsZeroDocumentConversation(t *testing.T) {
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("second runPass returned error: %v", err)
 	}
+
 	if len(client.syncCalls) != 2 {
 		t.Fatalf("sync calls = %d, want 2", len(client.syncCalls))
 	}
+
 	secondManifest := client.syncCalls[1].Manifest
 	if len(secondManifest) != 1 || secondManifest[0].ConversationID != realID {
-		t.Fatalf("second manifest = %+v, want only %q (zero-document conversation omitted)", secondManifest, realID)
+		t.Fatalf(
+			"second manifest = %+v, want only %q (zero-document conversation omitted)",
+			secondManifest,
+			realID,
+		)
 	}
 
 	// The conversation gains content, so its fingerprint changes and it must be
@@ -842,15 +1146,22 @@ func TestConversationSemanticSyncOmitsZeroDocumentConversation(t *testing.T) {
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("third runPass returned error: %v", err)
 	}
+
 	thirdManifest := client.syncCalls[2].Manifest
 	reincluded := false
+
 	for _, fingerprint := range thirdManifest {
 		if fingerprint.ConversationID == emptyID {
 			reincluded = true
 		}
 	}
+
 	if !reincluded {
-		t.Fatalf("third manifest = %+v, want %q re-included after its content changed", thirdManifest, emptyID)
+		t.Fatalf(
+			"third manifest = %+v, want %q re-included after its content changed",
+			thirdManifest,
+			emptyID,
+		)
 	}
 }
 
@@ -871,9 +1182,20 @@ func TestConversationSemanticFreshnessEmbeddedIsCumulativeCoverage(t *testing.T)
 
 	got := freshness.snapshot()
 	if got.Embedded != 1539-66 {
-		t.Fatalf("embedded = %d, want %d (manifest - needed), not the per-pass document count", got.Embedded, 1539-66)
+		t.Fatalf(
+			"embedded = %d, want %d (manifest - needed), not the per-pass document count",
+			got.Embedded,
+			1539-66,
+		)
 	}
+
 	if got.Embedded+got.Needed != got.Manifest {
-		t.Fatalf("embedded(%d) + needed(%d) = %d, want manifest %d", got.Embedded, got.Needed, got.Embedded+got.Needed, got.Manifest)
+		t.Fatalf(
+			"embedded(%d) + needed(%d) = %d, want manifest %d",
+			got.Embedded,
+			got.Needed,
+			got.Embedded+got.Needed,
+			got.Manifest,
+		)
 	}
 }

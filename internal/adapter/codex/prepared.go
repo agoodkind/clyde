@@ -17,14 +17,27 @@ func (p *Provider) Prepare(req adapterresolver.ResolvedRequest) (PreparedRequest
 	if p == nil {
 		return PreparedRequest{}, ErrCodexProviderNotConfigured
 	}
+
 	resolved := req
+
 	return PreparedRequest{
-		Transport: BuildRequestWithConfig(req.OpenAI, &resolved, req.ProviderEffort().String(), RequestBuilderConfig{
-			ReasoningSummary:               p.cfg.ReasoningSummary,
-			InboundThinkingMaterialization: codexSummaryRenderStrategy(p.cfg.Reasoning.ResolvedRoundTripSummary()),
-			RoundTripEncrypted:             RoundTripEncrypted(p.cfg.Reasoning.ResolvedRoundTripEncrypted()),
-			RoundTripSummary:               RoundTripSummary(p.cfg.Reasoning.ResolvedRoundTripSummary()),
-		}),
+		Transport: BuildRequestWithConfig(
+			req.OpenAI,
+			&resolved,
+			req.ProviderEffort().String(),
+			RequestBuilderConfig{
+				ReasoningSummary: p.cfg.ReasoningSummary,
+				InboundThinkingMaterialization: codexSummaryRenderStrategy(
+					p.cfg.Reasoning.ResolvedRoundTripSummary(),
+				),
+				RoundTripEncrypted: RoundTripEncrypted(
+					p.cfg.Reasoning.ResolvedRoundTripEncrypted(),
+				),
+				RoundTripSummary: RoundTripSummary(
+					p.cfg.Reasoning.ResolvedRoundTripSummary(),
+				),
+			},
+		),
 		Resolved: resolved,
 	}, nil
 }

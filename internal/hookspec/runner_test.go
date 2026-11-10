@@ -25,17 +25,25 @@ func newMemorySnapshotStore() *memorySnapshotStore {
 	return &memorySnapshotStore{snapshots: map[ReorientSnapshotKey]string{}}
 }
 
-func (store *memorySnapshotStore) Save(_ context.Context, key ReorientSnapshotKey, body string) error {
+func (store *memorySnapshotStore) Save(
+	_ context.Context,
+	key ReorientSnapshotKey,
+	body string,
+) error {
 	store.snapshots[normalizeSnapshotKey(key)] = body
 	return nil
 }
 
-func (store *memorySnapshotStore) Consume(_ context.Context, key ReorientSnapshotKey) (string, bool, error) {
+func (store *memorySnapshotStore) Consume(
+	_ context.Context,
+	key ReorientSnapshotKey,
+) (string, bool, error) {
 	normalized := normalizeSnapshotKey(key)
 	body, ok := store.snapshots[normalized]
 	if ok {
 		delete(store.snapshots, normalized)
 	}
+
 	return body, ok, nil
 }
 
@@ -121,17 +129,20 @@ func TestHookInputDetectRuntime(t *testing.T) {
 	}
 
 	for _, testCase := range tests {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				t.Parallel()
 
-			getenv := func(key string) string {
-				return testCase.environment[key]
-			}
-			got := testCase.input.detectRuntime(getenv)
-			if got != testCase.want {
-				t.Fatalf("detectRuntime() = %q, want %q", got, testCase.want)
-			}
-		})
+				getenv := func(key string) string {
+					return testCase.environment[key]
+				}
+				got := testCase.input.detectRuntime(getenv)
+				if got != testCase.want {
+					t.Fatalf("detectRuntime() = %q, want %q", got, testCase.want)
+				}
+			},
+		)
 	}
 }
 
@@ -169,20 +180,24 @@ func TestHookInputDetectRuntimeDetectsCursorPayloadFallbackFields(t *testing.T) 
 	}
 
 	for _, testCase := range tests {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				t.Parallel()
 
-			input, err := decodeHookInput(strings.NewReader(testCase.payload))
-			if err != nil {
-				t.Fatalf("decodeHookInput: %v", err)
-			}
-			got := input.detectRuntime(func(string) string {
-				return ""
-			})
-			if got != ClientCursor {
-				t.Fatalf("detectRuntime() = %q, want %q", got, ClientCursor)
-			}
-		})
+				input, err := decodeHookInput(strings.NewReader(testCase.payload))
+				if err != nil {
+					t.Fatalf("decodeHookInput: %v", err)
+				}
+
+				got := input.detectRuntime(func(string) string {
+					return ""
+				})
+				if got != ClientCursor {
+					t.Fatalf("detectRuntime() = %q, want %q", got, ClientCursor)
+				}
+			},
+		)
 	}
 }
 
@@ -225,24 +240,30 @@ func TestRunnerPreCompactStoresSyntheticBoundarySnapshot(t *testing.T) {
 		_ bool,
 		syntheticPreCompact bool,
 	) (conversation.ReorientPage, error) {
-		calls = append(calls, testReorientCall{
-			ConversationID:      conversationID,
-			Workspace:           workspace,
-			Cursor:              cursor,
-			SyntheticPreCompact: syntheticPreCompact,
-		})
+		calls = append(
+			calls,
+			testReorientCall{
+				ConversationID:      conversationID,
+				Workspace:           workspace,
+				Cursor:              cursor,
+				SyntheticPreCompact: syntheticPreCompact,
+			},
+		)
+
 		return pages[len(calls)-1], nil
 	}
 
 	var output strings.Builder
 	runner := Runner{
 		Registry: NewRegistry(),
-		Input: strings.NewReader(`{
+		Input: strings.NewReader(
+			`{
 			"hook_event_name": "PreCompact",
 			"transcript_path": "/Users/me/.claude/projects/proj/session.jsonl",
 			"cwd": "/Users/me/project",
 			"session_id": "session-1"
-		}`),
+		}`,
+		),
 		Output:        &output,
 		Reorient:      reorient,
 		SnapshotStore: store,
@@ -269,14 +290,20 @@ func TestRunnerPreCompactStoresSyntheticBoundarySnapshot(t *testing.T) {
 	if !slices.Equal(calls, expectedCalls) {
 		t.Fatalf("calls = %#v, want %#v", calls, expectedCalls)
 	}
+
 	if output.String() != "" {
 		t.Fatalf("pre-compact output = %q, want empty", output.String())
 	}
-	body := storedSnapshot(t, store, ReorientSnapshotKey{
-		TranscriptPath: "/Users/me/.claude/projects/proj/session.jsonl",
-		SessionID:      "session-1",
-		CWD:            "/Users/me/project",
-	})
+
+	body := storedSnapshot(
+		t,
+		store,
+		ReorientSnapshotKey{
+			TranscriptPath: "/Users/me/.claude/projects/proj/session.jsonl",
+			SessionID:      "session-1",
+			CWD:            "/Users/me/project",
+		},
+	)
 	if !strings.Contains(body, "first page one") || !strings.Contains(body, "second page two") {
 		t.Fatalf("snapshot missing pages:\n%s", body)
 	}
@@ -301,13 +328,15 @@ func TestRunnerAfterCompactDrainsClaudeSnapshotSilently(t *testing.T) {
 	var output strings.Builder
 	runner := Runner{
 		Registry: NewRegistry(),
-		Input: strings.NewReader(`{
+		Input: strings.NewReader(
+			`{
 			"hook_event_name": "SessionStart",
 			"source": "compact",
 			"transcript_path": "/tmp/session.jsonl",
 			"cwd": "/tmp/project",
 			"session_id": "session-1"
-		}`),
+		}`,
+		),
 		Output:        &output,
 		Getenv:        getenvFromMap(nil),
 		SnapshotStore: store,
@@ -320,8 +349,11 @@ func TestRunnerAfterCompactDrainsClaudeSnapshotSilently(t *testing.T) {
 	if output.String() != "" {
 		t.Fatalf("output = %q, want empty; the hook must not instruct the model", output.String())
 	}
+
 	if _, ok := store.snapshots[normalizeSnapshotKey(key)]; ok {
-		t.Fatal("after-compact should drain the before-compact snapshot so snapshots do not accumulate")
+		t.Fatal(
+			"after-compact should drain the before-compact snapshot so snapshots do not accumulate",
+		)
 	}
 }
 
@@ -333,6 +365,7 @@ func TestRunnerRejectsLegacyRuntimeAlias(t *testing.T) {
 	if err == nil {
 		t.Fatal("Run() error = nil, want legacy runtime alias rejection")
 	}
+
 	if !strings.Contains(err.Error(), "not registered") {
 		t.Fatalf("Run() error = %q, want not registered", err)
 	}
@@ -354,7 +387,8 @@ func TestRunnerAfterCompactStaysSilentOnCodex(t *testing.T) {
 	var output strings.Builder
 	runner := Runner{
 		Registry: NewRegistry(),
-		Input: strings.NewReader(`{
+		Input: strings.NewReader(
+			`{
 			"hook_event_name": "SessionStart",
 			"source": "compact",
 			"transcript_path": "/tmp/session.jsonl",
@@ -362,7 +396,8 @@ func TestRunnerAfterCompactStaysSilentOnCodex(t *testing.T) {
 			"session_id": "session-1",
 			"model": "gpt-5.4",
 			"permission_mode": "default"
-		}`),
+		}`,
+		),
 		Output:        &output,
 		Getenv:        getenvFromMap(nil),
 		SnapshotStore: store,
@@ -393,13 +428,15 @@ func TestRunnerAfterCompactCursorRuntimeNoOps(t *testing.T) {
 	var output strings.Builder
 	runner := Runner{
 		Registry: NewRegistry(),
-		Input: strings.NewReader(`{
+		Input: strings.NewReader(
+			`{
 			"hook_event_name": "SessionStart",
 			"source": "compact",
 			"transcript_path": "/tmp/session.jsonl",
 			"cwd": "/tmp/project",
 			"session_id": "session-1"
-		}`),
+		}`,
+		),
 		Output:        &output,
 		Getenv:        getenvFromMap(map[string]string{"CURSOR_VERSION": "1.2.3"}),
 		SnapshotStore: store,
@@ -408,9 +445,11 @@ func TestRunnerAfterCompactCursorRuntimeNoOps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+
 	if output.String() != "" {
 		t.Fatalf("output = %q, want empty", output.String())
 	}
+
 	if got := storedSnapshot(t, store, key); got != "snapshot body" {
 		t.Fatalf("snapshot = %q, want snapshot body", got)
 	}
@@ -432,14 +471,16 @@ func TestRunnerAfterCompactEnvlessCursorPayloadPreservesSnapshot(t *testing.T) {
 	var output strings.Builder
 	runner := Runner{
 		Registry: NewRegistry(),
-		Input: strings.NewReader(`{
+		Input: strings.NewReader(
+			`{
 			"hook_event_name": "SessionStart",
 			"source": "compact",
 			"transcript_path": "/tmp/session.jsonl",
 			"cwd": "/tmp/project",
 			"session_id": "session-1",
 			"cursor_version": "1.2.3"
-		}`),
+		}`,
+		),
 		Output:        &output,
 		Getenv:        getenvFromMap(nil),
 		SnapshotStore: store,
@@ -448,9 +489,11 @@ func TestRunnerAfterCompactEnvlessCursorPayloadPreservesSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+
 	if output.String() != "" {
 		t.Fatalf("output = %q, want empty", output.String())
 	}
+
 	if got := storedSnapshot(t, store, key); got != "snapshot body" {
 		t.Fatalf("snapshot = %q, want snapshot body", got)
 	}
@@ -479,13 +522,15 @@ func TestRunnerCursorPreCompactStoresAndStopReturnsFollowup(t *testing.T) {
 	}
 	pre := Runner{
 		Registry: NewRegistry(),
-		Input: strings.NewReader(`{
+		Input: strings.NewReader(
+			`{
 			"hook_event_name": "preCompact",
 			"conversation_id": "cursor-conv",
 			"session_id": "session-1",
 			"transcript_path": "/tmp/cursor.jsonl",
 			"workspace_roots": ["/tmp/project"]
-		}`),
+		}`,
+		),
 		Reorient:      reorient,
 		SnapshotStore: store,
 	}
@@ -496,13 +541,15 @@ func TestRunnerCursorPreCompactStoresAndStopReturnsFollowup(t *testing.T) {
 	var output strings.Builder
 	stop := Runner{
 		Registry: NewRegistry(),
-		Input: strings.NewReader(`{
+		Input: strings.NewReader(
+			`{
 			"hook_event_name": "stop",
 			"conversation_id": "cursor-conv",
 			"session_id": "session-1",
 			"transcript_path": "/tmp/cursor.jsonl",
 			"workspace_roots": ["/tmp/project"]
-		}`),
+		}`,
+		),
 		Output:        &output,
 		Getenv:        getenvFromMap(map[string]string{"CURSOR_VERSION": "1.2.3"}),
 		SnapshotStore: store,
@@ -510,8 +557,12 @@ func TestRunnerCursorPreCompactStoresAndStopReturnsFollowup(t *testing.T) {
 	if err := stop.Run(context.Background(), HookIDReorientStopFollowup); err != nil {
 		t.Fatalf("stop Run: %v", err)
 	}
+
 	if output.String() != "" {
-		t.Fatalf("output = %q, want empty; Cursor must receive no follow-up message", output.String())
+		t.Fatalf(
+			"output = %q, want empty; Cursor must receive no follow-up message",
+			output.String(),
+		)
 	}
 }
 
@@ -522,12 +573,14 @@ func TestRunnerIgnoresNonCompactSessionStart(t *testing.T) {
 	store := newMemorySnapshotStore()
 	runner := Runner{
 		Registry: NewRegistry(),
-		Input: strings.NewReader(`{
+		Input: strings.NewReader(
+			`{
 			"hook_event_name": "SessionStart",
 			"source": "startup",
 			"transcript_path": "/tmp/session.jsonl",
 			"cwd": "/tmp/project"
-		}`),
+		}`,
+		),
 		Output:        &output,
 		SnapshotStore: store,
 	}
@@ -536,6 +589,7 @@ func TestRunnerIgnoresNonCompactSessionStart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+
 	if output.String() != "" {
 		t.Fatalf("output = %q, want empty", output.String())
 	}
@@ -547,11 +601,13 @@ func TestRunnerCursorStopWithNoSnapshotReturnsNoOutput(t *testing.T) {
 	var output strings.Builder
 	runner := Runner{
 		Registry: NewRegistry(),
-		Input: strings.NewReader(`{
+		Input: strings.NewReader(
+			`{
 			"hook_event_name": "stop",
 			"conversation_id": "cursor-conv",
 			"session_id": "session-1"
-		}`),
+		}`,
+		),
 		Output:        &output,
 		SnapshotStore: newMemorySnapshotStore(),
 	}
@@ -559,6 +615,7 @@ func TestRunnerCursorStopWithNoSnapshotReturnsNoOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+
 	if output.String() != "" {
 		t.Fatalf("output = %q, want empty", output.String())
 	}
@@ -580,13 +637,15 @@ func TestRunnerStopFollowupNonCursorRuntimeNoOps(t *testing.T) {
 	var output strings.Builder
 	runner := Runner{
 		Registry: NewRegistry(),
-		Input: strings.NewReader(`{
+		Input: strings.NewReader(
+			`{
 			"hook_event_name": "stop",
 			"conversation_id": "cursor-conv",
 			"session_id": "session-1",
 			"transcript_path": "/tmp/cursor.jsonl",
 			"workspace_roots": ["/tmp/project"]
-		}`),
+		}`,
+		),
 		Output:        &output,
 		Getenv:        getenvFromMap(map[string]string{"CODEX_THREAD_ID": "thread-1"}),
 		SnapshotStore: store,
@@ -595,9 +654,11 @@ func TestRunnerStopFollowupNonCursorRuntimeNoOps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+
 	if output.String() != "" {
 		t.Fatalf("output = %q, want empty", output.String())
 	}
+
 	if got := storedSnapshot(t, store, key); got != "cursor snapshot body" {
 		t.Fatalf("snapshot = %q, want cursor snapshot body", got)
 	}
@@ -609,12 +670,14 @@ func TestRunnerAfterCompactStaysSilentWithoutSnapshot(t *testing.T) {
 	var output strings.Builder
 	runner := Runner{
 		Registry: NewRegistry(),
-		Input: strings.NewReader(`{
+		Input: strings.NewReader(
+			`{
 			"hook_event_name": "SessionStart",
 			"source": "compact",
 			"transcript_path": "/tmp/session.jsonl",
 			"cwd": "/tmp/project"
-		}`),
+		}`,
+		),
 		Output:        &output,
 		Getenv:        getenvFromMap(nil),
 		SnapshotStore: newMemorySnapshotStore(),
@@ -623,6 +686,7 @@ func TestRunnerAfterCompactStaysSilentWithoutSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+
 	if output.String() != "" {
 		t.Fatalf("output = %q, want empty; the hook must not instruct the model", output.String())
 	}
@@ -633,11 +697,13 @@ func TestRunnerPreCompactErrorsWhenReorientCursorStalls(t *testing.T) {
 
 	runner := Runner{
 		Registry: NewRegistry(),
-		Input: strings.NewReader(`{
+		Input: strings.NewReader(
+			`{
 			"hook_event_name": "PreCompact",
 			"transcript_path": "/tmp/session.jsonl",
 			"cwd": "/tmp/project"
-		}`),
+		}`,
+		),
 		Output:        &strings.Builder{},
 		SnapshotStore: newMemorySnapshotStore(),
 		Reorient: func(
@@ -658,6 +724,7 @@ func TestRunnerPreCompactErrorsWhenReorientCursorStalls(t *testing.T) {
 	if err == nil {
 		t.Fatal("Run returned nil error")
 	}
+
 	if !strings.Contains(err.Error(), "remaining 1 but next cursor is empty") {
 		t.Fatalf("error = %v", err)
 	}
@@ -669,11 +736,13 @@ func TestRunnerPreCompactErrorsWhenReorientCursorRepeats(t *testing.T) {
 	callCount := 0
 	runner := Runner{
 		Registry: NewRegistry(),
-		Input: strings.NewReader(`{
+		Input: strings.NewReader(
+			`{
 			"hook_event_name": "PreCompact",
 			"transcript_path": "/tmp/session.jsonl",
 			"cwd": "/tmp/project"
-		}`),
+		}`,
+		),
 		Output:        &strings.Builder{},
 		SnapshotStore: newMemorySnapshotStore(),
 		Reorient: func(
@@ -690,6 +759,7 @@ func TestRunnerPreCompactErrorsWhenReorientCursorRepeats(t *testing.T) {
 			if callCount == 1 {
 				return conversation.ReorientPage{Remaining: 1, NextCursor: "cursor-1"}, nil
 			}
+
 			return conversation.ReorientPage{Remaining: 1, NextCursor: "cursor-1"}, nil
 		},
 	}
@@ -698,6 +768,7 @@ func TestRunnerPreCompactErrorsWhenReorientCursorRepeats(t *testing.T) {
 	if err == nil {
 		t.Fatal("Run returned nil error")
 	}
+
 	if !strings.Contains(err.Error(), "repeated next cursor") {
 		t.Fatalf("error = %v", err)
 	}
@@ -709,11 +780,13 @@ func TestRunnerPreCompactReturnsDaemonErrors(t *testing.T) {
 	expectedErr := errors.New("daemon unavailable")
 	runner := Runner{
 		Registry: NewRegistry(),
-		Input: strings.NewReader(`{
+		Input: strings.NewReader(
+			`{
 			"hook_event_name": "PreCompact",
 			"transcript_path": "/tmp/session.jsonl",
 			"cwd": "/tmp/project"
-		}`),
+		}`,
+		),
 		Output:        &strings.Builder{},
 		SnapshotStore: newMemorySnapshotStore(),
 		Reorient: func(
@@ -742,11 +815,13 @@ func TestRunnerPreCompactFallsBackToWorkspaceWhenTranscriptNotFound(t *testing.T
 	calls := make([]testReorientCall, 0, 2)
 	runner := Runner{
 		Registry: NewRegistry(),
-		Input: strings.NewReader(`{
+		Input: strings.NewReader(
+			`{
 			"hook_event_name": "PreCompact",
 			"transcript_path": "/tmp/missing-session.jsonl",
 			"cwd": "/tmp/project"
-		}`),
+		}`,
+		),
 		Output:        &strings.Builder{},
 		SnapshotStore: newMemorySnapshotStore(),
 		Reorient: func(
@@ -759,15 +834,19 @@ func TestRunnerPreCompactFallsBackToWorkspaceWhenTranscriptNotFound(t *testing.T
 			_ bool,
 			syntheticPreCompact bool,
 		) (conversation.ReorientPage, error) {
-			calls = append(calls, testReorientCall{
-				ConversationID:      conversationID,
-				Workspace:           workspace,
-				Cursor:              cursor,
-				SyntheticPreCompact: syntheticPreCompact,
-			})
+			calls = append(
+				calls,
+				testReorientCall{
+					ConversationID:      conversationID,
+					Workspace:           workspace,
+					Cursor:              cursor,
+					SyntheticPreCompact: syntheticPreCompact,
+				},
+			)
 			if len(calls) == 1 {
 				return conversation.ReorientPage{}, errors.New("conversation not found")
 			}
+
 			return conversation.ReorientPage{Remaining: 0}, nil
 		},
 	}
@@ -776,6 +855,7 @@ func TestRunnerPreCompactFallsBackToWorkspaceWhenTranscriptNotFound(t *testing.T
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+
 	expectedCalls := []testReorientCall{
 		{
 			ConversationID:      "/tmp/missing-session.jsonl",
@@ -802,11 +882,13 @@ func TestRunnerPreCompactStopsWhenContextIsCanceledBetweenPages(t *testing.T) {
 	callCount := 0
 	runner := Runner{
 		Registry: NewRegistry(),
-		Input: strings.NewReader(`{
+		Input: strings.NewReader(
+			`{
 			"hook_event_name": "PreCompact",
 			"transcript_path": "/tmp/session.jsonl",
 			"cwd": "/tmp/project"
-		}`),
+		}`,
+		),
 		Output:        &strings.Builder{},
 		SnapshotStore: newMemorySnapshotStore(),
 		Reorient: func(
@@ -821,6 +903,7 @@ func TestRunnerPreCompactStopsWhenContextIsCanceledBetweenPages(t *testing.T) {
 		) (conversation.ReorientPage, error) {
 			callCount++
 			cancel()
+
 			return conversation.ReorientPage{Remaining: 1, NextCursor: "next"}, nil
 		},
 	}
@@ -829,6 +912,7 @@ func TestRunnerPreCompactStopsWhenContextIsCanceledBetweenPages(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run error = %v, want context.Canceled", err)
 	}
+
 	if callCount != 1 {
 		t.Fatalf("reorient calls = %d, want 1", callCount)
 	}
@@ -841,5 +925,6 @@ func storedSnapshot(t *testing.T, store *memorySnapshotStore, key ReorientSnapsh
 	if !ok {
 		t.Fatalf("missing snapshot for %#v", key)
 	}
+
 	return body
 }

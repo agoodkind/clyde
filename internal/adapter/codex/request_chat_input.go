@@ -26,6 +26,7 @@ func appendChatMessageInputs(
 	// assistant tool call always precedes its tool result in the
 	// message order, so the map is populated before it is read.
 	customCallNames := make(map[string]string)
+
 	for _, msg := range messages {
 		rawText := adaptercontent.FlattenRaw(msg.Content)
 		text := strings.TrimSpace(sanitizeForUpstreamCacheWithRequestConfig(rawText, strategy, cfg))
@@ -35,15 +36,30 @@ func appendChatMessageInputs(
 				systemSections = append(systemSections, text)
 			}
 		case codexChatRoleAssistant:
-			input = appendAssistantInput(input, msg, rawText, strategy, cfg, toolIDs, customTools, customCallNames)
+			input = appendAssistantInput(
+				input,
+				msg,
+				rawText,
+				strategy,
+				cfg,
+				toolIDs,
+				customTools,
+				customCallNames,
+			)
 		case codexChatRoleTool, codexChatRoleFunction:
 			input = appendToolResultInput(input, msg, text, toolIDs, customCallNames)
 		default:
-			if content := codexContentFromRaw(msg.Content, codexwire.ContentItemInputText, strategy, cfg); len(content) > 0 {
+			if content := codexContentFromRaw(
+				msg.Content,
+				codexwire.ContentItemInputText,
+				strategy,
+				cfg,
+			); len(content) > 0 {
 				input = append(input, MessageContentItems("user", content))
 			}
 		}
 	}
+
 	return input, systemSections
 }
 
@@ -65,6 +81,7 @@ func appendAssistantInput(
 		if name == "" {
 			continue
 		}
+
 		if customTools.has(name) {
 			// A custom tool's payload is raw text, so replaying it as
 			// function_call arguments would send the upstream a value
@@ -76,15 +93,26 @@ func appendAssistantInput(
 			// content happens to be a JSON object.
 			callID := toolCallID(tc)
 			customCallNames[callID] = name
-			input = append(input, CustomToolCallItem(toolIDs.project(callID), name, tc.Function.Arguments))
+			input = append(
+				input,
+				CustomToolCallItem(toolIDs.project(callID), name, tc.Function.Arguments),
+			)
 			continue
 		}
+
 		input = append(input, functionCallItem(tc, toolIDs))
 	}
+
 	input = emitReasoningItemsFromAssistantContent(input, rawText, cfg)
-	if content := codexContentFromRaw(msg.Content, codexwire.ContentItemOutputText, strategy, cfg); len(content) > 0 {
+	if content := codexContentFromRaw(
+		msg.Content,
+		codexwire.ContentItemOutputText,
+		strategy,
+		cfg,
+	); len(content) > 0 {
 		input = append(input, MessageContentItems("assistant", content))
 	}
+
 	return input
 }
 
@@ -103,30 +131,39 @@ func appendToolResultInput(
 	if text == "" {
 		return input
 	}
+
 	callID := strings.TrimSpace(msg.ToolCallID)
 	if callID == "" {
-		return append(input, MessageContent("user", string(codexwire.ContentItemInputText), "tool: "+text))
+		return append(
+			input,
+			MessageContent("user", string(codexwire.ContentItemInputText), "tool: "+text),
+		)
 	}
+
 	// A custom tool call must be answered by a custom_tool_call_output
 	// under the same tool name; a function_call_output would leave the
 	// call unanswered on the upstream side.
 	if name, ok := customCallNames[callID]; ok {
 		return append(input, CustomToolCallOutputItem(toolIDs.project(callID), name, text))
 	}
+
 	return append(input, FunctionCallOutputItem(toolIDs.project(callID), text))
 }
 
 func chatToolCallIDs(messages []adapteropenai.ChatMessage) []string {
 	toolCallIDs := make([]string, 0)
+
 	for _, message := range messages {
 		if toolCallID := strings.TrimSpace(message.ToolCallID); toolCallID != "" {
 			toolCallIDs = append(toolCallIDs, toolCallID)
 		}
+
 		for _, toolCall := range message.ToolCalls {
 			if toolCallID := strings.TrimSpace(toolCall.ID); toolCallID != "" {
 				toolCallIDs = append(toolCallIDs, toolCallID)
 			}
 		}
 	}
+
 	return toolCallIDs
 }

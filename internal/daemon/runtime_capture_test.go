@@ -20,6 +20,7 @@ func TestStartRuntimeOpensCaptureStoreForAdapterIngressWithoutMITM(t *testing.T)
 	if err != nil {
 		t.Fatalf("listen adapter: %v", err)
 	}
+
 	t.Cleanup(func() { _ = adapterListener.Close() })
 	tcpAddress, ok := adapterListener.Addr().(*net.TCPAddr)
 	if !ok {
@@ -36,24 +37,36 @@ func TestStartRuntimeOpensCaptureStoreForAdapterIngressWithoutMITM(t *testing.T)
 	cfg.Adapter.Port = tcpAddress.Port
 	cfg.Adapter.CaptureIngress = true
 	cfg.Adapter.ClientIdentity = config.AdapterClientIdentity{
-		SystemPromptPrefix: "test", StainlessPackageVersion: "test", StainlessRuntime: "go",
-		StainlessRuntimeVersion: "test", CCVersion: "test", CCEntrypoint: "test",
+		SystemPromptPrefix:      "test",
+		StainlessPackageVersion: "test",
+		StainlessRuntime:        "go",
+		StainlessRuntimeVersion: "test",
+		CCVersion:               "test",
+		CCEntrypoint:            "test",
 	}
 	cfg.MITM.EnabledDefault = false
 	dbPath := filepath.Join(dir, "missing", "capture.db")
 	cfg.MITM.CaptureStore.DBPath = dbPath
 
 	stats := newProviderStatsRecorder(adapterruntime.NewPricingTable(cfg.Adapter.ModelPricing()))
-	runtime, err := startRuntime(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), stats, inheritedRuntime{
-		listeners: map[string]net.Listener{listenerNameAdapter: adapterListener},
-	})
+	runtime, err := startRuntime(
+		context.Background(),
+		cfg,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		stats,
+		inheritedRuntime{
+			listeners: map[string]net.Listener{listenerNameAdapter: adapterListener},
+		},
+	)
 	if err != nil {
 		t.Fatalf("startRuntime: %v", err)
 	}
+
 	t.Cleanup(func() { runtime.shutdown(context.Background()) })
 	if runtime.captureStore == nil {
 		t.Fatal("capture store is nil with adapter.capture_ingress enabled and MITM disabled")
 	}
+
 	if _, err := os.Stat(dbPath); err != nil {
 		t.Fatalf("capture database: %v", err)
 	}

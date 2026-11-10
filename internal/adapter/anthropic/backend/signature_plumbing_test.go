@@ -18,23 +18,36 @@ func TestStreamTranslatorSignatureDeltaProducesReasoningEventWithSignature(t *te
 	t.Parallel()
 	tr := NewStreamTranslator(context.Background(), "req-sig", "alias-sig")
 	const payload = `{"index":3,"delta":{"type":"signature_delta","signature":"sig-bytes-xyz"}}`
-	events, finished, reason, usage, err := tr.HandleEventEvents("content_block_delta", []byte(payload))
+	events, finished, reason, usage, err := tr.HandleEventEvents(
+		"content_block_delta",
+		[]byte(payload),
+	)
 	if err != nil {
 		t.Fatalf("HandleEventEvents: %v", err)
 	}
+
 	if finished || reason != "" || usage != nil {
-		t.Fatalf("finished=%v reason=%q usage=%+v want zero-value terminal state", finished, reason, usage)
+		t.Fatalf(
+			"finished=%v reason=%q usage=%+v want zero-value terminal state",
+			finished,
+			reason,
+			usage,
+		)
 	}
+
 	if len(events) != 1 {
 		t.Fatalf("events=%d want 1: %#v", len(events), events)
 	}
+
 	rd, ok := events[0].(adapterrender.ReasoningDelta)
 	if !ok {
 		t.Fatalf("events[0] type=%T want ReasoningDelta", events[0])
 	}
+
 	if rd.Signature != "sig-bytes-xyz" {
 		t.Fatalf("signature=%q want sig-bytes-xyz", rd.Signature)
 	}
+
 	if strings.TrimSpace(rd.Text) != "" {
 		t.Fatalf("text=%q want empty for signature_delta", rd.Text)
 	}
@@ -53,16 +66,20 @@ func TestStreamEventToTranslatorSSEReencodesThinkingSignature(t *testing.T) {
 	if !ok {
 		t.Fatalf("ok=false; thinking_signature must round-trip")
 	}
+
 	if name != "content_block_delta" {
 		t.Fatalf("event=%q want content_block_delta", name)
 	}
+
 	body := string(payload)
 	if !strings.Contains(body, `"type":"signature_delta"`) {
 		t.Fatalf("payload missing signature_delta type: %s", body)
 	}
+
 	if !strings.Contains(body, `"signature":"opaque-sig"`) {
 		t.Fatalf("payload missing signature value: %s", body)
 	}
+
 	if !strings.Contains(body, `"index":9`) {
 		t.Fatalf("payload missing block index: %s", body)
 	}

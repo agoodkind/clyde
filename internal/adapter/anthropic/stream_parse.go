@@ -121,7 +121,8 @@ type streamErrorEvent struct {
 // dispatchSSE decodes one SSE data payload according to the
 // currentEvent name and forwards structured events / usage / stop reasons.
 func dispatchSSE(
-	eventName, data string,
+	eventName string,
+	data string,
 	sink EventSink,
 	usage *Usage,
 	stop *string,
@@ -147,6 +148,7 @@ func dispatchSSE(
 	case anthropicSSEEventError:
 		return handleSSEError(data)
 	}
+
 	return nil
 }
 
@@ -181,6 +183,7 @@ func handleSSEMessageStart(data string, usage *Usage) {
 	if err := json.Unmarshal([]byte(data), &ev); err != nil {
 		return
 	}
+
 	usage.InputTokens = ev.Message.Usage.InputTokens
 	usage.OutputTokens = ev.Message.Usage.OutputTokens
 	creation := ev.Message.Usage.CacheCreationInputTokens
@@ -188,9 +191,11 @@ func handleSSEMessageStart(data string, usage *Usage) {
 	if creation != nil {
 		usage.CacheCreationInputTokens = *creation
 	}
+
 	if read != nil {
 		usage.CacheReadInputTokens = *read
 	}
+
 	usage.CacheCountsReported = creation != nil && read != nil
 }
 
@@ -199,10 +204,15 @@ func handleSSEContentBlockStart(data string, sink EventSink, blockTypes map[int]
 	if err := json.Unmarshal([]byte(data), &ev); err == nil {
 		return dispatchContentBlockStart(ev, sink, blockTypes)
 	}
+
 	return nil
 }
 
-func dispatchContentBlockStart(ev streamContentBlockStartEvent, sink EventSink, blockTypes map[int]string) error {
+func dispatchContentBlockStart(
+	ev streamContentBlockStartEvent,
+	sink EventSink,
+	blockTypes map[int]string,
+) error {
 	t := ev.ContentBlock.Type
 	blockTypes[ev.Index] = t
 	switch streamContentBlockType(t) {
@@ -226,6 +236,7 @@ func dispatchContentBlockStart(ev streamContentBlockStartEvent, sink EventSink, 
 		// Plain text content blocks are observed via the per-delta
 		// path; no synchronous event is needed at start.
 	}
+
 	return nil
 }
 
@@ -234,6 +245,7 @@ func handleSSEContentBlockDelta(data string, sink EventSink) error {
 	if err := json.Unmarshal([]byte(data), &ev); err == nil {
 		return dispatchContentBlockDelta(ev, sink)
 	}
+
 	return nil
 }
 
@@ -243,7 +255,11 @@ func dispatchContentBlockDelta(ev streamContentBlockDeltaEvent, sink EventSink) 
 		if ev.Delta.Text == "" {
 			return nil
 		}
-		return sink(StreamTextDelta{BlockIndex: ev.Index, Text: ev.Delta.Text})
+
+		return sink(StreamTextDelta{
+			BlockIndex: ev.Index,
+			Text:       ev.Delta.Text,
+		})
 	case anthropicSSEDeltaInputJSON:
 		// Anthropic emits a leading content_block_delta with an empty
 		// partial_json to open the tool input stream. Forwarding it
@@ -255,15 +271,23 @@ func dispatchContentBlockDelta(ev streamContentBlockDeltaEvent, sink EventSink) 
 		if ev.Delta.PartialJSON == "" {
 			return nil
 		}
+
 		return sink(StreamToolUseArgDelta{
 			BlockIndex:  ev.Index,
 			PartialJSON: ev.Delta.PartialJSON,
 		})
 	case anthropicSSEDeltaThinking:
-		return sink(StreamThinkingDelta{BlockIndex: ev.Index, Text: ev.Delta.Thinking})
+		return sink(StreamThinkingDelta{
+			BlockIndex: ev.Index,
+			Text:       ev.Delta.Thinking,
+		})
 	case anthropicSSEDeltaSignature:
-		return sink(StreamThinkingSignature{BlockIndex: ev.Index, Signature: ev.Delta.Signature})
+		return sink(StreamThinkingSignature{
+			BlockIndex: ev.Index,
+			Signature:  ev.Delta.Signature,
+		})
 	}
+
 	return nil
 }
 
@@ -274,8 +298,10 @@ func handleSSEContentBlockStop(data string, sink EventSink, blockTypes map[int]s
 			delete(blockTypes, ev.Index)
 			return sink(StreamToolUseStop{BlockIndex: ev.Index})
 		}
+
 		delete(blockTypes, ev.Index)
 	}
+
 	return nil
 }
 
@@ -284,18 +310,23 @@ func handleSSEMessageDelta(data string, usage *Usage, stop *string) {
 	if err := json.Unmarshal([]byte(data), &ev); err != nil {
 		return
 	}
+
 	if ev.Delta.StopReason != "" {
 		*stop = ev.Delta.StopReason
 	}
+
 	if ev.Usage.OutputTokens > 0 {
 		usage.OutputTokens = ev.Usage.OutputTokens
 	}
+
 	if ev.Usage.CacheCreationInputTokens > 0 {
 		usage.CacheCreationInputTokens = ev.Usage.CacheCreationInputTokens
 	}
+
 	if ev.Usage.CacheReadInputTokens > 0 {
 		usage.CacheReadInputTokens = ev.Usage.CacheReadInputTokens
 	}
+
 	if details := ev.Usage.OutputTokensDetails; details != nil && details.ThinkingTokens != nil {
 		thinking := *details.ThinkingTokens
 		usage.ThinkingTokens = &thinking
@@ -307,6 +338,7 @@ func handleSSEError(data string) error {
 	if err := json.Unmarshal([]byte(data), &ev); err == nil {
 		return newStreamUpstreamError(ErrorKind(ev.Error.Type), ev.Error.Message)
 	}
+
 	return newStreamUpstreamError(ErrorKindNone, "anthropic error: "+truncate(data, 400))
 }
 
@@ -314,6 +346,7 @@ func truncate(s string, maxBytes int) string {
 	if len(s) <= maxBytes {
 		return s
 	}
+
 	return s[:maxBytes] + "..."
 }
 
@@ -350,10 +383,12 @@ func newStreamUpstreamError(errorType ErrorKind, message string) *UpstreamError 
 	case ErrorKindNone, ErrorKindAuth, ErrorKindInvalidRequest, ErrorKindAPI:
 		// Default fatal class is correct for these.
 	}
+
 	body := message
 	if errorType != ErrorKindNone {
 		body = "anthropic error: " + string(errorType) + ": " + message
 	}
+
 	return &UpstreamError{
 		Classification: classification,
 		Status:         0,

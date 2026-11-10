@@ -153,18 +153,28 @@ func (r rawContentBlock) typed() (AnthContentBlock, bool) {
 func UnmarshalContentBlock(data []byte) (AnthContentBlock, bool, error) {
 	var raw rawContentBlock
 	if err := json.Unmarshal(data, &raw); err != nil {
-		slog.Warn("adapter.anthropic.content_block.unmarshal_failed", "concern", "adapter.providers.anthropic.request", "err", err)
+		slog.Warn(
+			"adapter.anthropic.content_block.unmarshal_failed",
+			"concern",
+			"adapter.providers.anthropic.request",
+			"err",
+			err,
+		)
+
 		return nil, false, fmt.Errorf("decode content block: %w", err)
 	}
+
 	if raw.Type == "" {
 		return nil, false, nil
 	}
+
 	block, typed := raw.typed()
 	// Unknown type: silently skip so new upstream block types do not
 	// break the stream. The caller's switch falls to default.
 	if !typed {
 		return nil, false, nil
 	}
+
 	return block, true, nil
 }
 

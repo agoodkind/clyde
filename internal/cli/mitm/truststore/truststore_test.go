@@ -28,6 +28,7 @@ func TestFingerprintPEMOnPersistedCertMatchesSHA256(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fingerprintPEM: %v", err)
 	}
+
 	want := sha256.Sum256(der)
 	wantHex := Fingerprint(hex.EncodeToString(want[:]))
 	if fp != wantHex {
@@ -44,6 +45,7 @@ func TestFingerprintPEMOnMissingFileReturnsZeroFingerprint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fingerprintPEM: %v", err)
 	}
+
 	if !fp.IsZero() {
 		t.Fatalf("fp = %q, want empty", fp)
 	}
@@ -57,6 +59,7 @@ func TestFingerprintPEMOnEmptyPathReturnsZero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fingerprintPEM: %v", err)
 	}
+
 	if !fp.IsZero() {
 		t.Fatalf("fp = %q, want empty", fp)
 	}
@@ -79,15 +82,18 @@ func TestFingerprintsMatchRequiresBothNonEmpty(t *testing.T) {
 		{"equal", "abc", "abc", true},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := InstallStatus{
-				OnDiskFingerprint:    tc.onDisk,
-				InstalledFingerprint: tc.installed,
-			}.FingerprintsMatch()
-			if got != tc.want {
-				t.Fatalf("got %t, want %t", got, tc.want)
-			}
-		})
+		t.Run(
+			tc.name,
+			func(t *testing.T) {
+				got := InstallStatus{
+					OnDiskFingerprint:    tc.onDisk,
+					InstalledFingerprint: tc.installed,
+				}.FingerprintsMatch()
+				if got != tc.want {
+					t.Fatalf("got %t, want %t", got, tc.want)
+				}
+			},
+		)
 	}
 }
 
@@ -100,14 +106,20 @@ func TestExtractFirstCertDERSkipsNonCertificateBlocks(t *testing.T) {
 	certPath := filepath.Join(dir, "ca.crt")
 	der := writeFixtureCert(t, certPath)
 
-	mixed := append([]byte{}, pem.EncodeToMemory(&pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: []byte("not-a-real-key"),
-	})...)
-	mixed = append(mixed, pem.EncodeToMemory(&pem.Block{
-		Type:  "CERTIFICATE",
-		Bytes: der,
-	})...)
+	mixed := append(
+		[]byte{},
+		pem.EncodeToMemory(&pem.Block{
+			Type:  "RSA PRIVATE KEY",
+			Bytes: []byte("not-a-real-key"),
+		})...,
+	)
+	mixed = append(
+		mixed,
+		pem.EncodeToMemory(&pem.Block{
+			Type:  "CERTIFICATE",
+			Bytes: der,
+		})...,
+	)
 
 	got := extractFirstCertDER(mixed, "fixture")
 	if string(got) != string(der) {
@@ -124,6 +136,7 @@ func writeFixtureCert(t *testing.T, path string) []byte {
 	if err != nil {
 		t.Fatalf("generate key: %v", err)
 	}
+
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: CACommonName},
@@ -135,9 +148,14 @@ func writeFixtureCert(t *testing.T, path string) []byte {
 	if err != nil {
 		t.Fatalf("create cert: %v", err)
 	}
-	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+
+	pemBytes := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: der,
+	})
 	if err := os.WriteFile(path, pemBytes, 0o600); err != nil {
 		t.Fatalf("write fixture cert: %v", err)
 	}
+
 	return der
 }

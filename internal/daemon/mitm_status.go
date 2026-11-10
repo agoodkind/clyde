@@ -31,6 +31,7 @@ func collectMITMStatus(mitmCfg config.MITMConfig, bound map[string][]net.Listene
 	for id := range mitmCfg.Listeners {
 		ids = append(ids, id)
 	}
+
 	sort.Strings(ids)
 
 	listeners := make([]MITMListenerStatus, 0, len(ids))
@@ -41,15 +42,20 @@ func collectMITMStatus(mitmCfg config.MITMConfig, bound map[string][]net.Listene
 				boundAddrs[socket.Addr().String()] = true
 			}
 		}
+
 		listenerCfg := mitmCfg.Listeners[id]
 		for _, address := range mitmBindAddrs(listenerCfg.Host, listenerCfg.Port) {
-			listeners = append(listeners, MITMListenerStatus{
-				ID:      id,
-				Address: address,
-				Up:      boundAddrs[address],
-			})
+			listeners = append(
+				listeners,
+				MITMListenerStatus{
+					ID:      id,
+					Address: address,
+					Up:      boundAddrs[address],
+				},
+			)
 		}
 	}
+
 	return MITMStatus{
 		Listeners:  listeners,
 		CACertPath: mitmCfg.CA.CertPath,

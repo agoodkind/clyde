@@ -34,18 +34,23 @@ func (f Facet) FacetAttrs() []slog.Attr {
 	if f.RequestID != "" {
 		attrs = append(attrs, slog.String("request_id", f.RequestID))
 	}
+
 	if f.ConversationID != "" {
 		attrs = append(attrs, slog.String("conversation_id", f.ConversationID))
 	}
+
 	if f.GenerationID != "" {
 		attrs = append(attrs, slog.String("generation_id", f.GenerationID))
 	}
+
 	if f.OriginalRequestID != "" {
 		attrs = append(attrs, slog.String("original_request_id", f.OriginalRequestID))
 	}
+
 	if f.SessionID != "" {
 		attrs = append(attrs, slog.String("session_id", f.SessionID))
 	}
+
 	return attrs
 }
 

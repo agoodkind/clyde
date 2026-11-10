@@ -56,8 +56,19 @@ func newGroupedRepairCLI(t *testing.T, address string, dataRoots []string) group
 	if err := os.MkdirAll(configDir, groupedRepairDirMode); err != nil {
 		t.Fatalf("The test could not create the config directory: %v", err)
 	}
-	settings := fmt.Sprintf("[conversation.semantic]\ncollection_id = %q\nmilvus_address = %q\nmilvus_database = \"default\"\nmilvus_layout = \"shared\"\nembedding_base_url = %q\nembedding_api_key_env = \"CLYDE_GROUPED_REPAIR_KEY\"\nembedding_model = %q\nembedding_dimension = %d\n", repairCollectionID, address, baseURL, repairEmbeddingModel, repairEmbeddingDimension)
-	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(settings), groupedRepairConfigMode); err != nil {
+	settings := fmt.Sprintf(
+		"[conversation.semantic]\ncollection_id = %q\nmilvus_address = %q\nmilvus_database = \"default\"\nmilvus_layout = \"shared\"\nembedding_base_url = %q\nembedding_api_key_env = \"CLYDE_GROUPED_REPAIR_KEY\"\nembedding_model = %q\nembedding_dimension = %d\n",
+		repairCollectionID,
+		address,
+		baseURL,
+		repairEmbeddingModel,
+		repairEmbeddingDimension,
+	)
+	if err := os.WriteFile(
+		filepath.Join(configDir, "config.toml"),
+		[]byte(settings),
+		groupedRepairConfigMode,
+	); err != nil {
 		t.Fatalf("The test could not write the config file: %v", err)
 	}
 	_, thisFile, _, found := runtime.Caller(0)
@@ -70,23 +81,46 @@ func newGroupedRepairCLI(t *testing.T, address string, dataRoots []string) group
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("The test could not build the clyde command: %v\n%s", err, output)
 	}
-	return groupedRepairCLI{binary: binary, home: home, env: []string{
-		"HOME=" + home,
-		"PATH=" + os.Getenv("PATH"),
-		"XDG_CACHE_HOME=" + filepath.Join(home, "cache"),
-		"XDG_STATE_HOME=" + filepath.Join(home, "state"),
-		"XDG_CONFIG_HOME=" + filepath.Join(home, "config"),
-		"CLYDE_GROUPED_REPAIR_KEY=" + repairEmbeddingKey,
-		"CLYDE_CURSOR_DATA_DIRS=" + strings.Join(dataRoots, string(os.PathListSeparator)),
-		"CLYDE_CURSOR_PROJECTS_DIRS=" + filepath.Join(home, "cursor-projects"),
-	}}
+	return groupedRepairCLI{
+		binary: binary,
+		home:   home,
+		env: []string{
+			"HOME=" + home,
+			"PATH=" + os.Getenv("PATH"),
+			"XDG_CACHE_HOME=" + filepath.Join(home, "cache"),
+			"XDG_STATE_HOME=" + filepath.Join(home, "state"),
+			"XDG_CONFIG_HOME=" + filepath.Join(home, "config"),
+			"CLYDE_GROUPED_REPAIR_KEY=" + repairEmbeddingKey,
+			"CLYDE_CURSOR_DATA_DIRS=" + strings.Join(dataRoots, string(os.PathListSeparator)),
+			"CLYDE_CURSOR_PROJECTS_DIRS=" + filepath.Join(home, "cursor-projects"),
+		},
+	}
 }
 
 func (cli groupedRepairCLI) run(t *testing.T, args ...string) (string, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), groupedRepairCommandTime)
 	defer cancel()
-	command := exec.CommandContext(ctx, cli.binary, append([]string{"conversation", "index", "repair-timestamps", "--provider", "cursor", "--source-store", "--execute", "--limit", "100", "--max-rows", "10000"}, args...)...)
+	command := exec.CommandContext(
+		ctx,
+		cli.binary,
+		append(
+			[]string{
+				"conversation",
+				"index",
+				"repair-timestamps",
+				"--provider",
+				"cursor",
+				"--source-store",
+				"--execute",
+				"--limit",
+				"100",
+				"--max-rows",
+				"10000",
+			},
+			args...,
+		)...,
+	)
 	command.Env = cli.env
 	var output bytes.Buffer
 	command.Stdout = &output
@@ -99,24 +133,27 @@ func (cli groupedRepairCLI) run(t *testing.T, args ...string) (string, error) {
 func (cli groupedRepairCLI) rowsEvents(t *testing.T) []string {
 	t.Helper()
 	events := make([]string, 0)
-	walkErr := filepath.WalkDir(filepath.Join(cli.home, "state"), func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		contents, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return readErr
-		}
-		for line := range strings.Lines(string(contents)) {
-			if strings.Contains(line, groupedRepairRowsEvent) {
-				events = append(events, line)
+	walkErr := filepath.WalkDir(
+		filepath.Join(cli.home, "state"),
+		func(path string, entry fs.DirEntry, err error) error {
+			if err != nil {
+				return err
 			}
-		}
-		return nil
-	})
+			if entry.IsDir() {
+				return nil
+			}
+			contents, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return readErr
+			}
+			for line := range strings.Lines(string(contents)) {
+				if strings.Contains(line, groupedRepairRowsEvent) {
+					events = append(events, line)
+				}
+			}
+			return nil
+		},
+	)
 	if walkErr != nil {
 		t.Fatalf("The test could not read the command logs: %v", walkErr)
 	}
@@ -126,18 +163,36 @@ func (cli groupedRepairCLI) rowsEvents(t *testing.T) []string {
 func groupedVectorRange(t *testing.T, address string, key string) (int64, int64) {
 	t.Helper()
 	ctx := context.Background()
-	client, err := milvusclient.New(ctx, &milvusclient.ClientConfig{Address: address, DBName: "default"})
+	client, err := milvusclient.New(
+		ctx,
+		&milvusclient.ClientConfig{Address: address, DBName: "default"},
+	)
 	if err != nil {
 		t.Fatalf("The test could not connect to Milvus: %v", err)
 	}
 	defer func() { _ = client.Close(ctx) }()
 	vectors := milvusstore.VectorCollectionName(vectorsearch.CollectionName(repairCollectionID))
-	resultSet, err := client.Query(ctx, milvusclient.NewQueryOption(vectors).
-		WithIDs(column.NewColumnVarChar(milvusstore.VectorKeyField, []string{key})).
-		WithOutputFields("minimum_timestampUnix", "maximum_timestampUnix").
-		WithConsistencyLevel(entity.ClStrong))
+	resultSet, err := client.Query(
+		ctx,
+		milvusclient.NewQueryOption(vectors).
+			WithIDs(
+				column.NewColumnVarChar(milvusstore.VectorKeyField, []string{key}),
+			).
+			WithOutputFields(
+				"minimum_timestampUnix",
+				"maximum_timestampUnix",
+			).
+			WithConsistencyLevel(
+				entity.ClStrong,
+			),
+	)
 	if err != nil || resultSet.ResultCount != 1 {
-		t.Fatalf("The test could not read the vector row, as shown by the vector key, result count, and error: %s, %d, %v", key, resultSet.ResultCount, err)
+		t.Fatalf(
+			"The test could not read the vector row, as shown by the vector key, result count, and error: %s, %d, %v",
+			key,
+			resultSet.ResultCount,
+			err,
+		)
 	}
 	minimum, err := resultSet.GetColumn("minimum_timestampUnix").GetAsInt64(0)
 	if err != nil {
@@ -166,19 +221,45 @@ func TestRepairTimestampsCommandGroupsSharedUpdates(t *testing.T) {
 		composer := fmt.Sprintf(groupedRepairConversation, position)
 		root := filepath.Join(storeRoot, fmt.Sprintf("cursor-%d", position))
 		roots = append(roots, root)
-		writeComposerStore(t, root, composer, []sourceBubble{{id: "g1", kind: 1, text: groupedRepairSharedText, created: partialMessageTime(position).Format("2006-01-02T15:04:05.000Z"), tool: ""}}, nil)
+		writeComposerStore(
+			t,
+			root,
+			composer,
+			[]sourceBubble{
+				{
+					id:      "g1",
+					kind:    1,
+					text:    groupedRepairSharedText,
+					created: partialMessageTime(position).Format("2006-01-02T15:04:05.000Z"),
+					tool:    "",
+				},
+			},
+			nil,
+		)
 		doc := repairDoc("cursor:"+composer, groupedRepairSharedText, zero)
 		docs = append(docs, doc)
-		manifest = append(manifest, semsearch.Fingerprint{ConversationID: "cursor:" + composer, Value: "old-parser"})
+		manifest = append(
+			manifest,
+			semsearch.Fingerprint{ConversationID: "cursor:" + composer, Value: "old-parser"},
+		)
 	}
 	client := openRepairClient(t, address, vectorsearch.LayoutShared)
-	if _, err := client.UpsertConversationDocuments(context.Background(), repairCollectionID, docs, manifest); err != nil {
+	if _, err := client.UpsertConversationDocuments(
+		context.Background(),
+		repairCollectionID,
+		docs,
+		manifest,
+	); err != nil {
 		t.Fatalf("The test could not seed the conversation rows: %v", err)
 	}
 	time.Sleep(repairVisibilityWait)
 	seeded, seededVectors := sharedSnapshot(t, address)
 	if len(seeded) != conversations || len(seededVectors) != 1 {
-		t.Fatalf("The seeded row and vector counts differ from the expected counts: %d, %d", len(seeded), len(seededVectors))
+		t.Fatalf(
+			"The seeded row and vector counts differ from the expected counts: %d, %d",
+			len(seeded),
+			len(seededVectors),
+		)
 	}
 
 	cli := newGroupedRepairCLI(t, address, roots)
@@ -188,11 +269,14 @@ func TestRepairTimestampsCommandGroupsSharedUpdates(t *testing.T) {
 		t.Fatalf("The repair command failed: %v\n%s", err, output)
 	}
 	progress := readProgress(t, progressPath)
-	if !progress.Complete || progress.Totals.RowsWritten != conversations || progress.Totals.Conversations != conversations {
+	if !progress.Complete || progress.Totals.RowsWritten != conversations ||
+		progress.Totals.Conversations != conversations {
 		t.Fatalf("The saved progress differs from the completed run: %+v", progress)
 	}
 	events := cli.rowsEvents(t)
-	if len(events) != 2 || !strings.Contains(events[0], fmt.Sprintf(`"rows":%d,`, repairSourceGroupConversations)) || !strings.Contains(events[1], `"rows":2,`) {
+	if len(events) != 2 ||
+		!strings.Contains(events[0], fmt.Sprintf(`"rows":%d,`, repairSourceGroupConversations)) ||
+		!strings.Contains(events[1], `"rows":2,`) {
 		t.Fatalf("The shared update log lines do not show one update per group: %q", events)
 	}
 	time.Sleep(repairVisibilityWait)
@@ -202,14 +286,25 @@ func TestRepairTimestampsCommandGroupsSharedUpdates(t *testing.T) {
 	}
 	for id, row := range repaired {
 		before := seeded[id]
-		if row.timestampNull || row.timestampUnix == zero || row.content != before.content || row.others != before.others || row.vectorKey != before.vectorKey {
-			t.Fatalf("A repaired row has the wrong date or changed fields, as shown by its ID and contents: %s: %+v", id, row)
+		if row.timestampNull || row.timestampUnix == zero || row.content != before.content ||
+			row.others != before.others ||
+			row.vectorKey != before.vectorKey {
+			t.Fatalf(
+				"A repaired row has the wrong date or changed fields, as shown by its ID and contents: %s: %+v",
+				id,
+				row,
+			)
 		}
 	}
 	key := slices.Collect(maps.Keys(seededVectors))[0]
 	minimum, maximum := groupedVectorRange(t, address, key)
-	if minimum != partialMessageTime(0).Unix() || maximum != partialMessageTime(conversations-1).Unix() {
-		t.Fatalf("The stored vector minimum and maximum differ from the source dates: %d, %d", minimum, maximum)
+	if minimum != partialMessageTime(0).Unix() ||
+		maximum != partialMessageTime(conversations-1).Unix() {
+		t.Fatalf(
+			"The stored vector minimum and maximum differ from the source dates: %d, %d",
+			minimum,
+			maximum,
+		)
 	}
 }
 
@@ -225,13 +320,38 @@ func seedGroupedConversations(t *testing.T, address string, count int) ([]string
 		composer := fmt.Sprintf(groupedRepairConversation, position)
 		root := filepath.Join(storeRoot, fmt.Sprintf("cursor-%d", position))
 		roots = append(roots, root)
-		writeComposerStore(t, root, composer, []sourceBubble{{id: "g1", kind: 1, text: groupedRepairSharedText, created: partialMessageTime(position).Format("2006-01-02T15:04:05.000Z"), tool: ""}}, nil)
-		docs = append(docs, repairDoc("cursor:"+composer, groupedRepairSharedText, time.Time{}.Unix()))
-		manifest = append(manifest, semsearch.Fingerprint{ConversationID: "cursor:" + composer, Value: "old-parser"})
+		writeComposerStore(
+			t,
+			root,
+			composer,
+			[]sourceBubble{
+				{
+					id:      "g1",
+					kind:    1,
+					text:    groupedRepairSharedText,
+					created: partialMessageTime(position).Format("2006-01-02T15:04:05.000Z"),
+					tool:    "",
+				},
+			},
+			nil,
+		)
+		docs = append(
+			docs,
+			repairDoc("cursor:"+composer, groupedRepairSharedText, time.Time{}.Unix()),
+		)
+		manifest = append(
+			manifest,
+			semsearch.Fingerprint{ConversationID: "cursor:" + composer, Value: "old-parser"},
+		)
 		conversationIDs = append(conversationIDs, "cursor:"+composer)
 	}
 	client := openRepairClient(t, address, vectorsearch.LayoutShared)
-	if _, err := client.UpsertConversationDocuments(context.Background(), repairCollectionID, docs, manifest); err != nil {
+	if _, err := client.UpsertConversationDocuments(
+		context.Background(),
+		repairCollectionID,
+		docs,
+		manifest,
+	); err != nil {
 		t.Fatalf("The test could not seed the conversation rows: %v", err)
 	}
 	time.Sleep(repairVisibilityWait)
@@ -263,13 +383,18 @@ func TestRepairTimestampsCommandSavesAGroupAfterAnEvidenceFailure(t *testing.T) 
 	}()
 	output, err := cli.run(t, "--progress-file", progressPath, "--evidence-file", evidencePath)
 	if err == nil {
-		t.Fatalf("The repair command accepted the failed evidence write and produced this output: %s", output)
+		t.Fatalf(
+			"The repair command accepted the failed evidence write and produced this output: %s",
+			output,
+		)
 	}
 	if readerErr := <-readerOpened; readerErr != nil {
 		t.Fatalf("The evidence pipe reader failed: %v", readerErr)
 	}
 	progress := readProgress(t, progressPath)
-	if progress.Cursor != conversationIDs[conversations-1] || progress.Totals.RowsWritten != conversations || progress.Totals.Conversations != conversations {
+	if progress.Cursor != conversationIDs[conversations-1] ||
+		progress.Totals.RowsWritten != conversations ||
+		progress.Totals.Conversations != conversations {
 		t.Fatalf("The saved progress after the evidence failure is wrong: %+v", progress)
 	}
 	time.Sleep(repairVisibilityWait)
@@ -277,7 +402,11 @@ func TestRepairTimestampsCommandSavesAGroupAfterAnEvidenceFailure(t *testing.T) 
 	zero := time.Time{}.Unix()
 	for id, row := range repaired {
 		if row.timestampNull || row.timestampUnix == zero {
-			t.Fatalf("A repaired row has the wrong date or changed fields, as shown by its ID and contents: %s: %+v", id, row)
+			t.Fatalf(
+				"A repaired row has the wrong date or changed fields, as shown by its ID and contents: %s: %+v",
+				id,
+				row,
+			)
 		}
 	}
 }
@@ -296,18 +425,47 @@ func TestRepairTimestampsCommandKeepsQueuedRetriesAcrossGroups(t *testing.T) {
 	progressPath := filepath.Join(cli.home, "progress.json")
 	savedCursor := conversationIDs[conversations-1]
 	queued := conversationIDs[:conversations-1]
-	emptyTotals := vectorsearch.TimestampRepairReport{Conversations: 0, RowsRead: 0, RowsCurrent: 0, RowsChanged: 0, RowsWritten: 0, RowsUnmatched: 0, RowsMissingTimestamp: 0, RowsAmbiguous: 0, RowsInvalidMetadata: 0}
-	seededProgress := timestampRepairProgress{Collection: vectorsearch.CollectionName(repairCollectionID), Provider: "cursor", SourceStore: true, Cursor: savedCursor, Complete: false, UpdatedAt: time.Time{}, Totals: emptyTotals, Failed: queued, LastRunRows: 0}
+	emptyTotals := vectorsearch.TimestampRepairReport{
+		Conversations:        0,
+		RowsRead:             0,
+		RowsCurrent:          0,
+		RowsChanged:          0,
+		RowsWritten:          0,
+		RowsUnmatched:        0,
+		RowsMissingTimestamp: 0,
+		RowsAmbiguous:        0,
+		RowsInvalidMetadata:  0,
+	}
+	seededProgress := timestampRepairProgress{
+		Collection:  vectorsearch.CollectionName(repairCollectionID),
+		Provider:    "cursor",
+		SourceStore: true,
+		Cursor:      savedCursor,
+		Complete:    false,
+		UpdatedAt:   time.Time{},
+		Totals:      emptyTotals,
+		Failed:      queued,
+		LastRunRows: 0,
+	}
 	if err := writeTimestampRepairProgress(progressPath, seededProgress); err != nil {
 		t.Fatalf("The test could not seed the progress file: %v", err)
 	}
-	output, err := cli.run(t, "--progress-file", progressPath, "--resume", "--max-rows", strconv.Itoa(repairSourceGroupConversations))
+	output, err := cli.run(
+		t,
+		"--progress-file",
+		progressPath,
+		"--resume",
+		"--max-rows",
+		strconv.Itoa(repairSourceGroupConversations),
+	)
 	if err != nil {
 		t.Fatalf("The repair command failed before the first group checkpoint: %v\n%s", err, output)
 	}
 	progress := readProgress(t, progressPath)
 	remaining := queued[repairSourceGroupConversations:]
-	if progress.Complete || progress.Cursor != savedCursor || !slices.Equal(progress.Failed, remaining) || progress.Totals.RowsWritten != repairSourceGroupConversations {
+	if progress.Complete || progress.Cursor != savedCursor ||
+		!slices.Equal(progress.Failed, remaining) ||
+		progress.Totals.RowsWritten != repairSourceGroupConversations {
 		t.Fatalf("The first group checkpoint is wrong: %+v", progress)
 	}
 
@@ -316,7 +474,8 @@ func TestRepairTimestampsCommandKeepsQueuedRetriesAcrossGroups(t *testing.T) {
 		t.Fatalf("The resumed repair command failed: %v\n%s", err, output)
 	}
 	progress = readProgress(t, progressPath)
-	if !progress.Complete || progress.Cursor != savedCursor || len(progress.Failed) != 0 || progress.Totals.RowsWritten != len(queued) {
+	if !progress.Complete || progress.Cursor != savedCursor || len(progress.Failed) != 0 ||
+		progress.Totals.RowsWritten != len(queued) {
 		t.Fatalf("The saved progress after the resume is wrong: %+v", progress)
 	}
 	time.Sleep(repairVisibilityWait)
@@ -328,7 +487,11 @@ func TestRepairTimestampsCommandKeepsQueuedRetriesAcrossGroups(t *testing.T) {
 	for id, row := range repaired {
 		wantDated := !strings.Contains(row.relativePath, savedCursor)
 		if (row.timestampUnix != zero) != wantDated {
-			t.Fatalf("A repaired row has the wrong date or changed fields, as shown by its ID and contents: %s: %+v", id, row)
+			t.Fatalf(
+				"A repaired row has the wrong date or changed fields, as shown by its ID and contents: %s: %+v",
+				id,
+				row,
+			)
 		}
 	}
 }
@@ -345,7 +508,16 @@ func TestRepairTimestampsCommandResumesAPartiallyWrittenGroup(t *testing.T) {
 	zero := time.Time{}.Unix()
 	for position := range partialRepairRows {
 		message := fmt.Sprintf("Partial write message %03d asks about bucket retention.", position)
-		bubbles = append(bubbles, sourceBubble{id: fmt.Sprintf("p%03d", position), kind: 1, text: message, created: partialMessageTime(position).Format("2006-01-02T15:04:05.000Z"), tool: ""})
+		bubbles = append(
+			bubbles,
+			sourceBubble{
+				id:      fmt.Sprintf("p%03d", position),
+				kind:    1,
+				text:    message,
+				created: partialMessageTime(position).Format("2006-01-02T15:04:05.000Z"),
+				tool:    "",
+			},
+		)
 		doc := repairDoc("cursor:"+partialComposerID, message, zero)
 		doc.MessageIndex = int32(position)
 		docs = append(docs, doc)
@@ -353,8 +525,15 @@ func TestRepairTimestampsCommandResumesAPartiallyWrittenGroup(t *testing.T) {
 	writeComposerStore(t, storeRoot, partialComposerID, bubbles, nil)
 	ctx := context.Background()
 	client := openRepairClient(t, address, vectorsearch.LayoutShared)
-	manifest := []semsearch.Fingerprint{{ConversationID: "cursor:" + partialComposerID, Value: "old-parser"}}
-	if _, err := client.UpsertConversationDocuments(ctx, repairCollectionID, docs, manifest); err != nil {
+	manifest := []semsearch.Fingerprint{
+		{ConversationID: "cursor:" + partialComposerID, Value: "old-parser"},
+	}
+	if _, err := client.UpsertConversationDocuments(
+		ctx,
+		repairCollectionID,
+		docs,
+		manifest,
+	); err != nil {
 		t.Fatalf("The test could not seed the conversation rows: %v", err)
 	}
 	time.Sleep(repairVisibilityWait)
@@ -370,14 +549,21 @@ func TestRepairTimestampsCommandResumesAPartiallyWrittenGroup(t *testing.T) {
 	progressPath := filepath.Join(cli.home, "progress.json")
 	output, err := cli.run(t, "--progress-file", progressPath)
 	if err == nil {
-		t.Fatalf("The repair command accepted the oversized metadata update and produced this output: %s", output)
+		t.Fatalf(
+			"The repair command accepted the oversized metadata update and produced this output: %s",
+			output,
+		)
 	}
 	progress := readProgress(t, progressPath)
-	if progress.Cursor != "" || progress.Complete || progress.Totals.RowsWritten == 0 || progress.Totals.RowsWritten >= partialRepairRows {
+	if progress.Cursor != "" || progress.Complete || progress.Totals.RowsWritten == 0 ||
+		progress.Totals.RowsWritten >= partialRepairRows {
 		t.Fatalf("The saved progress after the failed write is wrong: %+v", progress)
 	}
 	if events := cli.rowsEvents(t); len(events) != 0 {
-		t.Fatalf("The command logged a completed shared update for the failed group in these log lines: %q", events)
+		t.Fatalf(
+			"The command logged a completed shared update for the failed group in these log lines: %q",
+			events,
+		)
 	}
 	time.Sleep(repairVisibilityWait)
 	lastKey := seeded[lastID].vectorKey
@@ -387,7 +573,10 @@ func TestRepairTimestampsCommandResumesAPartiallyWrittenGroup(t *testing.T) {
 	}
 	_, widenedMaximum := groupedVectorRange(t, address, lastKey)
 	if widenedMaximum != partialMessageTime(lastMessage).Unix() {
-		t.Fatalf("The stored vector maximum does not cover the planned date of the failed row: %d", widenedMaximum)
+		t.Fatalf(
+			"The stored vector maximum does not cover the planned date of the failed row: %d",
+			widenedMaximum,
+		)
 	}
 
 	setRowMetadata(t, ctx, address, lastID, partialMetadata(lastIndex, 0))
@@ -407,7 +596,11 @@ func TestRepairTimestampsCommandResumesAPartiallyWrittenGroup(t *testing.T) {
 	}
 	for id, row := range repaired {
 		if row.timestampNull || row.timestampUnix == zero || row.others != seeded[id].others {
-			t.Fatalf("A repaired row has the wrong date or changed fields, as shown by its ID and contents: %s: %+v", id, row)
+			t.Fatalf(
+				"A repaired row has the wrong date or changed fields, as shown by its ID and contents: %s: %+v",
+				id,
+				row,
+			)
 		}
 	}
 }

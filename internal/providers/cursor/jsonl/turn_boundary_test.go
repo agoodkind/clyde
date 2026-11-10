@@ -20,6 +20,7 @@ func captureWarnings(t *testing.T, level slog.Level) *bytes.Buffer {
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: level})))
 	t.Cleanup(func() { slog.SetDefault(previous) })
+
 	return &buffer
 }
 
@@ -30,11 +31,18 @@ func TestStreamMessagesReportsUnreadableLine(t *testing.T) {
 	buffer := captureWarnings(t, slog.LevelWarn)
 
 	path := filepath.Join(t.TempDir(), testConversationID+".jsonl")
-	writeTestFile(t, path, strings.Join([]string{
-		`{"role":"assistant","message":{"content":[{"type":"text","text":"before"}]}}`,
-		`{"role":"assistant","message":{"content":[{"type":"text","text":`,
-		`{"role":"assistant","message":{"content":[{"type":"text","text":"after"}]}}`,
-	}, "\n")+"\n")
+	writeTestFile(
+		t,
+		path,
+		strings.Join(
+			[]string{
+				`{"role":"assistant","message":{"content":[{"type":"text","text":"before"}]}}`,
+				`{"role":"assistant","message":{"content":[{"type":"text","text":`,
+				`{"role":"assistant","message":{"content":[{"type":"text","text":"after"}]}}`,
+			},
+			"\n",
+		)+"\n",
+	)
 
 	err := StreamMessages(path, func(_ TranscriptMessage) error { return nil })
 	if err != nil {
@@ -45,6 +53,7 @@ func TestStreamMessagesReportsUnreadableLine(t *testing.T) {
 	if !strings.Contains(logged, "transcript_line_undecodable") {
 		t.Fatalf("logs = %q, want an undecodable-line warning", logged)
 	}
+
 	if !strings.Contains(logged, `"line":2`) {
 		t.Fatalf("logs = %q, want the failing line number 2", logged)
 	}
@@ -56,18 +65,27 @@ func TestScanHeaderReportsUnreadableLine(t *testing.T) {
 	buffer := captureWarnings(t, slog.LevelWarn)
 
 	path := filepath.Join(t.TempDir(), testConversationID+".jsonl")
-	writeTestFile(t, path, strings.Join([]string{
-		`{"role":"user","message":{"content":[{"type":"text",`,
-		`{"role":"user","message":{"content":[{"type":"text","text":"real title"}]}}`,
-	}, "\n")+"\n")
+	writeTestFile(
+		t,
+		path,
+		strings.Join(
+			[]string{
+				`{"role":"user","message":{"content":[{"type":"text",`,
+				`{"role":"user","message":{"content":[{"type":"text","text":"real title"}]}}`,
+			},
+			"\n",
+		)+"\n",
+	)
 
 	header, err := ScanHeader(path)
 	if err != nil {
 		t.Fatalf("ScanHeader returned error: %v", err)
 	}
+
 	if header.FirstUserText != "real title" {
 		t.Fatalf("FirstUserText = %q, want real title", header.FirstUserText)
 	}
+
 	if !strings.Contains(buffer.String(), "transcript_line_undecodable") {
 		t.Fatalf("logs = %q, want an undecodable-line warning", buffer.String())
 	}
@@ -79,23 +97,33 @@ func TestScanHeaderReportsUnreadableLine(t *testing.T) {
 func TestStreamMessagesTreatsKnownEventAsBoundaryEvenWithRole(t *testing.T) {
 	t.Parallel()
 
-	turns := collectTurns(t, []string{
-		`{"role":"assistant","message":{"content":[{"type":"text","text":"first a"}]}}`,
-		`{"role":"assistant","message":{"content":[{"type":"text","text":"first b"}]}}`,
-		`{"type":"turn_ended","status":"success","role":"assistant"}`,
-		`{"role":"assistant","message":{"content":[{"type":"text","text":"second a"}]}}`,
-		`{"role":"assistant","message":{"content":[{"type":"text","text":"second b"}]}}`,
-	})
+	turns := collectTurns(
+		t,
+		[]string{
+			`{"role":"assistant","message":{"content":[{"type":"text","text":"first a"}]}}`,
+			`{"role":"assistant","message":{"content":[{"type":"text","text":"first b"}]}}`,
+			`{"type":"turn_ended","status":"success","role":"assistant"}`,
+			`{"role":"assistant","message":{"content":[{"type":"text","text":"second a"}]}}`,
+			`{"role":"assistant","message":{"content":[{"type":"text","text":"second b"}]}}`,
+		},
+	)
 
 	if len(turns) != 2 {
-		t.Fatalf("turns = %d, want 2; a known event closes the turn even carrying a role: %#v", len(turns), turns)
+		t.Fatalf(
+			"turns = %d, want 2; a known event closes the turn even carrying a role: %#v",
+			len(turns),
+			turns,
+		)
 	}
+
 	if got := turnTexts(turns[0]); len(got) != 2 || got[0] != "first a" {
 		t.Fatalf("first turn texts = %#v", got)
 	}
+
 	if got := turnTexts(turns[1]); len(got) != 2 || got[0] != "second a" {
 		t.Fatalf("second turn texts = %#v", got)
 	}
+
 	// The outcome is what separates "clyde read the event" from "clyde could not
 	// place the line". Both close the turn and produce the same texts, so without
 	// this the test cannot tell them apart.
@@ -109,27 +137,40 @@ func TestStreamMessagesTreatsKnownEventAsBoundaryEvenWithRole(t *testing.T) {
 // line past the end of the file.
 func TestStreamMessagesReportsTheTurnsOwnLineOnCallbackFailure(t *testing.T) {
 	path := filepath.Join(t.TempDir(), testConversationID+".jsonl")
-	writeTestFile(t, path, strings.Join([]string{
-		`{"role":"user","message":{"content":[{"type":"text","text":"ask"}]}}`,
-		`{"role":"assistant","message":{"content":[{"type":"text","text":"one"}]}}`,
-		`{"role":"assistant","message":{"content":[{"type":"text","text":"two"}]}}`,
-	}, "\n")+"\n")
+	writeTestFile(
+		t,
+		path,
+		strings.Join(
+			[]string{
+				`{"role":"user","message":{"content":[{"type":"text","text":"ask"}]}}`,
+				`{"role":"assistant","message":{"content":[{"type":"text","text":"one"}]}}`,
+				`{"role":"assistant","message":{"content":[{"type":"text","text":"two"}]}}`,
+			},
+			"\n",
+		)+"\n",
+	)
 
 	seen := 0
-	err := StreamMessages(path, func(_ TranscriptMessage) error {
-		seen++
-		if seen == 2 {
-			return errors.New("callback refused the final turn")
-		}
-		return nil
-	})
+	err := StreamMessages(
+		path,
+		func(_ TranscriptMessage) error {
+			seen++
+			if seen == 2 {
+				return errors.New("callback refused the final turn")
+			}
+
+			return nil
+		},
+	)
 	if err == nil {
 		t.Fatal("StreamMessages returned nil error, want the callback failure")
 	}
+
 	// The final turn is built from lines 2 and 3; the file has 3 lines.
 	if !strings.Contains(err.Error(), "line 2") {
 		t.Fatalf("error = %q, want it to name line 2, the turn's own first line", err.Error())
 	}
+
 	if strings.Contains(err.Error(), "line 4") {
 		t.Fatalf("error = %q, names a line past the end of the file", err.Error())
 	}
@@ -142,20 +183,32 @@ func TestStreamMessagesLogsAbnormalBoundaryEvenWhenCallerStops(t *testing.T) {
 	buffer := captureWarnings(t, slog.LevelDebug)
 
 	path := filepath.Join(t.TempDir(), testConversationID+".jsonl")
-	writeTestFile(t, path, strings.Join([]string{
-		`{"role":"assistant","message":{"content":[{"type":"text","text":"cut short"}]}}`,
-		`{"type":"turn_ended","status":"aborted","error":"stopped by user"}`,
-		`{"role":"assistant","message":{"content":[{"type":"text","text":"never reached"}]}}`,
-	}, "\n")+"\n")
+	writeTestFile(
+		t,
+		path,
+		strings.Join(
+			[]string{
+				`{"role":"assistant","message":{"content":[{"type":"text","text":"cut short"}]}}`,
+				`{"type":"turn_ended","status":"aborted","error":"stopped by user"}`,
+				`{"role":"assistant","message":{"content":[{"type":"text","text":"never reached"}]}}`,
+			},
+			"\n",
+		)+"\n",
+	)
 
 	err := StreamMessages(path, func(_ TranscriptMessage) error { return ErrStopStreaming })
 	if !errors.Is(err, ErrStopStreaming) {
 		t.Fatalf("StreamMessages returned %v, want ErrStopStreaming", err)
 	}
+
 	logged := buffer.String()
 	if !strings.Contains(logged, "turn_ended_abnormally") {
-		t.Fatalf("logs = %q, want the abnormal-boundary record even though the caller stopped", logged)
+		t.Fatalf(
+			"logs = %q, want the abnormal-boundary record even though the caller stopped",
+			logged,
+		)
 	}
+
 	if !strings.Contains(logged, "aborted") {
 		t.Fatalf("logs = %q, want the aborted status", logged)
 	}
@@ -173,8 +226,10 @@ func (r *failingReader) Read(p []byte) (int, error) {
 	if r.offset >= len(r.body) {
 		return 0, r.err
 	}
+
 	n := copy(p, r.body[r.offset:])
 	r.offset += n
+
 	return n, nil
 }
 
@@ -184,30 +239,47 @@ func (r *failingReader) Read(p []byte) (int, error) {
 func TestStreamTurnsDeliversOpenTurnOnReadFailure(t *testing.T) {
 	t.Parallel()
 
-	body := strings.Join([]string{
-		`{"role":"user","message":{"content":[{"type":"text","text":"ask"}]}}`,
-		`{"role":"assistant","message":{"content":[{"type":"text","text":"kept one"}]}}`,
-		`{"role":"assistant","message":{"content":[{"type":"text","text":"kept two"}]}}`,
-	}, "\n") + "\n"
+	body := strings.Join(
+		[]string{
+			`{"role":"user","message":{"content":[{"type":"text","text":"ask"}]}}`,
+			`{"role":"assistant","message":{"content":[{"type":"text","text":"kept one"}]}}`,
+			`{"role":"assistant","message":{"content":[{"type":"text","text":"kept two"}]}}`,
+		},
+		"\n",
+	) + "\n"
 	source := &failingReader{body: body, offset: 0, err: errors.New("input/output error")}
 
 	turns := make([]TranscriptMessage, 0)
-	err := streamTurns("cursor-transcript.jsonl", source, func(turn TranscriptMessage) error {
-		turns = append(turns, turn)
-		return nil
-	})
 
+	err := streamTurns(
+		"cursor-transcript.jsonl",
+		source,
+		func(turn TranscriptMessage) error {
+			turns = append(turns, turn)
+			return nil
+		},
+	)
 	if err == nil {
 		t.Fatal("streamTurns returned nil error, want the read failure")
 	}
+
 	if len(turns) != 2 {
-		t.Fatalf("turns = %d, want 2; the decoded turns must survive the read failure: %#v", len(turns), turns)
+		t.Fatalf(
+			"turns = %d, want 2; the decoded turns must survive the read failure: %#v",
+			len(turns),
+			turns,
+		)
 	}
+
 	// The read failed before anything said the turn was over, so the turn is as
 	// truncated as one cut short mid-line and must not be stamped certain.
 	if !turns[1].Outcome.Uncertain {
-		t.Fatalf("flushed turn outcome = %#v, want Uncertain; the read failed mid-file", turns[1].Outcome)
+		t.Fatalf(
+			"flushed turn outcome = %#v, want Uncertain; the read failed mid-file",
+			turns[1].Outcome,
+		)
 	}
+
 	if got := turnTexts(turns[1]); len(got) != 2 || got[0] != "kept one" || got[1] != "kept two" {
 		t.Fatalf("assistant turn texts = %#v, want both already-decoded records", got)
 	}
@@ -219,16 +291,20 @@ func TestStreamTurnsDeliversOpenTurnOnReadFailure(t *testing.T) {
 func TestStreamMessagesKeepsAllOneRoleTranscriptAsOneTurn(t *testing.T) {
 	t.Parallel()
 
-	turns := collectTurns(t, []string{
-		`{"role":"assistant","message":{"content":[{"type":"text","text":"step one"}]}}`,
-		`{"role":"assistant","message":{"content":[{"type":"tool_use","name":"alpha","input":{}}]}}`,
-		`{"role":"assistant","message":{"content":[{"type":"text","text":"step two"}]}}`,
-		`{"role":"assistant","message":{"content":[{"type":"tool_use","name":"beta","input":{}}]}}`,
-	})
+	turns := collectTurns(
+		t,
+		[]string{
+			`{"role":"assistant","message":{"content":[{"type":"text","text":"step one"}]}}`,
+			`{"role":"assistant","message":{"content":[{"type":"tool_use","name":"alpha","input":{}}]}}`,
+			`{"role":"assistant","message":{"content":[{"type":"text","text":"step two"}]}}`,
+			`{"role":"assistant","message":{"content":[{"type":"tool_use","name":"beta","input":{}}]}}`,
+		},
+	)
 
 	if len(turns) != 1 {
 		t.Fatalf("turns = %d, want 1; the transcript states no boundary: %#v", len(turns), turns)
 	}
+
 	if len(turns[0].Parts) != 4 {
 		t.Fatalf("parts = %d, want all 4 in file order", len(turns[0].Parts))
 	}
@@ -240,22 +316,31 @@ func TestStreamMessagesKeepsAllOneRoleTranscriptAsOneTurn(t *testing.T) {
 func TestStreamMessagesCarriesFailedTurnOutcome(t *testing.T) {
 	t.Parallel()
 
-	turns := collectTurns(t, []string{
-		`{"role":"assistant","message":{"content":[{"type":"text","text":"partial answer"}]}}`,
-		`{"type":"turn_ended","status":"error","error":"context limit"}`,
-		`{"role":"assistant","message":{"content":[{"type":"text","text":"finished answer"}]}}`,
-		`{"type":"turn_ended","status":"success"}`,
-	})
+	turns := collectTurns(
+		t,
+		[]string{
+			`{"role":"assistant","message":{"content":[{"type":"text","text":"partial answer"}]}}`,
+			`{"type":"turn_ended","status":"error","error":"context limit"}`,
+			`{"role":"assistant","message":{"content":[{"type":"text","text":"finished answer"}]}}`,
+			`{"type":"turn_ended","status":"success"}`,
+		},
+	)
 
 	if len(turns) != 2 {
 		t.Fatalf("turns = %d, want 2: %#v", len(turns), turns)
 	}
+
 	if !turns[0].Outcome.Failed() {
 		t.Fatalf("first turn outcome = %#v, want a failure", turns[0].Outcome)
 	}
+
 	if turns[0].Outcome.Status != TurnStatusError || turns[0].Outcome.Error != "context limit" {
-		t.Fatalf("first turn outcome = %#v, want the status and reason Cursor recorded", turns[0].Outcome)
+		t.Fatalf(
+			"first turn outcome = %#v, want the status and reason Cursor recorded",
+			turns[0].Outcome,
+		)
 	}
+
 	if turns[1].Outcome.Failed() {
 		t.Fatalf("second turn outcome = %#v, want a clean finish", turns[1].Outcome)
 	}
@@ -266,14 +351,18 @@ func TestStreamMessagesCarriesFailedTurnOutcome(t *testing.T) {
 func TestStreamMessagesCarriesAbortedTurnOutcome(t *testing.T) {
 	t.Parallel()
 
-	turns := collectTurns(t, []string{
-		`{"role":"assistant","message":{"content":[{"type":"text","text":"cut off here"}]}}`,
-		`{"type":"turn_ended","status":"aborted","error":"stopped by user"}`,
-	})
+	turns := collectTurns(
+		t,
+		[]string{
+			`{"role":"assistant","message":{"content":[{"type":"text","text":"cut off here"}]}}`,
+			`{"type":"turn_ended","status":"aborted","error":"stopped by user"}`,
+		},
+	)
 
 	if len(turns) != 1 {
 		t.Fatalf("turns = %d, want 1", len(turns))
 	}
+
 	if !turns[0].Outcome.Failed() || turns[0].Outcome.Status != TurnStatusAborted {
 		t.Fatalf("outcome = %#v, want an aborted turn", turns[0].Outcome)
 	}
@@ -285,18 +374,27 @@ func TestStreamMessagesCarriesAbortedTurnOutcome(t *testing.T) {
 func TestStreamMessagesClosesTurnOnUnreadableLine(t *testing.T) {
 	t.Parallel()
 
-	turns := collectTurns(t, []string{
-		`{"role":"assistant","message":{"content":[{"type":"text","text":"first"}]}}`,
-		`{"type":"turn_ended","status":"succ`,
-		`{"role":"assistant","message":{"content":[{"type":"text","text":"second"}]}}`,
-	})
+	turns := collectTurns(
+		t,
+		[]string{
+			`{"role":"assistant","message":{"content":[{"type":"text","text":"first"}]}}`,
+			`{"type":"turn_ended","status":"succ`,
+			`{"role":"assistant","message":{"content":[{"type":"text","text":"second"}]}}`,
+		},
+	)
 
 	if len(turns) != 2 {
-		t.Fatalf("turns = %d, want 2; an unreadable line must not merge the turns around it: %#v", len(turns), turns)
+		t.Fatalf(
+			"turns = %d, want 2; an unreadable line must not merge the turns around it: %#v",
+			len(turns),
+			turns,
+		)
 	}
+
 	if !turns[0].Outcome.Uncertain {
 		t.Fatalf("first turn outcome = %#v, want Uncertain", turns[0].Outcome)
 	}
+
 	if got := turnTexts(turns[0]); len(got) != 1 || got[0] != "first" {
 		t.Fatalf("first turn texts = %#v, want only the record before the unreadable line", got)
 	}
@@ -307,15 +405,19 @@ func TestStreamMessagesClosesTurnOnUnreadableLine(t *testing.T) {
 func TestStreamMessagesKeepsTurnAcrossBlankLine(t *testing.T) {
 	t.Parallel()
 
-	turns := collectTurns(t, []string{
-		`{"role":"assistant","message":{"content":[{"type":"text","text":"first"}]}}`,
-		``,
-		`{"role":"assistant","message":{"content":[{"type":"text","text":"second"}]}}`,
-	})
+	turns := collectTurns(
+		t,
+		[]string{
+			`{"role":"assistant","message":{"content":[{"type":"text","text":"first"}]}}`,
+			``,
+			`{"role":"assistant","message":{"content":[{"type":"text","text":"second"}]}}`,
+		},
+	)
 
 	if len(turns) != 1 {
 		t.Fatalf("turns = %d, want 1; a blank line is not a boundary: %#v", len(turns), turns)
 	}
+
 	if turns[0].Outcome.Uncertain {
 		t.Fatalf("outcome = %#v, want certain across a blank line", turns[0].Outcome)
 	}
@@ -327,18 +429,27 @@ func TestStreamMessagesKeepsTurnAcrossBlankLine(t *testing.T) {
 // read.
 func TestScanHeaderMarksTitleUncertainAfterUnreadableRecord(t *testing.T) {
 	path := filepath.Join(t.TempDir(), testConversationID+".jsonl")
-	writeTestFile(t, path, strings.Join([]string{
-		`{"role":"user","message":{"content":[{"type":"text","text":"the real firs`,
-		`{"role":"user","message":{"content":[{"type":"text","text":"follow-up"}]}}`,
-	}, "\n")+"\n")
+	writeTestFile(
+		t,
+		path,
+		strings.Join(
+			[]string{
+				`{"role":"user","message":{"content":[{"type":"text","text":"the real firs`,
+				`{"role":"user","message":{"content":[{"type":"text","text":"follow-up"}]}}`,
+			},
+			"\n",
+		)+"\n",
+	)
 
 	header, err := ScanHeader(path)
 	if err != nil {
 		t.Fatalf("ScanHeader returned error: %v", err)
 	}
+
 	if header.FirstUserText != "follow-up" {
 		t.Fatalf("FirstUserText = %q, want the earliest readable text", header.FirstUserText)
 	}
+
 	if !header.FirstUserTextUncertain {
 		t.Fatal("FirstUserTextUncertain = false, want true; a record before it could not be read")
 	}
@@ -346,11 +457,16 @@ func TestScanHeaderMarksTitleUncertainAfterUnreadableRecord(t *testing.T) {
 	// The flag has to mean something, so a transcript that read cleanly must not
 	// carry it.
 	cleanPath := filepath.Join(t.TempDir(), testConversationID+".jsonl")
-	writeTestFile(t, cleanPath, `{"role":"user","message":{"content":[{"type":"text","text":"the real first"}]}}`+"\n")
+	writeTestFile(
+		t,
+		cleanPath,
+		`{"role":"user","message":{"content":[{"type":"text","text":"the real first"}]}}`+"\n",
+	)
 	cleanHeader, err := ScanHeader(cleanPath)
 	if err != nil {
 		t.Fatalf("ScanHeader returned error for the clean transcript: %v", err)
 	}
+
 	if cleanHeader.FirstUserTextUncertain {
 		t.Fatal("FirstUserTextUncertain = true on a transcript whose every line read cleanly")
 	}
@@ -367,15 +483,23 @@ func TestStreamTurnsReportsReadFailureEvenWhenTheCallerStops(t *testing.T) {
 	body := `{"role":"assistant","message":{"content":[{"type":"text","text":"only turn"}]}}` + "\n"
 	source := &failingReader{body: body, offset: 0, err: errors.New("input/output error")}
 
-	err := streamTurns("cursor-transcript.jsonl", source, func(_ TranscriptMessage) error {
-		return ErrStopStreaming
-	})
+	err := streamTurns(
+		"cursor-transcript.jsonl",
+		source,
+		func(_ TranscriptMessage) error {
+			return ErrStopStreaming
+		},
+	)
 
 	if !errors.Is(err, ErrStopStreaming) {
 		t.Fatalf("streamTurns returned %v, want the caller's stop", err)
 	}
+
 	if !strings.Contains(buffer.String(), "transcript_read_failed") {
-		t.Fatalf("logs = %q, want the read failure recorded even though the caller stopped", buffer.String())
+		t.Fatalf(
+			"logs = %q, want the read failure recorded even though the caller stopped",
+			buffer.String(),
+		)
 	}
 }
 
@@ -384,21 +508,30 @@ func TestStreamTurnsReportsReadFailureEvenWhenTheCallerStops(t *testing.T) {
 func TestStreamMessagesPreservesToolInputAcrossAJoinedTurn(t *testing.T) {
 	t.Parallel()
 
-	turns := collectTurns(t, []string{
-		`{"role":"assistant","message":{"content":[{"type":"tool_use","name":"read_file","input":{"path":"first.go"}}]}}`,
-		`{"role":"assistant","message":{"content":[{"type":"tool_use","name":"read_file","input":{"path":"second.go"}}]}}`,
-	})
+	turns := collectTurns(
+		t,
+		[]string{
+			`{"role":"assistant","message":{"content":[{"type":"tool_use","name":"read_file","input":{"path":"first.go"}}]}}`,
+			`{"role":"assistant","message":{"content":[{"type":"tool_use","name":"read_file","input":{"path":"second.go"}}]}}`,
+		},
+	)
 
 	if len(turns) != 1 {
 		t.Fatalf("turns = %d, want 1", len(turns))
 	}
+
 	wantPaths := []string{"first.go", "second.go"}
 	// The part count is asserted before the loop, because ranging over the parts
 	// and indexing the expected paths stays green against a builder that folded
 	// only the first record and dropped the second call.
 	if len(turns[0].Parts) != len(wantPaths) {
-		t.Fatalf("parts = %d, want %d; every record's parts must be folded in", len(turns[0].Parts), len(wantPaths))
+		t.Fatalf(
+			"parts = %d, want %d; every record's parts must be folded in",
+			len(turns[0].Parts),
+			len(wantPaths),
+		)
 	}
+
 	for i, part := range turns[0].Parts {
 		var input struct {
 			Path string `json:"path"`
@@ -406,6 +539,7 @@ func TestStreamMessagesPreservesToolInputAcrossAJoinedTurn(t *testing.T) {
 		if err := json.Unmarshal(part.ToolInput, &input); err != nil {
 			t.Fatalf("part %d input: %v", i, err)
 		}
+
 		if input.Path != wantPaths[i] {
 			t.Fatalf("part %d path = %q, want %q", i, input.Path, wantPaths[i])
 		}
@@ -424,8 +558,10 @@ func (r *lineThenErrorReader) Read(p []byte) (int, error) {
 	if r.done {
 		return 0, r.err
 	}
+
 	r.done = true
 	n := copy(p, r.body)
+
 	return n, r.err
 }
 
@@ -444,21 +580,32 @@ func TestStreamTurnsReportsReadFailureDeliveredWithItsLastLine(t *testing.T) {
 	// A turn is already open, so the boundary line on the failing read closes it
 	// and the callback stops there.
 	turns := 0
-	err := streamTurns("cursor-transcript.jsonl", io.MultiReader(
-		strings.NewReader(`{"role":"assistant","message":{"content":[{"type":"text","text":"answer"}]}}`+"\n"),
-		source,
-	), func(_ TranscriptMessage) error {
-		turns++
-		return ErrStopStreaming
-	})
+	err := streamTurns(
+		"cursor-transcript.jsonl",
+		io.MultiReader(
+			strings.NewReader(
+				`{"role":"assistant","message":{"content":[{"type":"text","text":"answer"}]}}`+"\n",
+			),
+			source,
+		),
+		func(_ TranscriptMessage) error {
+			turns++
+			return ErrStopStreaming
+		},
+	)
 
 	if !errors.Is(err, ErrStopStreaming) {
 		t.Fatalf("streamTurns returned %v, want the caller's stop", err)
 	}
+
 	if turns != 1 {
 		t.Fatalf("delivered %d turns, want 1", turns)
 	}
+
 	if !strings.Contains(buffer.String(), "transcript_read_failed") {
-		t.Fatalf("logs = %q, want the read failure recorded; it arrived with a usable line", buffer.String())
+		t.Fatalf(
+			"logs = %q, want the read failure recorded; it arrived with a usable line",
+			buffer.String(),
+		)
 	}
 }

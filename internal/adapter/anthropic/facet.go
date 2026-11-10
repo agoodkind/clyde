@@ -36,18 +36,23 @@ func (f Facet) FacetAttrs() []slog.Attr {
 	if f.Model != "" {
 		attrs = append(attrs, slog.String("model", f.Model))
 	}
+
 	if f.ThinkingEnabled {
 		attrs = append(attrs, slog.Bool("thinking_enabled", true))
 	}
+
 	if f.StopReason != "" {
 		attrs = append(attrs, slog.String("stop_reason", f.StopReason))
 	}
+
 	if f.StreamEventCount > 0 {
 		attrs = append(attrs, slog.Int("stream_event_count", f.StreamEventCount))
 	}
+
 	if f.RetryAttempt > 0 {
 		attrs = append(attrs, slog.Int("retry_attempt", f.RetryAttempt))
 	}
+
 	return attrs
 }
 
@@ -65,6 +70,7 @@ func RegisterBackendFacet(reg backendfacet.Registrar) {
 	if reg == nil {
 		return
 	}
+
 	reg.Register(adaptermodel.BackendAnthropic.String(), backendfacet.FactoryFunc(newBackendFacet))
 }
 

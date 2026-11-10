@@ -16,6 +16,7 @@ func TestSuppressRemovesNamedTokenPreservingOrder(t *testing.T) {
 	if got != want {
 		t.Fatalf("Suppress=%q want %q", got, want)
 	}
+
 	if !slices.Equal(removed, []string{"gamma-flag"}) {
 		t.Fatalf("removed=%v want [gamma-flag]", removed)
 	}
@@ -30,6 +31,7 @@ func TestSuppressCaseInsensitiveAndMultiple(t *testing.T) {
 	if got != "a-flag" {
 		t.Fatalf("Suppress=%q want %q", got, "a-flag")
 	}
+
 	if len(removed) != 2 {
 		t.Fatalf("removed=%v want 2 entries", removed)
 	}
@@ -44,6 +46,7 @@ func TestSuppressAbsentTokenIsNoOp(t *testing.T) {
 	if got != value {
 		t.Fatalf("Suppress=%q want unchanged %q", got, value)
 	}
+
 	if len(removed) != 0 {
 		t.Fatalf("removed=%v want empty", removed)
 	}
@@ -56,6 +59,7 @@ func TestSuppressEmptyInputsAreNoOps(t *testing.T) {
 	if got, removed := Suppress("", []string{"x"}); got != "" || removed != nil {
 		t.Fatalf("empty value: got=%q removed=%v", got, removed)
 	}
+
 	if got, removed := Suppress("a,b", nil); got != "a,b" || removed != nil {
 		t.Fatalf("empty drop: got=%q removed=%v", got, removed)
 	}

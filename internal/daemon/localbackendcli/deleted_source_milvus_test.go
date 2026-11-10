@@ -31,6 +31,19 @@ func TestMilvusBackendKeepsDeletedSourceSearchable(t *testing.T) {
 	if baseURL == "" {
 		baseURL = deletedSourceEmbeddingDefault
 	}
-	settingsPath := writeSandboxSemanticSettings(t, fmt.Sprintf(deletedSourceSettingsTemplate, address, baseURL, deletedSourceEmbeddingModel, deletedSourceEmbeddingDim))
-	checkDeletedSourceSearchable(t, []string{"--ingestion-enabled", "--search-enabled", "--semantic-settings", settingsPath}, localProofSourceSemantic)
+	settingsPath := writeSandboxSemanticSettings(
+		t,
+		fmt.Sprintf(
+			deletedSourceSettingsTemplate,
+			address,
+			baseURL,
+			deletedSourceEmbeddingModel,
+			deletedSourceEmbeddingDim,
+		),
+	)
+	checkDeletedSourceSearchable(
+		t,
+		[]string{"--ingestion-enabled", "--search-enabled", "--semantic-settings", settingsPath},
+		localProofSourceSemantic,
+	)
 }

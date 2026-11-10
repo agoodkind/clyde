@@ -67,14 +67,17 @@ func silenceUsageAfterValidation(cmd *cobra.Command) {
 	for _, child := range cmd.Commands() {
 		silenceUsageAfterValidation(child)
 	}
+
 	if cmd.RunE != nil {
 		originalRunE := cmd.RunE
 		cmd.RunE = func(c *cobra.Command, args []string) error {
 			c.SilenceUsage = true
 			return originalRunE(c, args)
 		}
+
 		return
 	}
+
 	if cmd.Run != nil {
 		originalRun := cmd.Run
 		cmd.Run = func(c *cobra.Command, args []string) {

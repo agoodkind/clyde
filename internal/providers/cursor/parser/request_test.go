@@ -54,16 +54,23 @@ const (
 func TestResolveRequestIDFromClydeIndex(t *testing.T) {
 	index := newCursorRequestIndex(t)
 
-	resolution, err := index.ResolveRequest(context.Background(), latestRequestID, conversation.RequestLookupOptions{AllowFullScan: false})
+	resolution, err := index.ResolveRequest(
+		context.Background(),
+		latestRequestID,
+		conversation.RequestLookupOptions{AllowFullScan: false},
+	)
 	if err != nil {
 		t.Fatalf("ResolveRequest returned error: %v", err)
 	}
+
 	if !resolution.Found {
 		t.Fatalf("ResolveRequest found = false, want true (reason %s)", resolution.Reason)
 	}
+
 	if resolution.Origin != conversation.RequestOriginIndex {
 		t.Fatalf("origin = %s, want index", resolution.Origin)
 	}
+
 	if resolution.Record.NativeID != latestChatID {
 		t.Fatalf("native id = %q, want %q", resolution.Record.NativeID, latestChatID)
 	}
@@ -72,16 +79,23 @@ func TestResolveRequestIDFromClydeIndex(t *testing.T) {
 func TestResolveRequestIDFallsBackToTheLiveLookup(t *testing.T) {
 	index := newCursorRequestIndex(t)
 
-	resolution, err := index.ResolveRequest(context.Background(), olderRequestID, conversation.RequestLookupOptions{AllowFullScan: false})
+	resolution, err := index.ResolveRequest(
+		context.Background(),
+		olderRequestID,
+		conversation.RequestLookupOptions{AllowFullScan: false},
+	)
 	if err != nil {
 		t.Fatalf("ResolveRequest returned error: %v", err)
 	}
+
 	if !resolution.Found {
 		t.Fatalf("ResolveRequest found = false, want true (reason %s)", resolution.Reason)
 	}
+
 	if resolution.Origin != conversation.RequestOriginLive {
 		t.Fatalf("origin = %s, want live", resolution.Origin)
 	}
+
 	if resolution.Record.NativeID != historyChatID {
 		t.Fatalf("native id = %q, want %q", resolution.Record.NativeID, historyChatID)
 	}
@@ -90,16 +104,26 @@ func TestResolveRequestIDFallsBackToTheLiveLookup(t *testing.T) {
 func TestResolveRequestIDReportsNotFoundInsteadOfANearbyChat(t *testing.T) {
 	index := newCursorRequestIndex(t)
 
-	resolution, err := index.ResolveRequest(context.Background(), unknownRequestID, conversation.RequestLookupOptions{AllowFullScan: false})
+	resolution, err := index.ResolveRequest(
+		context.Background(),
+		unknownRequestID,
+		conversation.RequestLookupOptions{AllowFullScan: false},
+	)
 	if err != nil {
 		t.Fatalf("ResolveRequest returned error: %v", err)
 	}
+
 	if resolution.Found {
-		t.Fatalf("ResolveRequest found = true for an unknown id, resolved to %q", resolution.Record.NativeID)
+		t.Fatalf(
+			"ResolveRequest found = true for an unknown id, resolved to %q",
+			resolution.Record.NativeID,
+		)
 	}
+
 	if resolution.Record.NativeID != "" {
 		t.Fatalf("record native id = %q, want empty for a miss", resolution.Record.NativeID)
 	}
+
 	if resolution.Reason != conversation.RequestNotFoundReasonNotRetained {
 		t.Fatalf("reason = %s, want not_retained", resolution.Reason)
 	}
@@ -108,13 +132,19 @@ func TestResolveRequestIDReportsNotFoundInsteadOfANearbyChat(t *testing.T) {
 func TestResolveRequestIDRejectsASubstringOnlyMatch(t *testing.T) {
 	index := newCursorRequestIndex(t)
 
-	resolution, err := index.ResolveRequest(context.Background(), quotedRequestID, conversation.RequestLookupOptions{AllowFullScan: false})
+	resolution, err := index.ResolveRequest(
+		context.Background(),
+		quotedRequestID,
+		conversation.RequestLookupOptions{AllowFullScan: false},
+	)
 	if err != nil {
 		t.Fatalf("ResolveRequest returned error: %v", err)
 	}
+
 	if resolution.Found {
 		t.Fatalf("a chat that merely quotes the id matched: %q", resolution.Record.NativeID)
 	}
+
 	if resolution.Reason != conversation.RequestNotFoundReasonNoMatchingConversation {
 		t.Fatalf("reason = %s, want no_matching_conversation", resolution.Reason)
 	}
@@ -123,27 +153,43 @@ func TestResolveRequestIDRejectsASubstringOnlyMatch(t *testing.T) {
 func TestResolveRequestIDFullScanIsOptIn(t *testing.T) {
 	index := newCursorRequestIndex(t)
 
-	bounded, err := index.ResolveRequest(context.Background(), forgottenRequestID, conversation.RequestLookupOptions{AllowFullScan: false})
+	bounded, err := index.ResolveRequest(
+		context.Background(),
+		forgottenRequestID,
+		conversation.RequestLookupOptions{AllowFullScan: false},
+	)
 	if err != nil {
 		t.Fatalf("ResolveRequest returned error: %v", err)
 	}
+
 	if bounded.Found {
-		t.Fatalf("bounded lookup resolved an id outside the generation ring: %q", bounded.Record.NativeID)
+		t.Fatalf(
+			"bounded lookup resolved an id outside the generation ring: %q",
+			bounded.Record.NativeID,
+		)
 	}
+
 	if bounded.Reason != conversation.RequestNotFoundReasonNotRetained {
 		t.Fatalf("bounded reason = %s, want not_retained", bounded.Reason)
 	}
 
-	scanned, err := index.ResolveRequest(context.Background(), forgottenRequestID, conversation.RequestLookupOptions{AllowFullScan: true})
+	scanned, err := index.ResolveRequest(
+		context.Background(),
+		forgottenRequestID,
+		conversation.RequestLookupOptions{AllowFullScan: true},
+	)
 	if err != nil {
 		t.Fatalf("ResolveRequest with full scan returned error: %v", err)
 	}
+
 	if !scanned.Found {
 		t.Fatalf("full scan found = false, want true (reason %s)", scanned.Reason)
 	}
+
 	if scanned.Origin != conversation.RequestOriginFullScan {
 		t.Fatalf("origin = %s, want full_scan", scanned.Origin)
 	}
+
 	if scanned.Record.NativeID != forgottenChatID {
 		t.Fatalf("native id = %q, want %q", scanned.Record.NativeID, forgottenChatID)
 	}
@@ -157,22 +203,28 @@ func TestRequestIDSelectorReadsTheWholeTranscript(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve by request id returned error: %v", err)
 	}
+
 	if record.NativeID != historyChatID {
 		t.Fatalf("native id = %q, want %q", record.NativeID, historyChatID)
 	}
 
-	messages, err := index.LoadMessagesWithOptions(record, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-	})
+	messages, err := index.LoadMessagesWithOptions(
+		record,
+		conversation.LoadOptions{
+			IncludeSystemPrompts:  false,
+			IncludeSystemMessages: false,
+			IncludeToolOutputs:    false,
+		},
+	)
 	if err != nil {
 		t.Fatalf("Load transcript returned error: %v", err)
 	}
+
 	texts := make([]string, 0, len(messages))
 	for _, message := range messages {
 		texts = append(texts, message.Text)
 	}
+
 	joined := strings.Join(texts, "|")
 	if joined != "history first question|history first answer|history second question|history second answer" {
 		t.Fatalf("transcript = %q, want the whole chat in order", joined)
@@ -191,21 +243,30 @@ func TestStreamReadsBubblesTheComposerHeaderDoesNotReference(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve partial chat: %v", err)
 	}
-	messages, err := index.LoadMessagesWithOptions(record, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-	})
+
+	messages, err := index.LoadMessagesWithOptions(
+		record,
+		conversation.LoadOptions{
+			IncludeSystemPrompts:  false,
+			IncludeSystemMessages: false,
+			IncludeToolOutputs:    false,
+		},
+	)
 	if err != nil {
 		t.Fatalf("Load partial chat: %v", err)
 	}
+
 	texts := make([]string, 0, len(messages))
 	for _, message := range messages {
 		texts = append(texts, message.Text)
 	}
+
 	joined := strings.Join(texts, "|")
 	if joined != "partial question|partial dropped answer|partial final answer" {
-		t.Fatalf("transcript = %q, want the unreferenced answer read and the superseded copy dropped", joined)
+		t.Fatalf(
+			"transcript = %q, want the unreferenced answer read and the superseded copy dropped",
+			joined,
+		)
 	}
 }
 
@@ -220,6 +281,7 @@ func TestUnresolvableRequestIDNeverMatchesATitle(t *testing.T) {
 	if err == nil {
 		t.Fatalf("Resolve returned chat %q for a request id no chat issued", record.NativeID)
 	}
+
 	if !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("error = %v, want a not-found error", err)
 	}
@@ -239,6 +301,7 @@ func TestResolveARequestIDReportsWhatTheRealStoreSaid(t *testing.T) {
 	if err == nil {
 		t.Fatal("Resolve of an unknown request id returned no error")
 	}
+
 	if !strings.Contains(err.Error(), conversation.RequestNotFoundReasonNotRetained.Describe()) {
 		t.Fatalf("error = %v, want the store lookup's reason for a request-id-shaped selector", err)
 	}
@@ -257,6 +320,7 @@ func TestResolveFindsAChatIDTheCachedIndexHasNotSeenYet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve by native chat id returned error: %v", err)
 	}
+
 	if record.NativeID != historyChatID {
 		t.Fatalf("native id = %q, want %q", record.NativeID, historyChatID)
 	}
@@ -271,6 +335,7 @@ func TestResolveByRequestIDStillWorksFromAColdIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve by request id returned error: %v", err)
 	}
+
 	if record.NativeID != historyChatID {
 		t.Fatalf("native id = %q, want %q", record.NativeID, historyChatID)
 	}
@@ -292,9 +357,15 @@ func TestResolveRequestIDReportsInconclusiveWhenTheStoreCannotBeRead(t *testing.
 	if err := os.MkdirAll(filepath.Dir(globalDBPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll global db dir: %v", err)
 	}
-	if err := os.WriteFile(globalDBPath, []byte("this is not a sqlite database"), 0o600); err != nil {
+
+	if err := os.WriteFile(
+		globalDBPath,
+		[]byte("this is not a sqlite database"),
+		0o600,
+	); err != nil {
 		t.Fatalf("WriteFile unreadable global db: %v", err)
 	}
+
 	writeCursorRequestWorkspaceDB(t, rootDir, "workspace-hash")
 
 	match, err := New().ResolveRequestID(
@@ -305,9 +376,14 @@ func TestResolveRequestIDReportsInconclusiveWhenTheStoreCannotBeRead(t *testing.
 	if err != nil {
 		t.Fatalf("ResolveRequestID returned error: %v", err)
 	}
+
 	if match.Found {
-		t.Fatalf("ResolveRequestID found = true against an unreadable store, resolved %q", match.NativeConversationID)
+		t.Fatalf(
+			"ResolveRequestID found = true against an unreadable store, resolved %q",
+			match.NativeConversationID,
+		)
 	}
+
 	if match.Reason != conversation.RequestNotFoundReasonInconclusive {
 		t.Fatalf("reason = %s, want inconclusive for a store that could not be read", match.Reason)
 	}
@@ -325,6 +401,7 @@ func newCursorRequestIndex(t *testing.T) *conversation.Index {
 	if err := index.Refresh(context.Background()); err != nil {
 		t.Fatalf("Refresh index: %v", err)
 	}
+
 	return index
 }
 
@@ -345,6 +422,7 @@ func newColdCursorRequestIndex(t *testing.T) *conversation.Index {
 
 	registry := conversation.NewRegistry()
 	registry.Register(New())
+
 	return conversation.NewIndex(registry, config.ConversationConfig{})
 }
 
@@ -354,10 +432,12 @@ func writeCursorRequestGlobalDB(t *testing.T, dbPath string) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll global db dir: %v", err)
 	}
+
 	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("sql.Open global db: %v", err)
 	}
+
 	defer func() { _ = db.Close() }()
 
 	statements := []string{
@@ -365,25 +445,84 @@ func writeCursorRequestGlobalDB(t *testing.T, dbPath string) {
 		"CREATE TABLE cursorDiskKV(key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)",
 		"CREATE TABLE composerHeaders(composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER, recency INTEGER, checkpointAt INTEGER, value TEXT)",
 
-		composerDataStatement(latestChatID, "Latest Chat", latestRequestID, []string{"latest-user", "latest-assistant"}),
+		composerDataStatement(
+			latestChatID,
+			"Latest Chat",
+			latestRequestID,
+			[]string{"latest-user", "latest-assistant"},
+		),
 		bubbleStatement(latestChatID, "latest-user", 1, "latest question", latestRequestID),
 		bubbleStatement(latestChatID, "latest-assistant", 2, "latest answer", latestRequestID),
 
-		composerDataStatement(historyChatID, "History Chat", "99999999-ffff-4fff-8fff-999999999999", []string{
-			"history-user-1", "history-assistant-1", "history-user-2", "history-assistant-2",
-		}),
-		bubbleStatement(historyChatID, "history-user-1", 1, "history first question", olderRequestID),
-		bubbleStatement(historyChatID, "history-assistant-1", 2, "history first answer", olderRequestID),
-		bubbleStatement(historyChatID, "history-user-2", 1, "history second question", "99999999-ffff-4fff-8fff-999999999999"),
-		bubbleStatement(historyChatID, "history-assistant-2", 2, "history second answer", "99999999-ffff-4fff-8fff-999999999999"),
+		composerDataStatement(
+			historyChatID,
+			"History Chat",
+			"99999999-ffff-4fff-8fff-999999999999",
+			[]string{
+				"history-user-1",
+				"history-assistant-1",
+				"history-user-2",
+				"history-assistant-2",
+			},
+		),
+		bubbleStatement(
+			historyChatID,
+			"history-user-1",
+			1,
+			"history first question",
+			olderRequestID,
+		),
+		bubbleStatement(
+			historyChatID,
+			"history-assistant-1",
+			2,
+			"history first answer",
+			olderRequestID,
+		),
+		bubbleStatement(
+			historyChatID,
+			"history-user-2",
+			1,
+			"history second question",
+			"99999999-ffff-4fff-8fff-999999999999",
+		),
+		bubbleStatement(
+			historyChatID,
+			"history-assistant-2",
+			2,
+			"history second answer",
+			"99999999-ffff-4fff-8fff-999999999999",
+		),
 
 		// This chat's message text quotes quotedRequestID, but no turn of it was
 		// issued under that id.
-		composerDataStatement(quotingChatID, "Quoting Chat about "+titledRequestID, "88888888-ffff-4fff-8fff-888888888888", []string{"quoting-user"}),
-		bubbleStatement(quotingChatID, "quoting-user", 1, "please look at request "+quotedRequestID+" for me", "88888888-ffff-4fff-8fff-888888888888"),
+		composerDataStatement(
+			quotingChatID,
+			"Quoting Chat about "+titledRequestID,
+			"88888888-ffff-4fff-8fff-888888888888",
+			[]string{"quoting-user"},
+		),
+		bubbleStatement(
+			quotingChatID,
+			"quoting-user",
+			1,
+			"please look at request "+quotedRequestID+" for me",
+			"88888888-ffff-4fff-8fff-888888888888",
+		),
 
-		composerDataStatement(forgottenChatID, "Forgotten Chat", "77777777-ffff-4fff-8fff-777777777777", []string{"forgotten-user"}),
-		bubbleStatement(forgottenChatID, "forgotten-user", 1, "forgotten question", forgottenRequestID),
+		composerDataStatement(
+			forgottenChatID,
+			"Forgotten Chat",
+			"77777777-ffff-4fff-8fff-777777777777",
+			[]string{"forgotten-user"},
+		),
+		bubbleStatement(
+			forgottenChatID,
+			"forgotten-user",
+			1,
+			"forgotten question",
+			forgottenRequestID,
+		),
 
 		// Every chat's recorded lifetime spans the generation instant, so the
 		// header narrowing alone cannot pick the right one.
@@ -395,14 +534,45 @@ func writeCursorRequestGlobalDB(t *testing.T, dbPath string) {
 		// The header names only the opening question and the final reply. The two
 		// bubbles between them are stored but unreferenced, and one of them repeats
 		// the final reply verbatim the way a superseded row does.
-		composerDataStatement(partialChatID, "Partial Chat", "", []string{"partial-user", "partial-final"}),
-		datedBubbleStatement(partialChatID, "partial-user", 1, "partial question", "2026-05-06T05:00:00.000Z"),
-		stampedBubbleStatement(partialChatID, "partial-final", 2, "partial final answer", "2026-05-06T05:00:30.000Z", "s-final"),
-		datedBubbleStatement(partialChatID, "partial-orphan", 2, "partial dropped answer", "2026-05-06T05:00:10.000Z"),
+		composerDataStatement(
+			partialChatID,
+			"Partial Chat",
+			"",
+			[]string{"partial-user", "partial-final"},
+		),
+		datedBubbleStatement(
+			partialChatID,
+			"partial-user",
+			1,
+			"partial question",
+			"2026-05-06T05:00:00.000Z",
+		),
+		stampedBubbleStatement(
+			partialChatID,
+			"partial-final",
+			2,
+			"partial final answer",
+			"2026-05-06T05:00:30.000Z",
+			"s-final",
+		),
+		datedBubbleStatement(
+			partialChatID,
+			"partial-orphan",
+			2,
+			"partial dropped answer",
+			"2026-05-06T05:00:10.000Z",
+		),
 		// The copy Cursor left behind when it rewrote the final answer, stamped with
 		// the server id that says which row it acknowledged. Without that id nothing
 		// separates a copy from a turn that happened twice, and assembly keeps both.
-		stampedBubbleStatement(partialChatID, "partial-superseded", 2, "partial final answer", "2026-05-06T05:00:20.000Z", "s-final"),
+		stampedBubbleStatement(
+			partialChatID,
+			"partial-superseded",
+			2,
+			"partial final answer",
+			"2026-05-06T05:00:20.000Z",
+			"s-final",
+		),
 		composerHeaderStatement(partialChatID),
 	}
 	for _, statement := range statements {
@@ -419,15 +589,24 @@ func writeCursorRequestWorkspaceDB(t *testing.T, rootDir string, workspaceHash s
 	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll workspace dir: %v", err)
 	}
+
 	workspaceJSON := filepath.Join(workspaceDir, "workspace.json")
-	if err := os.WriteFile(workspaceJSON, []byte(`{"folder":"file:///Users/alice/source/cursor%20repo"}`), 0o644); err != nil {
+	if err := os.WriteFile(
+		workspaceJSON,
+		[]byte(`{"folder":"file:///Users/alice/source/cursor%20repo"}`),
+		0o644,
+	); err != nil {
 		t.Fatalf("WriteFile workspace json: %v", err)
 	}
 
-	db, err := sql.Open("sqlite3", "file:"+filepath.Join(workspaceDir, "state.vscdb")+"?_busy_timeout=5000")
+	db, err := sql.Open(
+		"sqlite3",
+		"file:"+filepath.Join(workspaceDir, "state.vscdb")+"?_busy_timeout=5000",
+	)
 	if err != nil {
 		t.Fatalf("sql.Open workspace db: %v", err)
 	}
+
 	defer func() { _ = db.Close() }()
 
 	// The ring lists the recent requests and deliberately omits forgottenRequestID,
@@ -437,6 +616,7 @@ func writeCursorRequestWorkspaceDB(t *testing.T, rootDir string, workspaceHash s
 		generationEntry(olderRequestID) + `,` +
 		generationEntry(quotedRequestID) +
 		`]`
+
 	statements := []string{
 		"CREATE TABLE ItemTable(key TEXT UNIQUE, value BLOB)",
 		`INSERT INTO ItemTable(key, value) VALUES ('aiService.generations', '` + generations + `')`,
@@ -453,7 +633,9 @@ func generationEntry(requestID string) string {
 }
 
 func generationEntryAt(requestID string, unixMs int) string {
-	return `{"unixMs":` + strconv.Itoa(unixMs) + `,"generationUUID":"` + requestID + `","type":"composer"}`
+	return `{"unixMs":` + strconv.Itoa(
+		unixMs,
+	) + `,"generationUUID":"` + requestID + `","type":"composer"}`
 }
 
 // awayFromRingMs is an hour, which is far enough outside the tolerance the chat
@@ -477,11 +659,13 @@ func writeCursorRequestWorkspaceRing(
 	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll workspace dir: %v", err)
 	}
+
 	dbPath := filepath.Join(workspaceDir, "state.vscdb")
 	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("sql.Open workspace db: %v", err)
 	}
+
 	defer func() { _ = db.Close() }()
 
 	statements := []string{
@@ -494,6 +678,7 @@ func writeCursorRequestWorkspaceRing(
 			t.Fatalf("exec workspace statement %q: %v", statement, err)
 		}
 	}
+
 	return dbPath
 }
 
@@ -507,23 +692,39 @@ func writtenAt(t *testing.T, dbPath string, when time.Time) {
 	}
 }
 
-func composerDataStatement(composerID string, name string, latestRequest string, bubbleIDs []string) string {
+func composerDataStatement(
+	composerID string,
+	name string,
+	latestRequest string,
+	bubbleIDs []string,
+) string {
 	headers := make([]string, 0, len(bubbleIDs))
 	for index, bubbleID := range bubbleIDs {
 		bubbleType := 1
 		if index%2 == 1 {
 			bubbleType = 2
 		}
+
 		headers = append(headers, `{"bubbleId":"`+bubbleID+`","type":`+strconv.Itoa(bubbleType)+`}`)
 	}
+
 	value := `{"composerId":"` + composerID + `","name":"` + name + `",` +
-		`"createdAt":` + strconv.Itoa(generationUnixMs-1000) + `,"lastUpdatedAt":` + strconv.Itoa(generationUnixMs+1000) + `,` +
+		`"createdAt":` + strconv.Itoa(
+		generationUnixMs-1000,
+	) + `,"lastUpdatedAt":` + strconv.Itoa(generationUnixMs+1000) + `,` +
 		`"latestChatGenerationUUID":"` + latestRequest + `",` +
 		`"fullConversationHeadersOnly":[` + strings.Join(headers, ",") + `]}`
+
 	return `INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:` + composerID + `', '` + value + `')`
 }
 
-func bubbleStatement(composerID string, bubbleID string, bubbleType int, text string, requestID string) string {
+func bubbleStatement(
+	composerID string,
+	bubbleID string,
+	bubbleType int,
+	text string,
+	requestID string,
+) string {
 	return datedBubbleStatementWithRequest(composerID, bubbleID, bubbleType, text, requestID, "")
 }
 
@@ -549,6 +750,7 @@ func datedBubbleStatementWithRequest(
 ) string {
 	value := `{"_v":3,"type":` + strconv.Itoa(bubbleType) + `,"bubbleId":"` + bubbleID + `",` +
 		`"text":"` + text + `","requestId":"` + requestID + `","createdAt":"` + createdAt + `"}`
+
 	return `INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:` + composerID + `:` + bubbleID + `', '` + value + `')`
 }
 
@@ -560,7 +762,9 @@ func composerHeaderStatement(composerID string) string {
 // which is what decides whether an instant's narrowing selects the chat.
 func composerHeaderStatementAt(composerID string, createdAt int, lastUpdatedAt int) string {
 	return `INSERT INTO composerHeaders(composerId, workspaceId, createdAt, lastUpdatedAt, isArchived, isSubagent, recency, checkpointAt, value) VALUES ('` +
-		composerID + `', 'workspace-hash', ` + strconv.Itoa(createdAt) + `, ` + strconv.Itoa(lastUpdatedAt) + `, 0, 0, 0, 0, '{}')`
+		composerID + `', 'workspace-hash', ` + strconv.Itoa(createdAt) + `, ` + strconv.Itoa(
+		lastUpdatedAt,
+	) + `, 0, 0, 0, 0, '{}')`
 }
 
 // TestResolveRequestIDReadsAWorkspaceWithNoFolderDescriptor is the workspace a
@@ -585,13 +789,22 @@ func TestResolveRequestIDReadsAWorkspaceWithNoFolderDescriptor(t *testing.T) {
 		t.Fatalf("Refresh index: %v", err)
 	}
 
-	resolution, err := index.ResolveRequest(context.Background(), olderRequestID, conversation.RequestLookupOptions{AllowFullScan: false})
+	resolution, err := index.ResolveRequest(
+		context.Background(),
+		olderRequestID,
+		conversation.RequestLookupOptions{AllowFullScan: false},
+	)
 	if err != nil {
 		t.Fatalf("ResolveRequest returned error: %v", err)
 	}
+
 	if !resolution.Found {
-		t.Fatalf("ResolveRequest found = false (reason %s), want the chat the empty-window ring points at", resolution.Reason)
+		t.Fatalf(
+			"ResolveRequest found = false (reason %s), want the chat the empty-window ring points at",
+			resolution.Reason,
+		)
 	}
+
 	if resolution.Record.NativeID != historyChatID {
 		t.Fatalf("native id = %q, want %q", resolution.Record.NativeID, historyChatID)
 	}
@@ -605,15 +818,24 @@ func TestResolveRequestIDReportsANotRetainedMissWhereCursorIsNotInstalled(t *tes
 	t.Setenv("CLYDE_CURSOR_DATA_DIRS", filepath.Join(t.TempDir(), "no-cursor-here"))
 	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", t.TempDir())
 
-	match, err := (&Parser{}).ResolveRequestID(context.Background(), unknownRequestID, conversation.RequestLookupOptions{AllowFullScan: false})
+	match, err := (&Parser{}).ResolveRequestID(
+		context.Background(),
+		unknownRequestID,
+		conversation.RequestLookupOptions{AllowFullScan: false},
+	)
 	if err != nil {
 		t.Fatalf("ResolveRequestID returned error: %v", err)
 	}
+
 	if match.Found {
 		t.Fatalf("match = %+v, want a miss", match)
 	}
+
 	if match.Reason != conversation.RequestNotFoundReasonNotRetained {
-		t.Fatalf("reason = %s, want not_retained for a store that is simply not there", match.Reason)
+		t.Fatalf(
+			"reason = %s, want not_retained for a store that is simply not there",
+			match.Reason,
+		)
 	}
 }
 
@@ -632,22 +854,33 @@ func TestResolveRequestIDLetsAnUnreadableRootOutrankACleanMiss(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(lockedDBPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll locked global db dir: %v", err)
 	}
+
 	// A file that exists and is not a database is what an unopenable store looks
 	// like from here: present, and refusing to be read.
-	if err := os.WriteFile(lockedDBPath, []byte("not a sqlite database at all"), 0o000); err != nil {
+	if err := os.WriteFile(
+		lockedDBPath,
+		[]byte("not a sqlite database at all"),
+		0o000,
+	); err != nil {
 		t.Fatalf("WriteFile locked global db: %v", err)
 	}
 
 	t.Setenv("CLYDE_CURSOR_DATA_DIRS", cleanRoot+string(os.PathListSeparator)+lockedRoot)
 	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", t.TempDir())
 
-	match, err := (&Parser{}).ResolveRequestID(context.Background(), unknownRequestID, conversation.RequestLookupOptions{AllowFullScan: false})
+	match, err := (&Parser{}).ResolveRequestID(
+		context.Background(),
+		unknownRequestID,
+		conversation.RequestLookupOptions{AllowFullScan: false},
+	)
 	if err != nil {
 		t.Fatalf("ResolveRequestID returned error: %v", err)
 	}
+
 	if match.Found {
 		t.Fatalf("match = %+v, want a miss", match)
 	}
+
 	if match.Reason != conversation.RequestNotFoundReasonInconclusive {
 		t.Fatalf("reason = %s, want inconclusive because one root could not be read", match.Reason)
 	}
@@ -663,15 +896,22 @@ func writeEmptyWindowWorkspaceDB(t *testing.T, rootDir string, requestID string)
 	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll empty window dir: %v", err)
 	}
-	db, err := sql.Open("sqlite3", "file:"+filepath.Join(workspaceDir, "state.vscdb")+"?_busy_timeout=5000")
+
+	db, err := sql.Open(
+		"sqlite3",
+		"file:"+filepath.Join(workspaceDir, "state.vscdb")+"?_busy_timeout=5000",
+	)
 	if err != nil {
 		t.Fatalf("sql.Open empty window db: %v", err)
 	}
+
 	defer func() { _ = db.Close() }()
 
 	statements := []string{
 		"CREATE TABLE ItemTable(key TEXT UNIQUE, value BLOB)",
-		`INSERT INTO ItemTable(key, value) VALUES ('aiService.generations', '[` + generationEntry(requestID) + `]')`,
+		`INSERT INTO ItemTable(key, value) VALUES ('aiService.generations', '[` + generationEntry(
+			requestID,
+		) + `]')`,
 	}
 	for _, statement := range statements {
 		if _, err := db.Exec(statement); err != nil {
@@ -694,6 +934,7 @@ func TestResolveRequestIDSearchesEveryRootAfterOneFails(t *testing.T) {
 	if err := os.MkdirAll(brokenWorkspaces, 0o755); err != nil {
 		t.Fatalf("MkdirAll broken workspaceStorage: %v", err)
 	}
+
 	denyAccessOrSkip(t, brokenWorkspaces)
 
 	goodRoot := t.TempDir()
@@ -703,13 +944,19 @@ func TestResolveRequestIDSearchesEveryRootAfterOneFails(t *testing.T) {
 	t.Setenv("CLYDE_CURSOR_DATA_DIRS", brokenRoot+string(os.PathListSeparator)+goodRoot)
 	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", t.TempDir())
 
-	match, err := (&Parser{}).ResolveRequestID(context.Background(), olderRequestID, conversation.RequestLookupOptions{AllowFullScan: false})
+	match, err := (&Parser{}).ResolveRequestID(
+		context.Background(),
+		olderRequestID,
+		conversation.RequestLookupOptions{AllowFullScan: false},
+	)
 	if err != nil {
 		t.Fatalf("ResolveRequestID returned error: %v", err)
 	}
+
 	if match.Found {
 		t.Fatalf("match = %+v, want no definite answer while a whole root went unread", match)
 	}
+
 	if match.Reason != conversation.RequestNotFoundReasonInconclusive {
 		t.Fatalf("reason = %s, want inconclusive", match.Reason)
 	}
@@ -730,13 +977,19 @@ func TestResolveRequestIDStillAnswersPastARootThatIsSimplyNotThere(t *testing.T)
 	t.Setenv("CLYDE_CURSOR_DATA_DIRS", absentRoot+string(os.PathListSeparator)+goodRoot)
 	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", t.TempDir())
 
-	match, err := (&Parser{}).ResolveRequestID(context.Background(), olderRequestID, conversation.RequestLookupOptions{AllowFullScan: false})
+	match, err := (&Parser{}).ResolveRequestID(
+		context.Background(),
+		olderRequestID,
+		conversation.RequestLookupOptions{AllowFullScan: false},
+	)
 	if err != nil {
 		t.Fatalf("ResolveRequestID returned error: %v", err)
 	}
+
 	if !match.Found {
 		t.Fatalf("match = %+v, want the chat in the root after the one that is not there", match)
 	}
+
 	if match.NativeConversationID != historyChatID {
 		t.Fatalf("native id = %q, want %q", match.NativeConversationID, historyChatID)
 	}
@@ -760,23 +1013,44 @@ func TestResolveRequestIDReportsAmbiguityWhenTwoRootsEachCarryIt(t *testing.T) {
 	// The second root's copy of the turn lives under its own chat id, so the two
 	// roots name different conversations for the same request.
 	copiedChatID := "bbbbcccc-9999-4999-8999-bbbbccccdddd"
-	appendCursorRequestStatements(t, secondDBPath, []string{
-		`DELETE FROM cursorDiskKV WHERE key LIKE 'bubbleId:` + historyChatID + `:%'`,
-		composerDataStatement(copiedChatID, "Restored History Chat", "", []string{"restored-user"}),
-		bubbleStatement(copiedChatID, "restored-user", 1, "history first question", olderRequestID),
-		composerHeaderStatement(copiedChatID),
-	})
+	appendCursorRequestStatements(
+		t,
+		secondDBPath,
+		[]string{
+			`DELETE FROM cursorDiskKV WHERE key LIKE 'bubbleId:` + historyChatID + `:%'`,
+			composerDataStatement(
+				copiedChatID,
+				"Restored History Chat",
+				"",
+				[]string{"restored-user"},
+			),
+			bubbleStatement(
+				copiedChatID,
+				"restored-user",
+				1,
+				"history first question",
+				olderRequestID,
+			),
+			composerHeaderStatement(copiedChatID),
+		},
+	)
 
 	t.Setenv("CLYDE_CURSOR_DATA_DIRS", firstRoot+string(os.PathListSeparator)+secondRoot)
 	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", t.TempDir())
 
-	match, err := (&Parser{}).ResolveRequestID(context.Background(), olderRequestID, conversation.RequestLookupOptions{AllowFullScan: false})
+	match, err := (&Parser{}).ResolveRequestID(
+		context.Background(),
+		olderRequestID,
+		conversation.RequestLookupOptions{AllowFullScan: false},
+	)
 	if err != nil {
 		t.Fatalf("ResolveRequestID returned error: %v", err)
 	}
+
 	if match.Found {
 		t.Fatalf("match = %+v, want no answer when two roots each carry the request", match)
 	}
+
 	if match.Reason != conversation.RequestNotFoundReasonAmbiguousConversation {
 		t.Fatalf("reason = %s, want ambiguous_conversation", match.Reason)
 	}
@@ -793,9 +1067,13 @@ func denyAccessOrSkip(t *testing.T, path string) {
 	if err := os.Chmod(path, 0o000); err != nil {
 		t.Fatalf("Chmod %s: %v", path, err)
 	}
+
 	t.Cleanup(func() { _ = os.Chmod(path, 0o755) })
 	if _, err := os.ReadDir(path); err == nil {
-		t.Skipf("this runner reads %s despite mode 0000, so the denial this test needs did not happen", path)
+		t.Skipf(
+			"this runner reads %s despite mode 0000, so the denial this test needs did not happen",
+			path,
+		)
 	}
 }
 
@@ -815,19 +1093,35 @@ func TestResolveRequestIDReportsAmbiguityRatherThanTheFirstCarrier(t *testing.T)
 	// A duplicate of historyChatID carrying the same turn under a fresh bubble id,
 	// which is the shape Cursor's duplicate action leaves.
 	duplicateChatID := "aaaabbbb-6666-4666-8666-aaaabbbbcccc"
-	appendCursorRequestStatements(t, dbPath, []string{
-		composerDataStatement(duplicateChatID, "(1) History Chat", "", []string{"copy-user-1"}),
-		bubbleStatement(duplicateChatID, "copy-user-1", 1, "history first question", olderRequestID),
-		composerHeaderStatement(duplicateChatID),
-	})
+	appendCursorRequestStatements(
+		t,
+		dbPath,
+		[]string{
+			composerDataStatement(duplicateChatID, "(1) History Chat", "", []string{"copy-user-1"}),
+			bubbleStatement(
+				duplicateChatID,
+				"copy-user-1",
+				1,
+				"history first question",
+				olderRequestID,
+			),
+			composerHeaderStatement(duplicateChatID),
+		},
+	)
 
-	match, err := (&Parser{}).ResolveRequestID(context.Background(), olderRequestID, conversation.RequestLookupOptions{AllowFullScan: false})
+	match, err := (&Parser{}).ResolveRequestID(
+		context.Background(),
+		olderRequestID,
+		conversation.RequestLookupOptions{AllowFullScan: false},
+	)
 	if err != nil {
 		t.Fatalf("ResolveRequestID returned error: %v", err)
 	}
+
 	if match.Found {
 		t.Fatalf("match = %+v, want no answer when two chats carry the request", match)
 	}
+
 	if match.Reason != conversation.RequestNotFoundReasonAmbiguousConversation {
 		t.Fatalf("reason = %s, want ambiguous_conversation", match.Reason)
 	}
@@ -847,20 +1141,30 @@ func TestResolveRequestIDReportsInconclusiveForAnUndecodableCarrier(t *testing.T
 	writeCursorRequestWorkspaceDB(t, rootDir, "workspace-hash")
 
 	brokenChatID := "ccccdddd-7777-4777-8777-ccccddddeeee"
-	appendCursorRequestStatements(t, dbPath, []string{
-		composerDataStatement(brokenChatID, "Broken Chat", "", []string{"broken-user"}),
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:` + brokenChatID +
-			`:broken-user', 'not json, and it carries ` + quotedRequestID + `')`,
-		composerHeaderStatement(brokenChatID),
-	})
+	appendCursorRequestStatements(
+		t,
+		dbPath,
+		[]string{
+			composerDataStatement(brokenChatID, "Broken Chat", "", []string{"broken-user"}),
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:` + brokenChatID +
+				`:broken-user', 'not json, and it carries ` + quotedRequestID + `')`,
+			composerHeaderStatement(brokenChatID),
+		},
+	)
 
-	match, err := (&Parser{}).ResolveRequestID(context.Background(), quotedRequestID, conversation.RequestLookupOptions{AllowFullScan: false})
+	match, err := (&Parser{}).ResolveRequestID(
+		context.Background(),
+		quotedRequestID,
+		conversation.RequestLookupOptions{AllowFullScan: false},
+	)
 	if err != nil {
 		t.Fatalf("ResolveRequestID returned error: %v", err)
 	}
+
 	if match.Found {
 		t.Fatalf("match = %+v, want a miss", match)
 	}
+
 	if match.Reason != conversation.RequestNotFoundReasonInconclusive {
 		t.Fatalf("reason = %s, want inconclusive over a row that would not decode", match.Reason)
 	}
@@ -878,13 +1182,19 @@ func TestResolveRequestIDAsksTheRingsWhenTheChatStoreIsAbsent(t *testing.T) {
 	// No globalStorage at all, and a workspace ring that lists the request.
 	writeCursorRequestWorkspaceDB(t, rootDir, "workspace-hash")
 
-	match, err := (&Parser{}).ResolveRequestID(context.Background(), olderRequestID, conversation.RequestLookupOptions{AllowFullScan: false})
+	match, err := (&Parser{}).ResolveRequestID(
+		context.Background(),
+		olderRequestID,
+		conversation.RequestLookupOptions{AllowFullScan: false},
+	)
 	if err != nil {
 		t.Fatalf("ResolveRequestID returned error: %v", err)
 	}
+
 	if match.Found {
 		t.Fatalf("match = %+v, want a miss with no chat store to resolve against", match)
 	}
+
 	if match.Reason != conversation.RequestNotFoundReasonInconclusive {
 		t.Fatalf("reason = %s, want inconclusive for a request the rings still list", match.Reason)
 	}
@@ -892,10 +1202,15 @@ func TestResolveRequestIDAsksTheRingsWhenTheChatStoreIsAbsent(t *testing.T) {
 	// The same root with nothing in it at all is still a real absence.
 	emptyRoot := t.TempDir()
 	t.Setenv("CLYDE_CURSOR_DATA_DIRS", emptyRoot)
-	match, err = (&Parser{}).ResolveRequestID(context.Background(), olderRequestID, conversation.RequestLookupOptions{AllowFullScan: false})
+	match, err = (&Parser{}).ResolveRequestID(
+		context.Background(),
+		olderRequestID,
+		conversation.RequestLookupOptions{AllowFullScan: false},
+	)
 	if err != nil {
 		t.Fatalf("ResolveRequestID returned error: %v", err)
 	}
+
 	if match.Reason != conversation.RequestNotFoundReasonNotRetained {
 		t.Fatalf("reason = %s, want not_retained where nothing is stored at all", match.Reason)
 	}
@@ -910,7 +1225,9 @@ func appendCursorRequestStatements(t *testing.T, dbPath string, statements []str
 	if err != nil {
 		t.Fatalf("sql.Open global db: %v", err)
 	}
+
 	defer func() { _ = db.Close() }()
+
 	for _, statement := range statements {
 		if _, err := db.Exec(statement); err != nil {
 			t.Fatalf("exec %q: %v", statement, err)
@@ -934,20 +1251,33 @@ func TestResolveRequestIDDoesNotNameOneCarrierWhileRowsWentUnread(t *testing.T) 
 	// historyChatID carries olderRequestID. This chat holds a row the byte search
 	// selects, because it contains the id, and a decode then rejects.
 	truncatedChatID := "eeeeffff-8888-4888-8888-eeeeffff0000"
-	appendCursorRequestStatements(t, dbPath, []string{
-		composerDataStatement(truncatedChatID, "Truncated Chat", "", []string{"cut-user"}),
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:` + truncatedChatID +
-			`:cut-user', '{"_v":3,"requestId":"` + olderRequestID + `"')`,
-		composerHeaderStatement(truncatedChatID),
-	})
+	appendCursorRequestStatements(
+		t,
+		dbPath,
+		[]string{
+			composerDataStatement(truncatedChatID, "Truncated Chat", "", []string{"cut-user"}),
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:` + truncatedChatID +
+				`:cut-user', '{"_v":3,"requestId":"` + olderRequestID + `"')`,
+			composerHeaderStatement(truncatedChatID),
+		},
+	)
 
-	match, err := (&Parser{}).ResolveRequestID(context.Background(), olderRequestID, conversation.RequestLookupOptions{AllowFullScan: false})
+	match, err := (&Parser{}).ResolveRequestID(
+		context.Background(),
+		olderRequestID,
+		conversation.RequestLookupOptions{AllowFullScan: false},
+	)
 	if err != nil {
 		t.Fatalf("ResolveRequestID returned error: %v", err)
 	}
+
 	if match.Found {
-		t.Fatalf("match = %+v, want no confident answer while a row carrying the id went unread", match)
+		t.Fatalf(
+			"match = %+v, want no confident answer while a row carrying the id went unread",
+			match,
+		)
 	}
+
 	if match.Reason != conversation.RequestNotFoundReasonInconclusive {
 		t.Fatalf("reason = %s, want inconclusive", match.Reason)
 	}
@@ -968,19 +1298,37 @@ func TestResolveRequestIDSearchesEveryInstantTheRingsRecorded(t *testing.T) {
 	// The window written most recently lists the request an hour away from the
 	// chat that carries it, so its instant selects nothing. The older window lists
 	// the same request at the instant the chat covers.
-	strayRing := writeCursorRequestWorkspaceRing(t, rootDir, "aaa-recent", olderRequestID, generationUnixMs+awayFromRingMs)
-	owningRing := writeCursorRequestWorkspaceRing(t, rootDir, "bbb-older", olderRequestID, generationUnixMs)
+	strayRing := writeCursorRequestWorkspaceRing(
+		t,
+		rootDir,
+		"aaa-recent",
+		olderRequestID,
+		generationUnixMs+awayFromRingMs,
+	)
+	owningRing := writeCursorRequestWorkspaceRing(
+		t,
+		rootDir,
+		"bbb-older",
+		olderRequestID,
+		generationUnixMs,
+	)
 	now := time.Now()
 	writtenAt(t, strayRing, now)
 	writtenAt(t, owningRing, now.Add(-time.Hour))
 
-	match, err := (&Parser{}).ResolveRequestID(context.Background(), olderRequestID, conversation.RequestLookupOptions{AllowFullScan: false})
+	match, err := (&Parser{}).ResolveRequestID(
+		context.Background(),
+		olderRequestID,
+		conversation.RequestLookupOptions{AllowFullScan: false},
+	)
 	if err != nil {
 		t.Fatalf("ResolveRequestID returned error: %v", err)
 	}
+
 	if !match.Found {
 		t.Fatalf("match = %+v, want the chat the second window's instant selects", match)
 	}
+
 	if match.NativeConversationID != historyChatID {
 		t.Fatalf("native id = %q, want %q", match.NativeConversationID, historyChatID)
 	}
@@ -1004,29 +1352,57 @@ func TestBoundedMissIsInconclusiveWhenTheInstantLeftChatsOut(t *testing.T) {
 	// This chat really did issue the request, and its recorded lifetime is an hour
 	// from the instant the ring recorded, so the narrowing never offers it.
 	strandedChatID := "ffff0000-1010-4010-8010-ffff00001010"
-	appendCursorRequestStatements(t, dbPath, []string{
-		composerDataStatement(strandedChatID, "Stranded Chat", "", []string{"stranded-user"}),
-		bubbleStatement(strandedChatID, "stranded-user", 1, "stranded question", quotedRequestID),
-		composerHeaderStatementAt(strandedChatID, generationUnixMs+awayFromRingMs, generationUnixMs+awayFromRingMs+1000),
-	})
+	appendCursorRequestStatements(
+		t,
+		dbPath,
+		[]string{
+			composerDataStatement(strandedChatID, "Stranded Chat", "", []string{"stranded-user"}),
+			bubbleStatement(
+				strandedChatID,
+				"stranded-user",
+				1,
+				"stranded question",
+				quotedRequestID,
+			),
+			composerHeaderStatementAt(
+				strandedChatID,
+				generationUnixMs+awayFromRingMs,
+				generationUnixMs+awayFromRingMs+1000,
+			),
+		},
+	)
 
-	bounded, err := (&Parser{}).ResolveRequestID(context.Background(), quotedRequestID, conversation.RequestLookupOptions{AllowFullScan: false})
+	bounded, err := (&Parser{}).ResolveRequestID(
+		context.Background(),
+		quotedRequestID,
+		conversation.RequestLookupOptions{AllowFullScan: false},
+	)
 	if err != nil {
 		t.Fatalf("ResolveRequestID returned error: %v", err)
 	}
+
 	if bounded.Found {
 		t.Fatalf("match = %+v, want the bounded lookup to miss", bounded)
 	}
+
 	if bounded.Reason != conversation.RequestNotFoundReasonInconclusive {
-		t.Fatalf("reason = %s, want inconclusive rather than a confirmed absence over chats the instant never reached", bounded.Reason)
+		t.Fatalf(
+			"reason = %s, want inconclusive rather than a confirmed absence over chats the instant never reached",
+			bounded.Reason,
+		)
 	}
 
 	// The control that makes the miss above a real defect rather than a guess: the
 	// chat is in the store, and the search that reads every chat finds it.
-	scanned, err := (&Parser{}).ResolveRequestID(context.Background(), quotedRequestID, conversation.RequestLookupOptions{AllowFullScan: true})
+	scanned, err := (&Parser{}).ResolveRequestID(
+		context.Background(),
+		quotedRequestID,
+		conversation.RequestLookupOptions{AllowFullScan: true},
+	)
 	if err != nil {
 		t.Fatalf("ResolveRequestID with full scan returned error: %v", err)
 	}
+
 	if !scanned.Found || scanned.NativeConversationID != strandedChatID {
 		t.Fatalf("full scan = %+v, want the chat the bounded narrowing skipped", scanned)
 	}
@@ -1050,27 +1426,39 @@ func TestResolveRequestIDDoesNotNameAChatFromARowItCannotRead(t *testing.T) {
 	// string is one this package's decoder rejects whole.
 	oddChatID := "ffff1111-2020-4020-8020-ffff11112020"
 	oddBubble := `{"bubbleId":"odd-user","requestId":"` + quotedRequestID + `","type":"assistant"}`
-	appendCursorRequestStatements(t, dbPath, []string{
-		composerDataStatement(oddChatID, "Odd Chat", "", []string{"odd-user"}),
-		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:` + oddChatID +
-			`:odd-user', '` + oddBubble + `')`,
-		composerHeaderStatement(oddChatID),
-	})
+	appendCursorRequestStatements(
+		t,
+		dbPath,
+		[]string{
+			composerDataStatement(oddChatID, "Odd Chat", "", []string{"odd-user"}),
+			`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:` + oddChatID +
+				`:odd-user', '` + oddBubble + `')`,
+			composerHeaderStatement(oddChatID),
+		},
+	)
 
 	// Verifying the instrument before the reading. This row only separates the two
 	// decoders while the package's own decoder rejects it, so a schema change that
 	// made it decodable would quietly turn this into a test of nothing.
 	if _, err := cursorstore.DecodeBubbleJSON([]byte(oddBubble)); err == nil {
-		t.Fatal("the bubble decoder accepted this row, so the fixture no longer separates a whole-bubble decode from a request-id-only one")
+		t.Fatal(
+			"the bubble decoder accepted this row, so the fixture no longer separates a whole-bubble decode from a request-id-only one",
+		)
 	}
 
-	match, err := (&Parser{}).ResolveRequestID(context.Background(), quotedRequestID, conversation.RequestLookupOptions{AllowFullScan: false})
+	match, err := (&Parser{}).ResolveRequestID(
+		context.Background(),
+		quotedRequestID,
+		conversation.RequestLookupOptions{AllowFullScan: false},
+	)
 	if err != nil {
 		t.Fatalf("ResolveRequestID returned error: %v", err)
 	}
+
 	if match.Found {
 		t.Fatalf("match = %+v, want no answer from a row this package cannot read", match)
 	}
+
 	if match.Reason != conversation.RequestNotFoundReasonInconclusive {
 		t.Fatalf("reason = %s, want inconclusive over a row that would not decode", match.Reason)
 	}
@@ -1090,21 +1478,32 @@ func TestResolveRequestIDDoesNotReadAnUnfollowableLinkAsAnEmptyStore(t *testing.
 	if err := os.MkdirAll(globalDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll global db dir: %v", err)
 	}
+
 	unmounted := filepath.Join(t.TempDir(), "volume-not-mounted", "state.vscdb")
 	if err := os.Symlink(unmounted, filepath.Join(globalDir, "state.vscdb")); err != nil {
 		t.Fatalf("Symlink global db: %v", err)
 	}
+
 	writeCursorRequestWorkspaceDB(t, rootDir, "workspace-hash")
 
-	match, err := (&Parser{}).ResolveRequestID(context.Background(), unknownRequestID, conversation.RequestLookupOptions{AllowFullScan: false})
+	match, err := (&Parser{}).ResolveRequestID(
+		context.Background(),
+		unknownRequestID,
+		conversation.RequestLookupOptions{AllowFullScan: false},
+	)
 	if err != nil {
 		t.Fatalf("ResolveRequestID returned error: %v", err)
 	}
+
 	if match.Found {
 		t.Fatalf("match = %+v, want a miss", match)
 	}
+
 	if match.Reason != conversation.RequestNotFoundReasonInconclusive {
-		t.Fatalf("reason = %s, want inconclusive for a store behind a link that would not resolve", match.Reason)
+		t.Fatalf(
+			"reason = %s, want inconclusive for a store behind a link that would not resolve",
+			match.Reason,
+		)
 	}
 }
 
@@ -1121,5 +1520,6 @@ func stampedBubbleStatement(
 	value := `{"_v":3,"type":` + strconv.Itoa(bubbleType) + `,"bubbleId":"` + bubbleID + `",` +
 		`"text":"` + text + `","requestId":"","createdAt":"` + createdAt + `",` +
 		`"serverBubbleId":"` + serverBubbleID + `"}`
+
 	return `INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:` + composerID + `:` + bubbleID + `', '` + value + `')`
 }

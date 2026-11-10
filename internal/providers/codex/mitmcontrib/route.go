@@ -47,6 +47,7 @@ func (routeProvider) ClassifyConnect(host string) mitm.ConnectClaim {
 			ProviderID: providerID,
 		}
 	}
+
 	return mitm.ConnectClaim{
 		Claimed:    false,
 		Host:       host,
@@ -60,6 +61,7 @@ func isCodexConnectHost(host string) bool {
 	case openAIAPIHost, openAIChatHost, chatGPTApexHost:
 		return true
 	}
+
 	return strings.HasSuffix(normalizedHost, chatGPTSuffix)
 }
 
@@ -81,6 +83,7 @@ func (routeProvider) ClassifyPlain(path string) mitm.PlainRouteClaim {
 			UpstreamURL: openAIUpstream,
 		}
 	}
+
 	return mitm.PlainRouteClaim{
 		Claimed:     false,
 		Provider:    "",

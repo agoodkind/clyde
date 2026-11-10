@@ -18,6 +18,7 @@ func staleIndexServingCache(t *testing.T, cacheBody string, includeSubagents boo
 	if err := os.WriteFile(cachePath, []byte(cacheBody), 0o600); err != nil {
 		t.Fatalf("write conversation cache: %v", err)
 	}
+
 	return &Index{
 		mu:               sync.Mutex{},
 		includeSubagents: includeSubagents,
@@ -40,7 +41,10 @@ func staleIndexServingCache(t *testing.T, cacheBody string, includeSubagents boo
 
 func TestListKeepsUnclassifiedCachedRecordsVisible(t *testing.T) {
 	t.Parallel()
-	cacheBody := fmt.Sprintf(`{"version":%d,"records":[{"id":"claude:legacy","provider":"claude","native_id":"legacy","title":"unclassified","workspace_root":"/repo","artifact_path":"/repo/legacy.jsonl","artifact_kind":"transcript","model":"","created_at":"2026-05-01T10:00:00Z","updated_at":"2026-05-01T10:00:00Z","size_bytes":10,"archived":false}],"stamps":{}}`, cacheFormatVersion)
+	cacheBody := fmt.Sprintf(
+		`{"version":%d,"records":[{"id":"claude:legacy","provider":"claude","native_id":"legacy","title":"unclassified","workspace_root":"/repo","artifact_path":"/repo/legacy.jsonl","artifact_kind":"transcript","model":"","created_at":"2026-05-01T10:00:00Z","updated_at":"2026-05-01T10:00:00Z","size_bytes":10,"archived":false}],"stamps":{}}`,
+		cacheFormatVersion,
+	)
 
 	idx := staleIndexServingCache(t, cacheBody, false)
 
@@ -48,16 +52,20 @@ func TestListKeepsUnclassifiedCachedRecordsVisible(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list conversations: %v", err)
 	}
+
 	if len(records) != 1 {
 		t.Fatalf("records = %d, want the one cached record", len(records))
 	}
+
 	if records[0].ID != "claude:legacy" {
 		t.Fatalf("id = %q, want claude:legacy", records[0].ID)
 	}
+
 	// An unclassified record remains visible when the subagent filter is enabled.
 	if records[0].Origin != OriginUnspecified {
 		t.Fatalf("origin = %q, want unspecified", records[0].Origin)
 	}
+
 	if records[0].IsSubagent() {
 		t.Fatalf("IsSubagent = true, want false for an unclassified record")
 	}
@@ -69,22 +77,24 @@ func TestListKeepsUnclassifiedCachedRecordsVisible(t *testing.T) {
 func TestWrittenCacheRoundTripsOriginAndVersion(t *testing.T) {
 	t.Parallel()
 	cachePath := filepath.Join(t.TempDir(), cacheFilename)
-	written := []Record{{
-		ID:            "claude:agent",
-		Provider:      ProviderClaude,
-		NativeID:      "agent",
-		Lineage:       nil,
-		Origin:        OriginSubagent,
-		Title:         "dispatched work",
-		WorkspaceRoot: "/repo",
-		ArtifactPath:  "/repo/agent.jsonl",
-		ArtifactKind:  "transcript",
-		Model:         "",
-		CreatedAt:     time.Time{},
-		UpdatedAt:     time.Time{},
-		SizeBytes:     0,
-		Archived:      false,
-	}}
+	written := []Record{
+		{
+			ID:            "claude:agent",
+			Provider:      ProviderClaude,
+			NativeID:      "agent",
+			Lineage:       nil,
+			Origin:        OriginSubagent,
+			Title:         "dispatched work",
+			WorkspaceRoot: "/repo",
+			ArtifactPath:  "/repo/agent.jsonl",
+			ArtifactKind:  "transcript",
+			Model:         "",
+			CreatedAt:     time.Time{},
+			UpdatedAt:     time.Time{},
+			SizeBytes:     0,
+			Archived:      false,
+		},
+	}
 	completedAt := time.Unix(100, 0).UTC()
 	if err := writeCache(cachePath, written, nil, nil, completedAt); err != nil {
 		t.Fatalf("write conversation cache: %v", err)
@@ -94,16 +104,20 @@ func TestWrittenCacheRoundTripsOriginAndVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read conversation cache: %v", err)
 	}
+
 	var cache cacheFile
 	if err := json.Unmarshal(data, &cache); err != nil {
 		t.Fatalf("decode conversation cache: %v", err)
 	}
+
 	if cache.Version != cacheFormatVersion {
 		t.Fatalf("version = %d, want %d", cache.Version, cacheFormatVersion)
 	}
+
 	if !cache.RefreshCompletedAt.Equal(completedAt) {
 		t.Fatalf("refresh completed at = %v, want %v", cache.RefreshCompletedAt, completedAt)
 	}
+
 	if len(cache.Records) != 1 || cache.Records[0].Origin != OriginSubagent {
 		t.Fatalf("cached records = %#v, want one subagent-origin record", cache.Records)
 	}
@@ -112,12 +126,19 @@ func TestWrittenCacheRoundTripsOriginAndVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-read conversation cache: %v", err)
 	}
+
 	if len(roundTripped.Stamps) != 0 {
 		t.Fatalf("stamps = %v, want none; none were written", roundTripped.Stamps)
 	}
+
 	if !present || !roundTripped.RefreshCompletedAt.Equal(completedAt) {
-		t.Fatalf("cache metadata = present %t completed %v", present, roundTripped.RefreshCompletedAt)
+		t.Fatalf(
+			"cache metadata = present %t completed %v",
+			present,
+			roundTripped.RefreshCompletedAt,
+		)
 	}
+
 	if len(roundTripped.Records) != 1 || !roundTripped.Records[0].IsSubagent() {
 		t.Fatalf("re-read records = %#v, want the subagent origin preserved", roundTripped.Records)
 	}
@@ -132,6 +153,11 @@ func TestReadCacheRejectsUnsupportedFormat(t *testing.T) {
 
 	cache, _, err := readCache(path)
 	if err == nil || len(cache.Records) != 0 || len(cache.Stamps) != 0 {
-		t.Fatalf("unsupported cache returned records=%v stamps=%v err=%v", cache.Records, cache.Stamps, err)
+		t.Fatalf(
+			"unsupported cache returned records=%v stamps=%v err=%v",
+			cache.Records,
+			cache.Stamps,
+			err,
+		)
 	}
 }

@@ -77,21 +77,49 @@ func newWireFlavorsLoader() *WireFlavorsLoader {
 // otherwise it returns the cached map. A missing baseline yields
 // [ErrBaselineMissing]; a parse or validation failure yields
 // [ErrBaselineInvalid] wrapping the cause.
-func (l *WireFlavorsLoader) Load(ctx context.Context, store anthropicBaselineStore) (map[string]WireFlavor, error) {
+func (l *WireFlavorsLoader) Load(
+	ctx context.Context,
+	store anthropicBaselineStore,
+) (map[string]WireFlavor, error) {
 	if store == nil {
-		slog.WarnContext(ctx, "anthropic.wire_baseline.no_store", "concern", wireBaselineConcern, "subcomponent", "anthropic")
+		slog.WarnContext(
+			ctx,
+			"anthropic.wire_baseline.no_store",
+			"concern",
+			wireBaselineConcern,
+			"subcomponent",
+			"anthropic",
+		)
+
 		return nil, fmt.Errorf("%w: no capture store", ErrBaselineMissing)
 	}
 
 	updatedAt, err := store.CurrentBaselineUpdatedAt(ctx, anthropicWireUpstream)
 	if err != nil {
-		slog.WarnContext(ctx, "anthropic.wire_baseline.updated_at_failed", "concern", wireBaselineConcern, "subcomponent", "anthropic",
-			"err", err.Error(),
+		slog.WarnContext(
+			ctx,
+			"anthropic.wire_baseline.updated_at_failed",
+			"concern",
+			wireBaselineConcern,
+			"subcomponent",
+			"anthropic",
+			"err",
+			err.Error(),
 		)
+
 		return nil, fmt.Errorf("%w: updated_at: %w", ErrBaselineInvalid, err)
 	}
+
 	if updatedAt == 0 {
-		slog.WarnContext(ctx, "anthropic.wire_baseline.missing", "concern", wireBaselineConcern, "subcomponent", "anthropic")
+		slog.WarnContext(
+			ctx,
+			"anthropic.wire_baseline.missing",
+			"concern",
+			wireBaselineConcern,
+			"subcomponent",
+			"anthropic",
+		)
+
 		return nil, fmt.Errorf("%w: no baseline for %s", ErrBaselineMissing, anthropicWireUpstream)
 	}
 
@@ -109,6 +137,7 @@ func (l *WireFlavorsLoader) Load(ctx context.Context, store anthropicBaselineSto
 	l.cached = flavors
 	l.cachedAt = updatedAt
 	l.cachedOK = true
+
 	return flavors, nil
 }
 
@@ -116,26 +145,56 @@ func (l *WireFlavorsLoader) Load(ctx context.Context, store anthropicBaselineSto
 // decodes it, and projects each flavor. It reuses
 // [mitm.DecodeBaselineSnapshot] because the mitm package does not import this
 // package, so there is no import cycle.
-func loadWireFlavorsFromStore(ctx context.Context, store anthropicBaselineStore) (map[string]WireFlavor, error) {
+func loadWireFlavorsFromStore(
+	ctx context.Context,
+	store anthropicBaselineStore,
+) (map[string]WireFlavor, error) {
 	raw, ok, err := store.CurrentBaseline(ctx, anthropicWireUpstream)
 	if err != nil {
-		slog.WarnContext(ctx, "anthropic.wire_baseline.read_failed", "concern", wireBaselineConcern, "subcomponent", "anthropic",
-			"err", err.Error(),
+		slog.WarnContext(
+			ctx,
+			"anthropic.wire_baseline.read_failed",
+			"concern",
+			wireBaselineConcern,
+			"subcomponent",
+			"anthropic",
+			"err",
+			err.Error(),
 		)
+
 		return nil, fmt.Errorf("%w: read %s: %w", ErrBaselineInvalid, anthropicWireUpstream, err)
 	}
+
 	if !ok {
 		return nil, fmt.Errorf("%w: no baseline for %s", ErrBaselineMissing, anthropicWireUpstream)
 	}
+
 	snap, err := mitm.DecodeBaselineSnapshot(raw)
 	if err != nil {
-		slog.WarnContext(ctx, "anthropic.wire_baseline.parse_failed", "concern", wireBaselineConcern, "subcomponent", "anthropic",
-			"err", err.Error(),
+		slog.WarnContext(
+			ctx,
+			"anthropic.wire_baseline.parse_failed",
+			"concern",
+			wireBaselineConcern,
+			"subcomponent",
+			"anthropic",
+			"err",
+			err.Error(),
 		)
+
 		return nil, fmt.Errorf("%w: parse %s: %w", ErrBaselineInvalid, anthropicWireUpstream, err)
 	}
+
 	if len(snap.Flavors) == 0 {
-		slog.WarnContext(ctx, "anthropic.wire_baseline.no_flavors", "concern", wireBaselineConcern, "subcomponent", "anthropic")
+		slog.WarnContext(
+			ctx,
+			"anthropic.wire_baseline.no_flavors",
+			"concern",
+			wireBaselineConcern,
+			"subcomponent",
+			"anthropic",
+		)
+
 		return nil, fmt.Errorf("%w: %s has no flavors", ErrBaselineInvalid, anthropicWireUpstream)
 	}
 
@@ -149,25 +208,55 @@ func loadWireFlavorsFromStore(ctx context.Context, store anthropicBaselineStore)
 	for _, shape := range snap.Flavors {
 		flavor := projectFlavorShape(shape)
 		if strings.TrimSpace(flavor.UserAgent) == "" {
-			slog.WarnContext(ctx, "anthropic.wire_baseline.flavor_missing_user_agent", "concern", wireBaselineConcern, "subcomponent", "anthropic",
-				"slug", flavor.Slug,
+			slog.WarnContext(
+				ctx,
+				"anthropic.wire_baseline.flavor_missing_user_agent",
+				"concern",
+				wireBaselineConcern,
+				"subcomponent",
+				"anthropic",
+				"slug",
+				flavor.Slug,
 			)
 			continue
 		}
+
 		if strings.TrimSpace(flavor.AnthropicVersion) == "" {
-			slog.WarnContext(ctx, "anthropic.wire_baseline.flavor_missing_version", "concern", wireBaselineConcern, "subcomponent", "anthropic",
-				"slug", flavor.Slug,
+			slog.WarnContext(
+				ctx,
+				"anthropic.wire_baseline.flavor_missing_version",
+				"concern",
+				wireBaselineConcern,
+				"subcomponent",
+				"anthropic",
+				"slug",
+				flavor.Slug,
 			)
 			continue
 		}
+
 		out[flavor.Slug] = flavor
 	}
+
 	if len(out) == 0 {
-		slog.WarnContext(ctx, "anthropic.wire_baseline.no_usable_flavors", "concern", wireBaselineConcern, "subcomponent", "anthropic",
-			"flavors_total", len(snap.Flavors),
+		slog.WarnContext(
+			ctx,
+			"anthropic.wire_baseline.no_usable_flavors",
+			"concern",
+			wireBaselineConcern,
+			"subcomponent",
+			"anthropic",
+			"flavors_total",
+			len(snap.Flavors),
 		)
-		return nil, fmt.Errorf("%w: %s has no usable flavors (all missing User-Agent or Anthropic-Version)", ErrBaselineInvalid, anthropicWireUpstream)
+
+		return nil, fmt.Errorf(
+			"%w: %s has no usable flavors (all missing User-Agent or Anthropic-Version)",
+			ErrBaselineInvalid,
+			anthropicWireUpstream,
+		)
 	}
+
 	return out, nil
 }
 
@@ -197,13 +286,18 @@ func featureVectorsFromShape(shape mitm.FlavorShape) []WireFlavorFeatureVector {
 	if len(shape.FeatureVectors) == 0 {
 		return nil
 	}
+
 	out := make([]WireFlavorFeatureVector, 0, len(shape.FeatureVectors))
 	for _, feature := range shape.FeatureVectors {
-		out = append(out, WireFlavorFeatureVector{
-			ModelID:     feature.ModelID,
-			WireProfile: "",
-		})
+		out = append(
+			out,
+			WireFlavorFeatureVector{
+				ModelID:     feature.ModelID,
+				WireProfile: "",
+			},
+		)
 	}
+
 	return out
 }
 
@@ -216,11 +310,14 @@ func constantHeaderValueFromShape(shape mitm.FlavorShape, name string) string {
 		if !strings.EqualFold(h.Name, name) {
 			continue
 		}
+
 		if h.Classification == mitm.HeaderClassConstant && len(h.ObservedValues) == 1 {
 			return h.ObservedValues[0]
 		}
+
 		return ""
 	}
+
 	return ""
 }
 
@@ -260,22 +357,30 @@ func constantStaticHeadersFromShape(shape mitm.FlavorShape) []WireHeader {
 		if wireFlavorExcludedHeaders[strings.ToLower(h.Name)] {
 			continue
 		}
+
 		if h.Classification != mitm.HeaderClassConstant {
 			continue
 		}
+
 		if len(h.ObservedValues) != 1 {
 			continue
 		}
-		out = append(out, WireHeader{
-			Name:           canonicalWireHeaderName(h.Name),
-			Value:          h.ObservedValues[0],
-			Classification: string(h.Classification),
-		})
+
+		out = append(
+			out,
+			WireHeader{
+				Name:           canonicalWireHeaderName(h.Name),
+				Value:          h.ObservedValues[0],
+				Classification: string(h.Classification),
+			},
+		)
 	}
+
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	if len(out) == 0 {
 		return nil
 	}
+
 	return out
 }
 
@@ -288,10 +393,12 @@ func requiredBodyFieldsFromShape(shape mitm.FlavorShape) []string {
 			out = append(out, f.Name)
 		}
 	}
+
 	sort.Strings(out)
 	if len(out) == 0 {
 		return nil
 	}
+
 	return out
 }
 
@@ -301,7 +408,9 @@ func splitBetaFlags(value string) []string {
 	if strings.TrimSpace(value) == "" {
 		return nil
 	}
+
 	parts := strings.Split(value, ",")
+
 	out := make([]string, 0, len(parts))
 	for _, p := range parts {
 		s := strings.TrimSpace(p)
@@ -309,9 +418,11 @@ func splitBetaFlags(value string) []string {
 			out = append(out, s)
 		}
 	}
+
 	if len(out) == 0 {
 		return nil
 	}
+
 	return out
 }
 
@@ -323,8 +434,10 @@ func canonicalWireHeaderName(name string) string {
 		if p == "" {
 			continue
 		}
+
 		parts[i] = strings.ToUpper(p[:1]) + strings.ToLower(p[1:])
 	}
+
 	return strings.Join(parts, "-")
 }
 
@@ -332,7 +445,9 @@ func copyStrings(in []string) []string {
 	if len(in) == 0 {
 		return nil
 	}
+
 	out := make([]string, len(in))
 	copy(out, in)
+
 	return out
 }

@@ -26,6 +26,7 @@ func TestLocalBuildCheckAndApplyNeverDownloadRelease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Check() error = %v", err)
 	}
+
 	if checkResult.UpdateAvailable || !checkResult.DevBuild {
 		t.Fatalf(
 			"Check() UpdateAvailable=%v DevBuild=%v, want false/true",
@@ -38,6 +39,7 @@ func TestLocalBuildCheckAndApplyNeverDownloadRelease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Apply() error = %v", err)
 	}
+
 	if applyResult.UpdateAvailable || applyResult.Applied {
 		t.Fatalf(
 			"Apply() UpdateAvailable=%v Applied=%v, want false/false",
@@ -45,6 +47,7 @@ func TestLocalBuildCheckAndApplyNeverDownloadRelease(t *testing.T) {
 			applyResult.Applied,
 		)
 	}
+
 	if got := downloadCount.Load(); got != 0 {
 		t.Fatalf("release download count = %d, want 0", got)
 	}
@@ -69,26 +72,30 @@ func TestCIReleaseAndPrereleaseBuildsRemainUpdateable(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			restoreBuildVersion := setTestBuildVersion(test.currentVersion, "false")
-			t.Cleanup(restoreBuildVersion)
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				restoreBuildVersion := setTestBuildVersion(test.currentVersion, "false")
+				t.Cleanup(restoreBuildVersion)
 
-			var downloadCount atomic.Int32
-			server := newUpdateServer(t, test.latestVersion, &downloadCount)
-			t.Cleanup(server.Close)
+				var downloadCount atomic.Int32
+				server := newUpdateServer(t, test.latestVersion, &downloadCount)
+				t.Cleanup(server.Close)
 
-			result, err := selfupdate.Check(context.Background(), updateTestOptions(t, server))
-			if err != nil {
-				t.Fatalf("Check() error = %v", err)
-			}
-			if !result.UpdateAvailable || result.DevBuild {
-				t.Fatalf(
-					"Check() UpdateAvailable=%v DevBuild=%v, want true/false",
-					result.UpdateAvailable,
-					result.DevBuild,
-				)
-			}
-		})
+				result, err := selfupdate.Check(context.Background(), updateTestOptions(t, server))
+				if err != nil {
+					t.Fatalf("Check() error = %v", err)
+				}
+
+				if !result.UpdateAvailable || result.DevBuild {
+					t.Fatalf(
+						"Check() UpdateAvailable=%v DevBuild=%v, want true/false",
+						result.UpdateAvailable,
+						result.DevBuild,
+					)
+				}
+			},
+		)
 	}
 }
 
@@ -106,6 +113,7 @@ func TestNetworkOptionsDoesNotSendCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Check() error = %v", err)
 	}
+
 	if !result.UpdateAvailable {
 		t.Fatal("Check() did not report the newer release")
 	}
@@ -116,6 +124,7 @@ func setTestBuildVersion(currentVersion string, dirty string) func() {
 	originalDirty := buildversion.Dirty
 	buildversion.Version = currentVersion
 	buildversion.Dirty = dirty
+
 	return func() {
 		buildversion.Version = originalVersion
 		buildversion.Dirty = originalDirty
@@ -129,23 +138,33 @@ func updateTestOptions(t *testing.T, server *httptest.Server) selfupdate.Options
 		Client:      server.Client(),
 		InstallPath: filepath.Join(stateDir, "clyde"),
 	})
+
 	return withTestServerPaths(options, server, stateDir)
 }
 
 func networkTestOptions(t *testing.T, server *httptest.Server) selfupdate.Options {
 	t.Helper()
 	stateDir := t.TempDir()
-	options := NetworkOptions(context.Background(), Overrides{
-		Client:      server.Client(),
-		InstallPath: filepath.Join(stateDir, "clyde"),
-	})
+	options := NetworkOptions(
+		context.Background(),
+		Overrides{
+			Client:      server.Client(),
+			InstallPath: filepath.Join(stateDir, "clyde"),
+		},
+	)
+
 	return withTestServerPaths(options, server, stateDir)
 }
 
-func withTestServerPaths(options selfupdate.Options, server *httptest.Server, stateDir string) selfupdate.Options {
+func withTestServerPaths(
+	options selfupdate.Options,
+	server *httptest.Server,
+	stateDir string,
+) selfupdate.Options {
 	options.Config.WebBaseURL = server.URL
 	options.StatePath = filepath.Join(stateDir, "state.json")
 	options.CacheDir = filepath.Join(stateDir, "cache")
+
 	return options
 }
 
@@ -155,19 +174,27 @@ func newUpdateServer(
 	downloadCount *atomic.Int32,
 ) *httptest.Server {
 	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.Header.Get("Authorization") != "" {
-			t.Error("The update request included an authorization header")
-		}
-		switch request.URL.Path {
-		case "/agoodkind/clyde/releases.atom":
-			_, _ = writer.Write([]byte("<feed><entry><id>tag:github.com,2008:Repository/1/" + latestVersion + "</id></entry></feed>"))
-		case "/agoodkind/clyde/releases/download/" + latestVersion + "/checksums.txt":
-			asset := "clyde_" + runtime.GOOS + "_" + runtime.GOARCH + ".tar.gz"
-			_, _ = writer.Write([]byte("deadbeef  " + asset + "\n"))
-		default:
-			downloadCount.Add(1)
-			http.NotFound(writer, request)
-		}
-	}))
+
+	return httptest.NewServer(
+		http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			if request.Header.Get("Authorization") != "" {
+				t.Error("The update request included an authorization header")
+			}
+
+			switch request.URL.Path {
+			case "/agoodkind/clyde/releases.atom":
+				_, _ = writer.Write(
+					[]byte(
+						"<feed><entry><id>tag:github.com,2008:Repository/1/" + latestVersion + "</id></entry></feed>",
+					),
+				)
+			case "/agoodkind/clyde/releases/download/" + latestVersion + "/checksums.txt":
+				asset := "clyde_" + runtime.GOOS + "_" + runtime.GOARCH + ".tar.gz"
+				_, _ = writer.Write([]byte("deadbeef  " + asset + "\n"))
+			default:
+				downloadCount.Add(1)
+				http.NotFound(writer, request)
+			}
+		}),
+	)
 }

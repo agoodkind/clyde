@@ -15,6 +15,7 @@ func TestProviderIDLogValueUsesStableLabel(t *testing.T) {
 	if !bytes.Contains(buffer.Bytes(), []byte(`"provider":"codex"`)) {
 		t.Fatalf("provider log = %s, want stable provider label", buffer.String())
 	}
+
 	if bytes.Contains(buffer.Bytes(), []byte(`\u0002`)) {
 		t.Fatalf("provider log = %s, want no numeric enum rune", buffer.String())
 	}

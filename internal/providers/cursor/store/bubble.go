@@ -23,9 +23,11 @@ func OrderableTimestamp(createdAt string) string {
 	if createdAt == "" {
 		return ""
 	}
+
 	if _, err := time.Parse(time.RFC3339, createdAt); err != nil {
 		return ""
 	}
+
 	return createdAt
 }
 
@@ -82,12 +84,15 @@ func (thinking *BubbleThinking) UnmarshalJSON(data []byte) error {
 		thinking.Text = text
 		return nil
 	}
+
 	type thinkingObject BubbleThinking
 	var decoded thinkingObject
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return fmt.Errorf("decode cursor thinking: %w", err)
 	}
+
 	*thinking = BubbleThinking(decoded)
+
 	return nil
 }
 
@@ -124,7 +129,9 @@ func (result *BubbleToolResult) UnmarshalJSON(data []byte) error {
 		*result = BubbleToolResult(text)
 		return nil
 	}
+
 	*result = BubbleToolResult(data)
+
 	return nil
 }
 
@@ -149,6 +156,7 @@ func DecodeBubbleJSON(data []byte) (Bubble, error) {
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return Bubble{}, CursorJSONDecodeError{Description: "bubble", Err: err}
 	}
+
 	return Bubble{
 		BubbleID:       wire.BubbleID,
 		Type:           wire.Type,
@@ -178,10 +186,12 @@ func parseBubbleKey(key string) (string, string, bool) {
 	if !ok {
 		return "", "", false
 	}
+
 	composerID, bubbleID, ok := strings.Cut(rest, ":")
 	if !ok || composerID == "" || bubbleID == "" {
 		return "", "", false
 	}
+
 	return composerID, bubbleID, true
 }
 
@@ -193,5 +203,6 @@ func bubbleIDFromKey(key string, composerID string) (string, bool) {
 	if !ok || keyComposerID != composerID {
 		return "", false
 	}
+
 	return bubbleID, true
 }

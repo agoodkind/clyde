@@ -18,6 +18,7 @@ func dollarsPerMTokToMicrocentsPerToken(dollarsPerMTok float64) int64 {
 	if dollarsPerMTok <= 0 {
 		return 0
 	}
+
 	return int64(math.Round(dollarsPerMTok * 100))
 }
 
@@ -58,6 +59,7 @@ func NewPricingTable(pricing map[string]config.AdapterModelPricing) PricingTable
 		if key == "" {
 			continue
 		}
+
 		rates[key] = modelRates{
 			InputPerToken:      dollarsPerMTokToMicrocentsPerToken(p.InputPerMTok),
 			OutputPerToken:     dollarsPerMTokToMicrocentsPerToken(p.OutputPerMTok),
@@ -65,6 +67,7 @@ func NewPricingTable(pricing map[string]config.AdapterModelPricing) PricingTable
 			CacheReadPerToken:  dollarsPerMTokToMicrocentsPerToken(p.CacheReadPerMTok),
 		}
 	}
+
 	return PricingTable{rates: rates}
 }
 
@@ -75,17 +78,31 @@ func NewPricingTable(pricing map[string]config.AdapterModelPricing) PricingTable
 func (t PricingTable) lookup(modelID string) (modelRates, bool) {
 	id := strings.ToLower(strings.TrimSpace(modelID))
 	if id == "" || len(t.rates) == 0 {
-		return modelRates{InputPerToken: 0, OutputPerToken: 0, CacheWritePerToken: 0, CacheReadPerToken: 0}, false
+		return modelRates{
+			InputPerToken:      0,
+			OutputPerToken:     0,
+			CacheWritePerToken: 0,
+			CacheReadPerToken:  0,
+		}, false
 	}
+
 	var bestKey string
+
 	for k := range t.rates {
 		if strings.HasPrefix(id, k) && len(k) > len(bestKey) {
 			bestKey = k
 		}
 	}
+
 	if bestKey == "" {
-		return modelRates{InputPerToken: 0, OutputPerToken: 0, CacheWritePerToken: 0, CacheReadPerToken: 0}, false
+		return modelRates{
+			InputPerToken:      0,
+			OutputPerToken:     0,
+			CacheWritePerToken: 0,
+			CacheReadPerToken:  0,
+		}, false
 	}
+
 	return t.rates[bestKey], true
 }
 
@@ -126,14 +143,27 @@ type CostBreakdown struct {
 func EstimateCost(in CostInputs, rates PricingTable) CostBreakdown {
 	r, ok := rates.lookup(in.ModelID)
 	if !ok {
-		return CostBreakdown{RatesKnown: false, InputMicrocents: 0, OutputMicrocents: 0, CacheWriteMicrocents: 0, CacheReadMicrocents: 0, TotalMicrocents: 0, HypotheticalNoCacheMicrocents: 0, CacheSavingsMicrocents: 0}
+		return CostBreakdown{
+			RatesKnown:                    false,
+			InputMicrocents:               0,
+			OutputMicrocents:              0,
+			CacheWriteMicrocents:          0,
+			CacheReadMicrocents:           0,
+			TotalMicrocents:               0,
+			HypotheticalNoCacheMicrocents: 0,
+			CacheSavingsMicrocents:        0,
+		}
 	}
+
 	b := CostBreakdown{
-		InputMicrocents:      int64(in.InputTokens) * r.InputPerToken,
-		OutputMicrocents:     int64(in.OutputTokens) * r.OutputPerToken,
-		CacheWriteMicrocents: int64(in.CacheCreationTokens) * r.CacheWritePerToken,
-		CacheReadMicrocents:  int64(in.CacheReadTokens) * r.CacheReadPerToken,
-		RatesKnown:           true, TotalMicrocents: 0, HypotheticalNoCacheMicrocents: 0, CacheSavingsMicrocents: 0,
+		InputMicrocents:               int64(in.InputTokens) * r.InputPerToken,
+		OutputMicrocents:              int64(in.OutputTokens) * r.OutputPerToken,
+		CacheWriteMicrocents:          int64(in.CacheCreationTokens) * r.CacheWritePerToken,
+		CacheReadMicrocents:           int64(in.CacheReadTokens) * r.CacheReadPerToken,
+		RatesKnown:                    true,
+		TotalMicrocents:               0,
+		HypotheticalNoCacheMicrocents: 0,
+		CacheSavingsMicrocents:        0,
 	}
 	b.TotalMicrocents = b.InputMicrocents + b.OutputMicrocents + b.CacheWriteMicrocents + b.CacheReadMicrocents
 	// Had the cache-read tokens been fresh input, they would have cost
@@ -143,5 +173,6 @@ func EstimateCost(in CostInputs, rates PricingTable) CostBreakdown {
 	noCacheInput := int64(in.InputTokens+in.CacheReadTokens) * r.InputPerToken
 	b.HypotheticalNoCacheMicrocents = noCacheInput + b.OutputMicrocents + b.CacheWriteMicrocents
 	b.CacheSavingsMicrocents = b.HypotheticalNoCacheMicrocents - b.TotalMicrocents
+
 	return b
 }

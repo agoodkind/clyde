@@ -29,6 +29,7 @@ func (row storedFamilyRow) hasCurrentKey() bool {
 	if !row.splitPartRecorded {
 		return false
 	}
+
 	return row.id == chunkID(storedChunk{
 		Content:              row.content,
 		RelativePath:         row.relativePath,
@@ -62,11 +63,13 @@ func (state *conversationState) hasUnknownTimeRow(familyKey string, id string) b
 	if state == nil {
 		return false
 	}
+
 	for _, row := range state.families[familyKey] {
 		if row.id == id {
 			return !row.timeKnown
 		}
 	}
+
 	return false
 }
 
@@ -74,11 +77,13 @@ func (state *conversationState) hasRow(familyKey string, id string) bool {
 	if state == nil {
 		return false
 	}
+
 	for _, row := range state.families[familyKey] {
 		if row.id == id {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -88,12 +93,14 @@ func (state *conversationState) differs(familyKey string, generated []storedChun
 	if state == nil {
 		return false
 	}
+
 	rows := state.families[familyKey]
 	for _, row := range rows {
 		if !row.hasCurrentKey() {
 			return false
 		}
 	}
+
 	for _, chunk := range generated {
 		pathRows := make([]storedFamilyRow, 0, len(rows))
 		for _, row := range rows {
@@ -101,10 +108,13 @@ func (state *conversationState) differs(familyKey string, generated []storedChun
 				pathRows = append(pathRows, row)
 			}
 		}
-		if len(pathRows) == 0 || compareStoredContent(pathRows, chunk.Content, 0) == contentDiffers {
+
+		if len(pathRows) == 0 ||
+			compareStoredContent(pathRows, chunk.Content, 0) == contentDiffers {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -114,23 +124,29 @@ func compareStoredContent(rows []storedFamilyRow, content string, offset int) co
 	if offset == len(content) {
 		return contentMatches
 	}
+
 	candidates := 0
 	unknown := false
+
 	for _, row := range rows {
 		whole := offset == 0 && row.splitPart == 0
 		if !whole && int(row.splitPart) != offset+1 {
 			continue
 		}
+
 		candidates++
 		if whole {
 			if row.content == content {
 				return contentMatches
 			}
+
 			continue
 		}
+
 		if row.content == "" || !strings.HasPrefix(content[offset:], row.content) {
 			continue
 		}
+
 		switch compareStoredContent(rows, content, offset+len(row.content)) {
 		case contentMatches:
 			return contentMatches
@@ -139,9 +155,11 @@ func compareStoredContent(rows []storedFamilyRow, content string, offset int) co
 		case contentDiffers:
 		}
 	}
+
 	if unknown || (candidates == 0 && offset > 0) {
 		return contentUnknown
 	}
+
 	return contentDiffers
 }
 
@@ -151,7 +169,9 @@ func (state *conversationState) present(familyKey string) bool {
 	if state == nil {
 		return false
 	}
+
 	_, found := state.families[familyKey]
+
 	return found
 }
 
@@ -183,27 +203,37 @@ func newStoredBatch() *storedBatch {
 
 // add records one stored row under its conversation and adds its vector to the
 // reuse map when the row's model matches currentModel.
-func (batch *storedBatch) add(conversationID string, row collection.StoredRow, currentModel string) {
+func (batch *storedBatch) add(
+	conversationID string,
+	row collection.StoredRow,
+	currentModel string,
+) {
 	if len(row.Vector) > 0 && embeddingModelsCompatible(row.EmbeddingModel, currentModel) {
 		batch.reuse[contentKey(row.Content)] = row.Vector
 	}
+
 	if conversationID == "" || !conversationTextIsStorable(row.Content) {
 		return
 	}
+
 	state, found := batch.conversations[conversationID]
 	if !found {
 		state = &conversationState{families: make(map[string][]storedFamilyRow)}
 		batch.conversations[conversationID] = state
 	}
+
 	familyKey := chunkFamilyKey(conversationID, row.RelativePath)
-	state.families[familyKey] = append(state.families[familyKey], storedFamilyRow{
-		id:                row.ID,
-		relativePath:      row.RelativePath,
-		content:           row.Content,
-		splitPart:         row.SplitPart,
-		splitPartRecorded: row.SplitPartRecorded,
-		timeKnown:         !rowHasZeroTime(row) && rowTimestampPresent(row),
-	})
+	state.families[familyKey] = append(
+		state.families[familyKey],
+		storedFamilyRow{
+			id:                row.ID,
+			relativePath:      row.RelativePath,
+			content:           row.Content,
+			splitPart:         row.SplitPart,
+			splitPartRecorded: row.SplitPartRecorded,
+			timeKnown:         !rowHasZeroTime(row) && rowTimestampPresent(row),
+		},
+	)
 }
 
 func (batch *storedBatch) state(conversationID string) *conversationState {
@@ -216,13 +246,16 @@ func (batch *storedBatch) state(conversationID string) *conversationState {
 // longest matching family path prefix, which covers rows written before the
 // column existed.
 func assignConversationID(row collection.StoredRow, requested []string) string {
-	if cell, found := row.Scalars[conversationIDColumn]; found && cell.State == collection.ScalarCellValue {
+	if cell, found := row.Scalars[conversationIDColumn]; found &&
+		cell.State == collection.ScalarCellValue {
 		if cell.Value.String != "" && slices.Contains(requested, cell.Value.String) {
 			return cell.Value.String
 		}
 	}
+
 	matchedID := ""
 	matchedLength := 0
+
 	for _, requestedID := range requested {
 		prefixes := []string{
 			conversationRelativePathPrefix(requestedID),
@@ -236,6 +269,7 @@ func assignConversationID(row collection.StoredRow, requested []string) string {
 			}
 		}
 	}
+
 	return matchedID
 }
 
@@ -246,7 +280,12 @@ func storedRowsDeclaration() collection.Declaration {
 		ItemIDColumn: conversationIDColumn,
 		Scalars: []collection.ScalarColumn{
 			nullableStringColumn(conversationIDColumn, conversationIDMaxLength),
-			{Name: timestampUnixColumn, Type: collection.ScalarTypeInt64, Nullable: true, MaxLength: 0},
+			{
+				Name:      timestampUnixColumn,
+				Type:      collection.ScalarTypeInt64,
+				Nullable:  true,
+				MaxLength: 0,
+			},
 		},
 	}
 }
@@ -255,72 +294,97 @@ func storedRowsDeclaration() collection.Declaration {
 // selects a row by its conversationId value or by a conversation path prefix;
 // the prefix matches rows written before the column existed. A missing
 // collection returns an empty batch.
-func (c *Client) loadStoredBatch(ctx context.Context, collectionName string, conversationIDs []string) (*storedBatch, error) {
+func (c *Client) loadStoredBatch(
+	ctx context.Context,
+	collectionName string,
+	conversationIDs []string,
+) (*storedBatch, error) {
 	batch := newStoredBatch()
 	requested := dedupeIDs(conversationIDs)
 	if len(requested) == 0 {
 		return batch, nil
 	}
+
 	exists, err := c.loadCollectionIfPresent(ctx, collectionName)
 	if err != nil {
 		return nil, err
 	}
+
 	if !exists {
 		return batch, nil
 	}
+
 	for start := 0; start < len(requested); start += conversationFilterIDBatchSize {
 		end := min(start+conversationFilterIDBatchSize, len(requested))
 		group := requested[start:end]
+
 		prefixes := make([]string, 0, len(group)*3)
 		for _, id := range group {
-			prefixes = append(prefixes,
+			prefixes = append(
+				prefixes,
 				conversationRelativePathPrefix(id),
 				conversationToolRelativePathPrefix(id),
 				conversationThinkingRelativePathPrefix(id),
 			)
 		}
-		rows, queryErr := c.store.QueryRows(ctx, collection.RowsRequest{
-			Collection:    collectionName,
-			Declaration:   storedRowsDeclaration(),
-			ItemIDs:       group,
-			PathPrefixes:  prefixes,
-			IncludeVector: true,
-		})
+
+		rows, queryErr := c.store.QueryRows(
+			ctx,
+			collection.RowsRequest{
+				Collection:    collectionName,
+				Declaration:   storedRowsDeclaration(),
+				ItemIDs:       group,
+				PathPrefixes:  prefixes,
+				IncludeVector: true,
+			},
+		)
 		if queryErr != nil {
 			return nil, failRead("load stored conversation rows from "+collectionName, queryErr)
 		}
+
 		for _, row := range rows {
 			batch.add(assignConversationID(row, group), row, c.embeddingModel)
 		}
 	}
+
 	return batch, nil
 }
 
 // failRead logs one failed request and returns the error with the operation
 // that failed.
 func failRead(operation string, err error) error {
-	slog.Warn("conversation.vectorsearch.request_failed",
-		"concern", "conversation.semantic",
-		"component", "conversation",
-		"operation", operation,
-		"err", err,
+	slog.Warn(
+		"conversation.vectorsearch.request_failed",
+		"concern",
+		"conversation.semantic",
+		"component",
+		"conversation",
+		"operation",
+		operation,
+		"err",
+		err,
 	)
+
 	return fmt.Errorf("%s: %w", operation, err)
 }
 
 func dedupeIDs(ids []string) []string {
 	seen := make(map[string]struct{}, len(ids))
+
 	unique := make([]string, 0, len(ids))
 	for _, id := range ids {
 		trimmed := strings.TrimSpace(id)
 		if trimmed == "" {
 			continue
 		}
+
 		if _, found := seen[trimmed]; found {
 			continue
 		}
+
 		seen[trimmed] = struct{}{}
 		unique = append(unique, trimmed)
 	}
+
 	return unique
 }

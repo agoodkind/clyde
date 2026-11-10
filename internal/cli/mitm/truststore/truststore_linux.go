@@ -60,7 +60,11 @@ const updateCACertificatesPath = "/usr/sbin/update-ca-certificates"
 const defaultLinuxCommandTimeout = 2 * time.Minute
 
 func newPlatformRegistry() Registry {
-	return NewLinuxRegistry(LinuxRegistryOptions{Runner: nil, InstallPath: "", CommandTimeout: 0})
+	return NewLinuxRegistry(LinuxRegistryOptions{
+		Runner:         nil,
+		InstallPath:    "",
+		CommandTimeout: 0,
+	})
 }
 
 // LinuxRegistryOptions sets the dependencies of [NewLinuxRegistry]. A zero
@@ -97,14 +101,32 @@ func NewLinuxRegistry(options LinuxRegistryOptions) Registry {
 // so the CLI surfaces both update-ca-certificates progress and any
 // sudo error in one diagnostic blob.
 func linuxExecRun(ctx context.Context, name string, args ...string) ([]byte, error) {
-	slog.DebugContext(ctx, "cli.mitm.truststore.linux.exec", "concern", "cli.mitm.truststore", "binary", name, "argv_count", len(args))
+	slog.DebugContext(
+		ctx,
+		"cli.mitm.truststore.linux.exec",
+		"concern",
+		"cli.mitm.truststore",
+		"binary",
+		name,
+		"argv_count",
+		len(args),
+	)
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stderr = nil
 	cmd.Stdout = nil
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		slog.WarnContext(ctx, "cli.mitm.truststore.linux.exec_failed", "concern", "cli.mitm.truststore", "binary", name, "err", err)
+		slog.WarnContext(
+			ctx,
+			"cli.mitm.truststore.linux.exec_failed",
+			"concern",
+			"cli.mitm.truststore",
+			"binary",
+			name,
+			"err",
+			err,
+		)
 		return output, &linuxExecError{binary: name, err: err}
 	}
 	return output, nil
@@ -138,7 +160,15 @@ func (l linuxRegistry) CACommonName() string {
 // platform layer can observe.
 func (l linuxRegistry) Status(certPath string) (InstallStatus, error) {
 	status := NewInstallStatus(PlatformLinux, l.commonName)
-	slog.Debug("cli.mitm.truststore.linux.status_begin", "concern", "cli.mitm.truststore", "cert_path", certPath, "install_path", l.installPath)
+	slog.Debug(
+		"cli.mitm.truststore.linux.status_begin",
+		"concern",
+		"cli.mitm.truststore",
+		"cert_path",
+		certPath,
+		"install_path",
+		l.installPath,
+	)
 
 	onDisk, fpErr := fingerprintPEM(certPath)
 	if fpErr != nil {
@@ -172,14 +202,34 @@ func (l linuxRegistry) Install(certPath string) error {
 	body, err := os.ReadFile(certPath)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			slog.Warn("cli.mitm.truststore.linux.install_ca_absent", "concern", "cli.mitm.truststore", "cert_path", certPath)
+			slog.Warn(
+				"cli.mitm.truststore.linux.install_ca_absent",
+				"concern",
+				"cli.mitm.truststore",
+				"cert_path",
+				certPath,
+			)
 			return fmt.Errorf("%w: %s", ErrCAAbsent, certPath)
 		}
-		slog.Warn("cli.mitm.truststore.linux.install_read_failed", "concern", "cli.mitm.truststore", "cert_path", certPath, "err", err)
+		slog.Warn(
+			"cli.mitm.truststore.linux.install_read_failed",
+			"concern",
+			"cli.mitm.truststore",
+			"cert_path",
+			certPath,
+			"err",
+			err,
+		)
 		return fmt.Errorf("read ca cert %q: %w", certPath, err)
 	}
 	if len(body) == 0 {
-		slog.Warn("cli.mitm.truststore.linux.install_ca_empty", "concern", "cli.mitm.truststore", "cert_path", certPath)
+		slog.Warn(
+			"cli.mitm.truststore.linux.install_ca_empty",
+			"concern",
+			"cli.mitm.truststore",
+			"cert_path",
+			certPath,
+		)
 		return fmt.Errorf("%w: %s is empty", ErrCAAbsent, certPath)
 	}
 
@@ -200,35 +250,92 @@ func (l linuxRegistry) Install(certPath string) error {
 	// conventional permissions in one step.
 	tempFile, tempErr := os.CreateTemp("", "clyde-mitm-ca-*.crt")
 	if tempErr != nil {
-		slog.Warn("cli.mitm.truststore.linux.temp_ca_failed", "concern", "cli.mitm.truststore", "err", tempErr)
+		slog.Warn(
+			"cli.mitm.truststore.linux.temp_ca_failed",
+			"concern",
+			"cli.mitm.truststore",
+			"err",
+			tempErr,
+		)
 		return fmt.Errorf("create temp ca: %w", tempErr)
 	}
 	tempPath := tempFile.Name()
 	defer func() { _ = os.Remove(tempPath) }()
 	if _, writeErr := tempFile.Write(body); writeErr != nil {
 		_ = tempFile.Close()
-		slog.Warn("cli.mitm.truststore.linux.temp_ca_write_failed", "concern", "cli.mitm.truststore", "err", writeErr)
+		slog.Warn(
+			"cli.mitm.truststore.linux.temp_ca_write_failed",
+			"concern",
+			"cli.mitm.truststore",
+			"err",
+			writeErr,
+		)
 		return fmt.Errorf("write temp ca: %w", writeErr)
 	}
 	if closeErr := tempFile.Close(); closeErr != nil {
-		slog.Warn("cli.mitm.truststore.linux.temp_ca_close_failed", "concern", "cli.mitm.truststore", "err", closeErr)
+		slog.Warn(
+			"cli.mitm.truststore.linux.temp_ca_close_failed",
+			"concern",
+			"cli.mitm.truststore",
+			"err",
+			closeErr,
+		)
 		return fmt.Errorf("close temp ca: %w", closeErr)
 	}
 
-	installOutput, installErr := l.runner(ctx, sudoLinuxPath,
-		"/usr/bin/install", "-m", "0644", "-D", tempPath, l.installPath,
+	installOutput, installErr := l.runner(
+		ctx,
+		sudoLinuxPath,
+		"/usr/bin/install",
+		"-m",
+		"0644",
+		"-D",
+		tempPath,
+		l.installPath,
 	)
 	if installErr != nil {
-		slog.Warn("cli.mitm.truststore.linux.install_failed", "concern", "cli.mitm.truststore", "err", installErr, "output", strings.TrimSpace(string(installOutput)))
-		return fmt.Errorf("sudo install ca: %w (%s)", installErr, strings.TrimSpace(string(installOutput)))
+		slog.Warn(
+			"cli.mitm.truststore.linux.install_failed",
+			"concern",
+			"cli.mitm.truststore",
+			"err",
+			installErr,
+			"output",
+			strings.TrimSpace(string(installOutput)),
+		)
+		return fmt.Errorf(
+			"sudo install ca: %w (%s)",
+			installErr,
+			strings.TrimSpace(string(installOutput)),
+		)
 	}
 
 	updateOutput, updateErr := l.runner(ctx, sudoLinuxPath, l.updateBinary)
 	if updateErr != nil {
-		slog.Warn("cli.mitm.truststore.linux.update_failed", "concern", "cli.mitm.truststore", "err", updateErr, "output", strings.TrimSpace(string(updateOutput)))
-		return fmt.Errorf("sudo update-ca-certificates: %w (%s)", updateErr, strings.TrimSpace(string(updateOutput)))
+		slog.Warn(
+			"cli.mitm.truststore.linux.update_failed",
+			"concern",
+			"cli.mitm.truststore",
+			"err",
+			updateErr,
+			"output",
+			strings.TrimSpace(string(updateOutput)),
+		)
+		return fmt.Errorf(
+			"sudo update-ca-certificates: %w (%s)",
+			updateErr,
+			strings.TrimSpace(string(updateOutput)),
+		)
 	}
-	slog.Info("cli.mitm.truststore.linux.installed", "concern", "cli.mitm.truststore", "install_path", l.installPath, "cert_path", certPath)
+	slog.Info(
+		"cli.mitm.truststore.linux.installed",
+		"concern",
+		"cli.mitm.truststore",
+		"install_path",
+		l.installPath,
+		"cert_path",
+		certPath,
+	)
 	return nil
 }
 
@@ -241,25 +348,65 @@ func (l linuxRegistry) Uninstall() error {
 
 	if _, statErr := os.Stat(l.installPath); statErr != nil {
 		if errors.Is(statErr, fs.ErrNotExist) {
-			slog.Debug("cli.mitm.truststore.linux.uninstall_already_absent", "concern", "cli.mitm.truststore", "install_path", l.installPath)
+			slog.Debug(
+				"cli.mitm.truststore.linux.uninstall_already_absent",
+				"concern",
+				"cli.mitm.truststore",
+				"install_path",
+				l.installPath,
+			)
 			return nil
 		}
-		slog.Warn("cli.mitm.truststore.linux.uninstall_stat_failed", "concern", "cli.mitm.truststore", "install_path", l.installPath, "err", statErr)
+		slog.Warn(
+			"cli.mitm.truststore.linux.uninstall_stat_failed",
+			"concern",
+			"cli.mitm.truststore",
+			"install_path",
+			l.installPath,
+			"err",
+			statErr,
+		)
 		return fmt.Errorf("stat installed ca %q: %w", l.installPath, statErr)
 	}
 
 	rmOutput, rmErr := l.runner(ctx, sudoLinuxPath, "/bin/rm", "-f", l.installPath)
 	if rmErr != nil {
-		slog.Warn("cli.mitm.truststore.linux.uninstall_rm_failed", "concern", "cli.mitm.truststore", "err", rmErr, "output", strings.TrimSpace(string(rmOutput)))
+		slog.Warn(
+			"cli.mitm.truststore.linux.uninstall_rm_failed",
+			"concern",
+			"cli.mitm.truststore",
+			"err",
+			rmErr,
+			"output",
+			strings.TrimSpace(string(rmOutput)),
+		)
 		return fmt.Errorf("sudo rm ca: %w (%s)", rmErr, strings.TrimSpace(string(rmOutput)))
 	}
 
 	updateOutput, updateErr := l.runner(ctx, sudoLinuxPath, l.updateBinary, "--fresh")
 	if updateErr != nil {
-		slog.Warn("cli.mitm.truststore.linux.uninstall_update_failed", "concern", "cli.mitm.truststore", "err", updateErr, "output", strings.TrimSpace(string(updateOutput)))
-		return fmt.Errorf("sudo update-ca-certificates --fresh: %w (%s)", updateErr, strings.TrimSpace(string(updateOutput)))
+		slog.Warn(
+			"cli.mitm.truststore.linux.uninstall_update_failed",
+			"concern",
+			"cli.mitm.truststore",
+			"err",
+			updateErr,
+			"output",
+			strings.TrimSpace(string(updateOutput)),
+		)
+		return fmt.Errorf(
+			"sudo update-ca-certificates --fresh: %w (%s)",
+			updateErr,
+			strings.TrimSpace(string(updateOutput)),
+		)
 	}
-	slog.Info("cli.mitm.truststore.linux.uninstalled", "concern", "cli.mitm.truststore", "install_path", l.installPath)
+	slog.Info(
+		"cli.mitm.truststore.linux.uninstalled",
+		"concern",
+		"cli.mitm.truststore",
+		"install_path",
+		l.installPath,
+	)
 	return nil
 }
 

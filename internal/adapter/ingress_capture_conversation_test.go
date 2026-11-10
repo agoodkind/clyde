@@ -56,20 +56,31 @@ func TestIngressConversationFieldsOnlyStoresExportableIDs(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				t.Parallel()
 
-			corr := correlation.Context{}
-			if test.chatKey != "" || test.source != "" {
-				corr = clydeingress.WithChatIdentity(corr, test.chatKey, test.source, test.chatKey, "")
-			}
-			gotID, gotSource := ingressConversationFields(corr)
-			if gotID != test.wantID {
-				t.Fatalf("conversation id = %q, want %q", gotID, test.wantID)
-			}
-			if gotSource != test.wantSource {
-				t.Fatalf("conversation source = %q, want %q", gotSource, test.wantSource)
-			}
-		})
+				corr := correlation.Context{}
+				if test.chatKey != "" || test.source != "" {
+					corr = clydeingress.WithChatIdentity(
+						corr,
+						test.chatKey,
+						test.source,
+						test.chatKey,
+						"",
+					)
+				}
+
+				gotID, gotSource := ingressConversationFields(corr)
+				if gotID != test.wantID {
+					t.Fatalf("conversation id = %q, want %q", gotID, test.wantID)
+				}
+
+				if gotSource != test.wantSource {
+					t.Fatalf("conversation source = %q, want %q", gotSource, test.wantSource)
+				}
+			},
+		)
 	}
 }

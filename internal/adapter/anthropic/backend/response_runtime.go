@@ -78,24 +78,31 @@ func RunCollectExecution(
 	if err != nil {
 		return CollectExecutionResult{}, err
 	}
+
 	if err := flush(); err != nil {
 		return CollectExecutionResult{}, err
 	}
+
 	usage := trackAndLogAnthropicContextUsage(rt, ctx, anthUsage, resolved, reqID, trackerKey)
-	finalizeAnthropicExecution(rt, ctx, anthropicExecutionFinalize{
-		Req:          req,
-		Resolved:     resolved,
-		ReqID:        reqID,
-		Started:      started,
-		Usage:        usage,
-		AnthUsage:    anthUsage,
-		FinishReason: finishReason,
-		Stream:       false,
-	})
+	finalizeAnthropicExecution(
+		rt,
+		ctx,
+		anthropicExecutionFinalize{
+			Req:          req,
+			Resolved:     resolved,
+			ReqID:        reqID,
+			Started:      started,
+			Usage:        usage,
+			AnthUsage:    anthUsage,
+			FinishReason: finishReason,
+			Stream:       false,
+		},
+	)
 	var events []adapterrender.Event
 	if collectedEvents != nil {
 		events = collectedEvents()
 	}
+
 	return CollectExecutionResult{
 		Events:              events,
 		Usage:               usage,
@@ -124,10 +131,12 @@ func RunStreamExecution(
 		if eventHasVisibleContent(ev) {
 			emittedContent = true
 		}
+
 		count, names, hasSubagent := toolCallStats(ev)
 		toolCallCount += count
 		appendUniqueStrings(&toolCallNames, names)
 		hasSubagentToolCall = hasSubagentToolCall || hasSubagent
+
 		return emit(ev)
 	}
 	anthUsage, anthStopReason, finishReason, err := RunTranslatorEvents(
@@ -149,17 +158,23 @@ func RunStreamExecution(
 	if finishReason == "" {
 		finishReason = finishreason.FromAnthropicStream(anthStopReason)
 	}
+
 	finalUsage := trackAndLogAnthropicContextUsage(rt, ctx, anthUsage, resolved, reqID, trackerKey)
-	finalizeAnthropicExecution(rt, ctx, anthropicExecutionFinalize{
-		Req:          req,
-		Resolved:     resolved,
-		ReqID:        reqID,
-		Started:      started,
-		Usage:        finalUsage,
-		AnthUsage:    anthUsage,
-		FinishReason: finishReason,
-		Stream:       true,
-	})
+	finalizeAnthropicExecution(
+		rt,
+		ctx,
+		anthropicExecutionFinalize{
+			Req:          req,
+			Resolved:     resolved,
+			ReqID:        reqID,
+			Started:      started,
+			Usage:        finalUsage,
+			AnthUsage:    anthUsage,
+			FinishReason: finishReason,
+			Stream:       true,
+		},
+	)
+
 	return StreamExecutionResult{
 		Usage:               finalUsage,
 		FinishReason:        finishReason,
@@ -188,11 +203,17 @@ func trackAndLogAnthropicContextUsage(
 	if resolved != nil {
 		contextWindow = resolved.ContextBudget.InputTokens
 	}
+
 	rawUsage := usageWithContextWindow(UsageFromAnthropic(anthUsage), contextWindow)
 	tracked := rt.TrackAnthropicContextUsage(trackerKey, rawUsage)
 	usage := tracked.Usage
 	if usage.PromptTokens != rawUsage.PromptTokens || usage.TotalTokens != rawUsage.TotalTokens {
-		rt.Log().LogAttrs(ctx, slog.LevelInfo, "adapter.context_usage.tracked", slog.String("concern", "adapter.chat.render"), slog.String("backend", "anthropic"),
+		rt.Log().LogAttrs(
+			ctx,
+			slog.LevelInfo,
+			"adapter.context_usage.tracked",
+			slog.String("concern", "adapter.chat.render"),
+			slog.String("backend", "anthropic"),
 			slog.String("request_id", reqID),
 			slog.String("alias", requestAlias(resolved)),
 			slog.Int("raw_prompt_tokens", tracked.RawPrompt),
@@ -202,6 +223,7 @@ func trackAndLogAnthropicContextUsage(
 			slog.Int("surfaced_total_tokens", usage.TotalTokens),
 		)
 	}
+
 	return usage
 }
 
@@ -227,28 +249,47 @@ type anthropicExecutionFinalize struct {
 // collect and stream paths must call this so the streaming surface
 // (which is what Cursor BYOK uses) does not silently skip cache and
 // completion accounting.
-func finalizeAnthropicExecution(rt ExecutionRuntime, ctx context.Context, args anthropicExecutionFinalize) {
+func finalizeAnthropicExecution(
+	rt ExecutionRuntime,
+	ctx context.Context,
+	args anthropicExecutionFinalize,
+) {
 	durationMs := clock.Since(args.Started).Milliseconds()
-	adapterruntime.LogCompleted(rt.Log(), ctx, adapterruntime.CompletedAttrs{
-		Backend:               "anthropic",
-		Provider:              "anthropic-oauth",
-		Path:                  "oauth",
-		SessionID:             args.ReqID,
-		RequestID:             args.ReqID,
-		ExecutionID:           adapterruntime.ExecutionIDFromContext(ctx),
-		Alias:                 requestAlias(args.Resolved),
-		ModelID:               args.Req.Model,
-		FinishReason:          args.FinishReason,
-		TokensIn:              args.Usage.PromptTokens,
-		TokensOut:             args.Usage.CompletionTokens,
-		CacheReadTokens:       args.AnthUsage.CacheReadInputTokens,
-		CacheCreationTokens:   args.AnthUsage.CacheCreationInputTokens,
-		CacheCreationReported: true,
-		CacheTTL:              rt.CacheTTL(),
-		DurationMs:            durationMs,
-		Stream:                args.Stream, DerivedCacheCreationTokens: 0, ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, Correlation: correlation.
-					Context{TraceID: "", SpanID: "", ParentSpanID: "", RequestID: "", IdentityAttributes: nil},
-	})
+	adapterruntime.LogCompleted(
+		rt.Log(),
+		ctx,
+		adapterruntime.CompletedAttrs{
+			Backend:                    "anthropic",
+			Provider:                   "anthropic-oauth",
+			Path:                       "oauth",
+			SessionID:                  args.ReqID,
+			RequestID:                  args.ReqID,
+			ExecutionID:                adapterruntime.ExecutionIDFromContext(ctx),
+			Alias:                      requestAlias(args.Resolved),
+			ModelID:                    args.Req.Model,
+			FinishReason:               args.FinishReason,
+			TokensIn:                   args.Usage.PromptTokens,
+			TokensOut:                  args.Usage.CompletionTokens,
+			CacheReadTokens:            args.AnthUsage.CacheReadInputTokens,
+			CacheCreationTokens:        args.AnthUsage.CacheCreationInputTokens,
+			CacheCreationReported:      true,
+			CacheTTL:                   rt.CacheTTL(),
+			DurationMs:                 durationMs,
+			Stream:                     args.Stream,
+			DerivedCacheCreationTokens: 0,
+			ToolCallCount:              0,
+			ToolCallNames:              nil,
+			HasSubagentToolCall:        false,
+			Correlation: correlation.
+				Context{
+				TraceID:            "",
+				SpanID:             "",
+				ParentSpanID:       "",
+				RequestID:          "",
+				IdentityAttributes: nil,
+			},
+		},
+	)
 }
 
 func eventHasVisibleContent(ev adapterrender.Event) bool {
@@ -271,11 +312,13 @@ func toolCallStats(ev adapterrender.Event) (count int, names []string, hasSubage
 	if !ok {
 		return 0, nil, false
 	}
+
 	for _, tc := range td.ToolCalls {
 		name := strings.TrimSpace(tc.Function.Name)
 		if strings.TrimSpace(tc.ID) == "" && name == "" {
 			continue
 		}
+
 		count++
 		appendUniqueStrings(&names, []string{name})
 		switch subagentToolNameAnth(name) {
@@ -283,6 +326,7 @@ func toolCallStats(ev adapterrender.Event) (count int, names []string, hasSubage
 			hasSubagent = true
 		}
 	}
+
 	return count, names, hasSubagent
 }
 
@@ -303,9 +347,11 @@ func appendUniqueStrings(dst *[]string, values []string) {
 		if value == "" {
 			continue
 		}
+
 		if slices.Contains(*dst, value) {
 			continue
 		}
+
 		*dst = append(*dst, value)
 	}
 }
@@ -314,5 +360,6 @@ func usageWithContextWindow(usage adapteropenai.Usage, contextWindow int) adapte
 	if contextWindow > 0 {
 		usage.MaxTokens = contextWindow
 	}
+
 	return usage
 }

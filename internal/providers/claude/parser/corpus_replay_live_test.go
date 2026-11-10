@@ -26,18 +26,27 @@ var replayContextHeadings = []string{
 }
 
 var claudeCorpusMarkers = func() []string {
-	markers := make([]string, 0, len(noiseTags)+len(injectedTags)+len(replayContextHeadings)+len(injectedFeedbackLinePrefixes)+1)
+	markers := make(
+		[]string,
+		0,
+		len(noiseTags)+len(injectedTags)+len(replayContextHeadings)+len(
+			injectedFeedbackLinePrefixes,
+		)+1,
+	)
 	for _, tag := range noiseTags {
 		markers = append(markers, "<"+tag)
 	}
+
 	for _, tag := range injectedTags {
 		markers = append(markers, "<"+tag)
 	}
+
 	markers = append(markers, replayContextHeadings...)
 	markers = append(markers, injectedFeedbackLinePrefixes...)
 	// stripSystemTags also trims one unmatched leading tag, so any message
 	// opening with a tag is marker-carrying for partition purposes.
 	markers = append(markers, "<")
+
 	return markers
 }()
 
@@ -47,12 +56,15 @@ func containsAnyClaudeMarker(text string) bool {
 			if strings.HasPrefix(text, "<") {
 				return true
 			}
+
 			continue
 		}
+
 		if strings.Contains(text, marker) {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -66,6 +78,7 @@ func TestLiveClaudeCorpusReplayNoUserTextLoss(t *testing.T) {
 	if os.Getenv(corpusReplayEnv) == "" {
 		t.Skipf("set %s=1 to replay the local corpus", corpusReplayEnv)
 	}
+
 	root := filepath.Join(os.Getenv("HOME"), ".claude", "projects")
 	paths, err := filepath.Glob(filepath.Join(root, "*", "*.jsonl"))
 	if err != nil || len(paths) == 0 {
@@ -76,38 +89,54 @@ func TestLiveClaudeCorpusReplayNoUserTextLoss(t *testing.T) {
 	messagesSeen := 0
 	markerFree := 0
 	strippedChanged := 0
+
 	for _, path := range paths {
-		full, err := conversation.CollectMessages(New().Stream(path, conversation.LoadOptions{
-			IncludeSystemPrompts:  true,
-			IncludeSystemMessages: false,
-			IncludeToolOutputs:    false,
-			IncludeInjected:       true,
-		}))
+		full, err := conversation.CollectMessages(
+			New().Stream(
+				path,
+				conversation.LoadOptions{
+					IncludeSystemPrompts:  true,
+					IncludeSystemMessages: false,
+					IncludeToolOutputs:    false,
+					IncludeInjected:       true,
+				},
+			),
+		)
 		if err != nil {
 			// The corpus holds live files that can change or truncate mid-read;
 			// a transcript that cannot be read teaches nothing about stripping.
 			continue
 		}
-		stripped, err := conversation.CollectMessages(New().Stream(path, conversation.LoadOptions{
-			IncludeSystemPrompts:  false,
-			IncludeSystemMessages: false,
-			IncludeToolOutputs:    false,
-			IncludeInjected:       false,
-		}))
+
+		stripped, err := conversation.CollectMessages(
+			New().Stream(
+				path,
+				conversation.LoadOptions{
+					IncludeSystemPrompts:  false,
+					IncludeSystemMessages: false,
+					IncludeToolOutputs:    false,
+					IncludeInjected:       false,
+				},
+			),
+		)
 		if err != nil {
 			continue
 		}
+
 		transcripts++
+
 		strippedByUUID := make(map[string]transcript.Message, len(stripped))
 		for _, message := range stripped {
 			if message.UUID != "" {
 				strippedByUUID[message.UUID] = message
 			}
 		}
+
 		for _, message := range full {
 			if message.Role != "user" || message.UUID == "" {
 				continue
 			}
+
 			// Meta-only and transcript-only records never reach the feed (the
 			// projection withholds both), and compact summaries quote many
 			// turns with many genuine splices, so the single-splice guarantees
@@ -115,31 +144,55 @@ func TestLiveClaudeCorpusReplayNoUserTextLoss(t *testing.T) {
 			if message.Visibility != transcript.MessageVisibilityVisible {
 				continue
 			}
+
 			messagesSeen++
 			after, ok := strippedByUUID[message.UUID]
 			if containsAnyClaudeMarker(message.Text) {
 				if ok && after.Text != message.Text {
 					strippedChanged++
 				}
+
 				if ok {
 					for _, headingRe := range injectedContextHeadingRes {
 						if headingRe.MatchString(after.Text) {
-							t.Fatalf("%s: stripped message %s still carries a line-start hook heading", path, message.UUID)
+							t.Fatalf(
+								"%s: stripped message %s still carries a line-start hook heading",
+								path,
+								message.UUID,
+							)
 						}
 					}
 				}
+
 				continue
 			}
+
 			markerFree++
 			if !ok {
-				t.Fatalf("%s: marker-free message %s disappeared under stripping", path, message.UUID)
+				t.Fatalf(
+					"%s: marker-free message %s disappeared under stripping",
+					path,
+					message.UUID,
+				)
 			}
+
 			if after.Text != message.Text {
-				t.Fatalf("%s: marker-free message %s changed under stripping:\nfull:     %q\nstripped: %q",
-					path, message.UUID, message.Text, after.Text)
+				t.Fatalf(
+					"%s: marker-free message %s changed under stripping:\nfull:     %q\nstripped: %q",
+					path,
+					message.UUID,
+					message.Text,
+					after.Text,
+				)
 			}
 		}
 	}
-	t.Logf("replayed %d transcripts: %d user messages, %d marker-free byte-identical, %d marker-carrying changed",
-		transcripts, messagesSeen, markerFree, strippedChanged)
+
+	t.Logf(
+		"replayed %d transcripts: %d user messages, %d marker-free byte-identical, %d marker-carrying changed",
+		transcripts,
+		messagesSeen,
+		markerFree,
+		strippedChanged,
+	)
 }

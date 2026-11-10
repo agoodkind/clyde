@@ -30,6 +30,7 @@ func (routeProvider) ClassifyConnect(host string) mitm.ConnectClaim {
 			ProviderID: providerID,
 		}
 	}
+
 	return mitm.ConnectClaim{
 		Claimed:    true,
 		Host:       host,

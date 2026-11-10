@@ -11,19 +11,35 @@ import (
 
 // MergeEventsWithNativePatchRepresentation collects a non-streaming chat
 // completion with the resolved Cursor route's native patch contract.
-func MergeEventsWithNativePatchRepresentation(reqID, modelAlias, systemFingerprint string, events []adapterrender.Event, res RunResult, representation adapterrender.NativePatchRepresentation) adapteropenai.ChatResponse {
+func MergeEventsWithNativePatchRepresentation(
+	reqID string,
+	modelAlias string,
+	systemFingerprint string,
+	events []adapterrender.Event,
+	res RunResult,
+	representation adapterrender.NativePatchRepresentation,
+) adapteropenai.ChatResponse {
 	collected := adapterrender.CollectMessageWithNativePatchRepresentation(events, representation)
 	msg := adapteropenai.ChatMessage{
-		Role:    "assistant",
-		Content: json.RawMessage(strconv.Quote(collected.Text)), Name: "", ToolCalls: nil, ToolCallID: "", Reasoning: "", ReasoningContent: "", Refusal: "", Annotations: nil,
+		Role:             "assistant",
+		Content:          json.RawMessage(strconv.Quote(collected.Text)),
+		Name:             "",
+		ToolCalls:        nil,
+		ToolCallID:       "",
+		Reasoning:        "",
+		ReasoningContent: "",
+		Refusal:          "",
+		Annotations:      nil,
 	}
 	if collected.Reasoning != "" {
 		msg.Reasoning = collected.Reasoning
 		msg.ReasoningContent = collected.Reasoning
 	}
+
 	if collected.Refusal != "" {
 		msg.Refusal = collected.Refusal
 	}
+
 	msg.ToolCalls = append(msg.ToolCalls, collected.ToolCalls...)
 
 	return adapteropenai.ChatResponse{
@@ -32,11 +48,14 @@ func MergeEventsWithNativePatchRepresentation(reqID, modelAlias, systemFingerpri
 		Created:           clock.Now().Unix(),
 		Model:             modelAlias,
 		SystemFingerprint: systemFingerprint,
-		Choices: []adapteropenai.ChatChoice{{
-			Index:        0,
-			Message:      msg,
-			FinishReason: res.FinishReason, Logprobs: nil,
-		}},
+		Choices: []adapteropenai.ChatChoice{
+			{
+				Index:        0,
+				Message:      msg,
+				FinishReason: res.FinishReason,
+				Logprobs:     nil,
+			},
+		},
 		Usage: &res.Usage,
 	}
 }

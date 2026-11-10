@@ -16,7 +16,11 @@ type CacheBreakpointStats struct {
 }
 
 // ToAPIRequest is part of Clyde's typed adapter surface.
-func ToAPIRequest(tr AnthRequest, claudeModel string, emitToolResultCacheReference bool) (anthropic.Request, CacheBreakpointStats) {
+func ToAPIRequest(
+	tr AnthRequest,
+	claudeModel string,
+	emitToolResultCacheReference bool,
+) (anthropic.Request, CacheBreakpointStats) {
 	msgs := make([]anthropic.Message, 0, len(tr.Messages))
 	for _, m := range tr.Messages {
 		blocks := make([]anthropic.ContentBlock, 0, len(m.Content))
@@ -25,18 +29,26 @@ func ToAPIRequest(tr AnthRequest, claudeModel string, emitToolResultCacheReferen
 			if block == nil {
 				continue
 			}
+
 			blocks = append(blocks, *block)
 		}
+
 		msgs = append(msgs, anthropic.Message{Role: m.Role, Content: blocks})
 	}
+
 	tools := make([]anthropic.Tool, 0, len(tr.Tools))
 	for _, t := range tr.Tools {
-		tools = append(tools, anthropic.Tool{
-			Name:        t.Name,
-			Description: t.Description,
-			InputSchema: t.InputSchema, CacheControl: nil,
-		})
+		tools = append(
+			tools,
+			anthropic.Tool{
+				Name:         t.Name,
+				Description:  t.Description,
+				InputSchema:  t.InputSchema,
+				CacheControl: nil,
+			},
+		)
 	}
+
 	var tc *anthropic.ToolChoice
 	if tr.ToolChoice != nil {
 		tc = &anthropic.ToolChoice{
@@ -45,25 +57,34 @@ func ToAPIRequest(tr AnthRequest, claudeModel string, emitToolResultCacheReferen
 			DisableParallelToolUse: tr.ToolChoice.DisableParallelToolUse,
 		}
 	}
+
 	stats := ApplyCacheBreakpoints(msgs, tools, emitToolResultCacheReference)
+
 	return anthropic.Request{
-		Model:      claudeModel,
-		System:     tr.System,
-		Messages:   msgs,
-		MaxTokens:  tr.MaxTokens,
-		Stream:     false,
-		Tools:      tools,
-		ToolChoice: tc, SystemBlocks: nil,
+		Model:        claudeModel,
+		System:       tr.System,
+		Messages:     msgs,
+		MaxTokens:    tr.MaxTokens,
+		Stream:       false,
+		Tools:        tools,
+		ToolChoice:   tc,
+		SystemBlocks: nil,
 
 		// Sampling and stop knobs are set later by BuildRequest's
 		// applySamplingAndStop, present only when the caller sent them.
-		Temperature: nil, TopP: nil, StopSequences: nil,
+		Temperature:   nil,
+		TopP:          nil,
+		StopSequences: nil,
 
 		// anthContentBlockToWire converts one typed AnthContentBlock variant to the
 		// anthropic.ContentBlock wire shape. Returns nil to signal that this block
 		// should be omitted (e.g. an empty unsigned thinking block).
-		OutputConfig: nil, Thinking: nil, Metadata: nil, ContextManagement: nil, OnHeaders: nil,
-		FeatureVector: anthropic.WireFlavorFeatureVector{ModelID: "", WireProfile: ""},
+		OutputConfig:      nil,
+		Thinking:          nil,
+		Metadata:          nil,
+		ContextManagement: nil,
+		OnHeaders:         nil,
+		FeatureVector:     anthropic.WireFlavorFeatureVector{ModelID: "", WireProfile: ""},
 	}, stats
 }
 
@@ -114,6 +135,7 @@ func imageBlockToWire(v ImageBlock) *anthropic.ContentBlock {
 			URL:       v.Source.URL,
 		}
 	}
+
 	return &anthropic.ContentBlock{
 		Type:           "image",
 		Text:           "",
@@ -173,12 +195,21 @@ func thinkingBlockToWire(v ThinkingBlock) *anthropic.ContentBlock {
 	if signature == "" && thinking == "" {
 		return nil
 	}
+
 	if signature == "" {
-		anthropicBackendLog.Logger().Debug("adapter.anthropic.thinking.unsigned_wire_injected", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic_wire",
-			"body_len", len(thinking),
+		anthropicBackendLog.Logger().Debug(
+			"adapter.anthropic.thinking.unsigned_wire_injected",
+			"concern",
+			"adapter.providers.anthropic.request",
+			"subcomponent",
+			"anthropic_wire",
+			"body_len",
+			len(thinking),
 		)
+
 		return textBlockToWire(TextBlock{Text: thinking})
 	}
+
 	return &anthropic.ContentBlock{
 		Type:           "thinking",
 		Text:           "",
@@ -215,78 +246,113 @@ func redactedThinkingBlockToWire(v RedactedThinkingBlock) *anthropic.ContentBloc
 }
 
 // BuildSystemBlocks is part of Clyde's typed adapter surface.
-func BuildSystemBlocks(billing, prefix, callerSystem, ttl, scope string, cachingEnabled bool) []anthropic.SystemBlock {
+func BuildSystemBlocks(
+	billing string,
+	prefix string,
+	callerSystem string,
+	ttl string,
+	scope string,
+	cachingEnabled bool,
+) []anthropic.SystemBlock {
 	var cacheMarker *anthropic.CacheControl
 	var prefixMarker *anthropic.CacheControl
 	if cachingEnabled {
 		cacheMarker = &anthropic.CacheControl{Type: "ephemeral", TTL: ttl, Scope: ""}
 		prefixMarker = &anthropic.CacheControl{Type: "ephemeral", TTL: ttl, Scope: scope}
 	}
+
 	var out []anthropic.SystemBlock
 	if strings.TrimSpace(billing) != "" {
-		out = append(out, anthropic.SystemBlock{
-			Type: "text",
-			Text: billing, CacheControl: nil,
-		})
+		out = append(
+			out,
+			anthropic.SystemBlock{
+				Type:         "text",
+				Text:         billing,
+				CacheControl: nil,
+			},
+		)
 	}
+
 	if strings.TrimSpace(prefix) != "" {
-		out = append(out, anthropic.SystemBlock{
-			Type:         "text",
-			Text:         prefix,
-			CacheControl: prefixMarker,
-		})
+		out = append(
+			out,
+			anthropic.SystemBlock{
+				Type:         "text",
+				Text:         prefix,
+				CacheControl: prefixMarker,
+			},
+		)
 	}
+
 	if strings.TrimSpace(callerSystem) != "" {
-		out = append(out, anthropic.SystemBlock{
-			Type:         "text",
-			Text:         callerSystem,
-			CacheControl: cacheMarker,
-		})
+		out = append(
+			out,
+			anthropic.SystemBlock{
+				Type:         "text",
+				Text:         callerSystem,
+				CacheControl: cacheMarker,
+			},
+		)
 	}
+
 	return out
 }
 
 // ApplyCacheBreakpoints is part of Clyde's typed adapter surface.
-func ApplyCacheBreakpoints(msgs []anthropic.Message, tools []anthropic.Tool, emitToolResultCacheReference bool) CacheBreakpointStats {
+func ApplyCacheBreakpoints(
+	msgs []anthropic.Message,
+	tools []anthropic.Tool,
+	emitToolResultCacheReference bool,
+) CacheBreakpointStats {
 	var stats CacheBreakpointStats
 	ephemeral := &anthropic.CacheControl{Type: "ephemeral", TTL: "", Scope: ""}
 	if len(tools) > 0 {
 		tools[len(tools)-1].CacheControl = ephemeral
 	}
+
 	if len(msgs) == 0 {
 		return stats
 	}
+
 	lastCCMsg := -1
 	markerIndex := len(msgs) - 1
+
 	msg := &msgs[markerIndex]
 	for j, block := range slices.Backward(msg.Content) {
 		if !CacheableMessageBoundaryBlock(msg.Role, block.Type) {
 			continue
 		}
+
 		msg.Content[j].CacheControl = ephemeral
 		lastCCMsg = markerIndex
 		break
 	}
+
 	if lastCCMsg < 0 {
 		return stats
 	}
+
 	for i := range lastCCMsg {
 		if msgs[i].Role != "user" {
 			continue
 		}
+
 		for j := range msgs[i].Content {
 			block := &msgs[i].Content[j]
 			if block.Type != "tool_result" || strings.TrimSpace(block.ToolUseID) == "" {
 				continue
 			}
+
 			stats.ToolResultCandidates++
 			if !emitToolResultCacheReference {
 				continue
 			}
+
 			block.CacheReference = block.ToolUseID
 			stats.ToolResultApplied++
 		}
 	}
+
 	return stats
 }
 
@@ -309,6 +375,7 @@ func CacheableMessageBoundaryBlock(role, blockType string) bool {
 	if openAIChatRole(strings.ToLower(strings.TrimSpace(role))) != openAIChatRoleAssistant {
 		return true
 	}
+
 	switch nonCacheableThinkingBlock(blockType) {
 	case nonCacheableThinking, nonCacheableRedactedThinking, nonCacheableConnectorText:
 		return false
@@ -318,7 +385,9 @@ func CacheableMessageBoundaryBlock(role, blockType string) bool {
 }
 
 // StreamEventToTranslatorSSE is part of Clyde's typed adapter surface.
-func StreamEventToTranslatorSSE(ev anthropic.StreamEvent) (eventName string, payload []byte, ok bool) {
+func StreamEventToTranslatorSSE(
+	ev anthropic.StreamEvent,
+) (eventName string, payload []byte, ok bool) {
 	switch e := ev.(type) {
 	case anthropic.StreamTextDelta:
 		return sseTextDelta(e)
@@ -347,16 +416,21 @@ func sseTextDelta(e anthropic.StreamTextDelta) (string, []byte, bool) {
 			Text string `json:"text"`
 		} `json:"delta"`
 	}{
-		Index: e.BlockIndex, Delta: struct {
+		Index: e.BlockIndex,
+		Delta: struct {
 			Type string "json:\"type\""
 
 			Text string "json:\"text\""
-		}{Type: "text_delta", Text: e.Text},
+		}{
+			Type: "text_delta",
+			Text: e.Text,
+		},
 	}
 	b, err := json.Marshal(p)
 	if err != nil {
 		return "", nil, false
 	}
+
 	return "content_block_delta", b, true
 }
 
@@ -369,17 +443,23 @@ func sseToolUseStart(e anthropic.StreamToolUseStart) (string, []byte, bool) {
 			Name string `json:"name"`
 		} `json:"content_block"`
 	}{
-		Index: e.BlockIndex, ContentBlock: struct {
+		Index: e.BlockIndex,
+		ContentBlock: struct {
 			Type string "json:\"type\""
 
 			ID   string "json:\"id\""
 			Name string "json:\"name\""
-		}{Type: "tool_use", ID: e.ToolUseID, Name: e.ToolUseName},
+		}{
+			Type: "tool_use",
+			ID:   e.ToolUseID,
+			Name: e.ToolUseName,
+		},
 	}
 	b, err := json.Marshal(p)
 	if err != nil {
 		return "", nil, false
 	}
+
 	return "content_block_start", b, true
 }
 
@@ -391,27 +471,35 @@ func sseToolUseArgDelta(e anthropic.StreamToolUseArgDelta) (string, []byte, bool
 			PartialJSON string `json:"partial_json"`
 		} `json:"delta"`
 	}{
-		Index: e.BlockIndex, Delta: struct {
+		Index: e.BlockIndex,
+		Delta: struct {
 			Type string "json:\"type\""
 
 			PartialJSON string "json:\"partial_json\""
-		}{Type: "input_json_delta", PartialJSON: e.PartialJSON},
+		}{
+			Type:        "input_json_delta",
+			PartialJSON: e.PartialJSON,
+		},
 	}
 	b, err := json.Marshal(p)
 	if err != nil {
 		return "", nil, false
 	}
+
 	return "content_block_delta", b, true
 }
 
 func sseToolUseStop(e anthropic.StreamToolUseStop) (string, []byte, bool) {
 	p := struct {
 		Index int `json:"index"`
-	}{Index: e.BlockIndex}
+	}{
+		Index: e.BlockIndex,
+	}
 	b, err := json.Marshal(p)
 	if err != nil {
 		return "", nil, false
 	}
+
 	return "content_block_stop", b, true
 }
 
@@ -422,14 +510,18 @@ func sseThinkingStart(e anthropic.StreamThinkingStart) (string, []byte, bool) {
 			Type string `json:"type"`
 		} `json:"content_block"`
 	}{
-		Index: e.BlockIndex, ContentBlock: struct {
+		Index: e.BlockIndex,
+		ContentBlock: struct {
 			Type string "json:\"type\""
-		}{Type: "thinking"},
+		}{
+			Type: "thinking",
+		},
 	}
 	b, err := json.Marshal(p)
 	if err != nil {
 		return "", nil, false
 	}
+
 	return "content_block_start", b, true
 }
 
@@ -441,16 +533,21 @@ func sseThinkingDelta(e anthropic.StreamThinkingDelta) (string, []byte, bool) {
 			Thinking string `json:"thinking"`
 		} `json:"delta"`
 	}{
-		Index: e.BlockIndex, Delta: struct {
+		Index: e.BlockIndex,
+		Delta: struct {
 			Type string "json:\"type\""
 
 			Thinking string "json:\"thinking\""
-		}{Type: "thinking_delta", Thinking: e.Text},
+		}{
+			Type:     "thinking_delta",
+			Thinking: e.Text,
+		},
 	}
 	b, err := json.Marshal(p)
 	if err != nil {
 		return "", nil, false
 	}
+
 	return "content_block_delta", b, true
 }
 
@@ -465,16 +562,21 @@ func sseThinkingSignature(e anthropic.StreamThinkingSignature) (string, []byte, 
 			Signature string `json:"signature"`
 		} `json:"delta"`
 	}{
-		Index: e.BlockIndex, Delta: struct {
+		Index: e.BlockIndex,
+		Delta: struct {
 			Type string "json:\"type\""
 
 			Signature string "json:\"signature\""
-		}{Type: "signature_delta", Signature: e.Signature},
+		}{
+			Type:      "signature_delta",
+			Signature: e.Signature,
+		},
 	}
 	b, err := json.Marshal(p)
 	if err != nil {
 		return "", nil, false
 	}
+
 	return "content_block_delta", b, true
 }
 
@@ -482,13 +584,16 @@ func sseThinkingSignature(e anthropic.StreamThinkingSignature) (string, []byte, 
 func UsageFromAnthropic(a anthropic.Usage) adapteropenai.Usage {
 	totalInput := a.InputTokens + a.CacheReadInputTokens + a.CacheCreationInputTokens
 	u := adapteropenai.Usage{
-		PromptTokens:     totalInput,
-		CompletionTokens: a.OutputTokens,
-		TotalTokens:      totalInput + a.OutputTokens,
-		InputTokens:      totalInput,
-		OutputTokens:     a.OutputTokens,
-		CacheReadTokens:  a.CacheReadInputTokens,
-		CacheWriteTokens: a.CacheCreationInputTokens, PromptTokensDetails: nil, CompletionTokensDetails: nil, MaxTokens: 0,
+		PromptTokens:            totalInput,
+		CompletionTokens:        a.OutputTokens,
+		TotalTokens:             totalInput + a.OutputTokens,
+		InputTokens:             totalInput,
+		OutputTokens:            a.OutputTokens,
+		CacheReadTokens:         a.CacheReadInputTokens,
+		CacheWriteTokens:        a.CacheCreationInputTokens,
+		PromptTokensDetails:     nil,
+		CompletionTokensDetails: nil,
+		MaxTokens:               0,
 	}
 	if a.CacheCountsReported || a.CacheReadInputTokens > 0 {
 		var cacheWrite *int
@@ -496,14 +601,19 @@ func UsageFromAnthropic(a anthropic.Usage) adapteropenai.Usage {
 			written := a.CacheCreationInputTokens
 			cacheWrite = &written
 		}
+
 		u.PromptTokensDetails = &adapteropenai.PromptTokensDetails{
 			CachedTokens:               a.CacheReadInputTokens,
 			CacheWriteTokens:           cacheWrite,
 			CompatibilityOmitsUncached: true,
 		}
 	}
+
 	if a.ThinkingTokens != nil {
-		u.CompletionTokensDetails = &adapteropenai.CompletionTokensDetails{ReasoningTokens: *a.ThinkingTokens}
+		u.CompletionTokensDetails = &adapteropenai.CompletionTokensDetails{
+			ReasoningTokens: *a.ThinkingTokens,
+		}
 	}
+
 	return u
 }

@@ -92,39 +92,63 @@ func readInventoryIndexSnapshot(stateRoot string) inventoryIndexSnapshot {
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			slog.Warn(
-				"cli.logs.inventory.index_open_failed", "concern", "cli.logs", "component", "cli",
-				"path", path,
-				"err", err,
+				"cli.logs.inventory.index_open_failed",
+				"concern",
+				"cli.logs",
+				"component",
+				"cli",
+				"path",
+				path,
+				"err",
+				err,
 			)
 		}
+
 		return snapshot
 	}
+
 	defer func() {
 		if closeErr := file.Close(); closeErr != nil {
 			slog.Warn(
-				"cli.logs.inventory.index_close_failed", "concern", "cli.logs", "component", "cli",
-				"path", path,
-				"err", closeErr,
+				"cli.logs.inventory.index_close_failed",
+				"concern",
+				"cli.logs",
+				"component",
+				"cli",
+				"path",
+				path,
+				"err",
+				closeErr,
 			)
 		}
 	}()
 	reader := bufio.NewReaderSize(file, 64*1024)
+
 	for {
 		line, readErr := reader.ReadBytes('\n')
 		if len(line) > 0 {
 			applyInventoryIndexLine(&snapshot, line)
 		}
+
 		if readErr != nil {
 			if !errors.Is(readErr, io.EOF) {
 				slog.Warn(
-					"cli.logs.inventory.index_read_failed", "concern", "cli.logs", "component", "cli",
-					"path", path,
-					"err", readErr,
+					"cli.logs.inventory.index_read_failed",
+					"concern",
+					"cli.logs",
+					"component",
+					"cli",
+					"path",
+					path,
+					"err",
+					readErr,
 				)
 			}
+
 			break
 		}
 	}
+
 	return snapshot
 }
 
@@ -133,6 +157,7 @@ func applyInventoryIndexLine(snapshot *inventoryIndexSnapshot, line []byte) {
 	if len(trimmed) == 0 {
 		return
 	}
+
 	record := inventoryIndexEventRecord{
 		Time:         time.Time{},
 		Msg:          "",
@@ -150,26 +175,32 @@ func applyInventoryIndexLine(snapshot *inventoryIndexSnapshot, line []byte) {
 	if err := json.Unmarshal(trimmed, &record); err != nil {
 		return
 	}
+
 	if record.Time.IsZero() {
 		return
 	}
+
 	for _, sinkName := range record.Sinks {
 		if sinkName == "" {
 			continue
 		}
+
 		previous, exists := snapshot.LastEventBySink[sinkName]
 		if exists && !record.Time.After(previous.Timestamp) {
 			continue
 		}
+
 		snapshot.LastEventBySink[sinkName] = inventoryEventSummary{
 			Timestamp: record.Time,
 			RequestID: record.RequestID,
 		}
 	}
+
 	if record.Msg == cleanupCompletedEvent {
 		if snapshot.LastCleanup != nil && !record.Time.After(snapshot.LastCleanup.Timestamp) {
 			return
 		}
+
 		summary := cleanupSummaryFromRecord(record)
 		snapshot.LastCleanup = &summary
 	}
@@ -193,8 +224,10 @@ func cloneStringSlice(input []string) []string {
 	if len(input) == 0 {
 		return nil
 	}
+
 	output := make([]string, len(input))
 	copy(output, input)
+
 	return output
 }
 
@@ -205,7 +238,9 @@ func dropTrailingNewline(line []byte) []byte {
 		if last != '\n' && last != '\r' {
 			break
 		}
+
 		end--
 	}
+
 	return line[:end]
 }

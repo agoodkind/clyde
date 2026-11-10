@@ -62,34 +62,44 @@ func (entry TranscriptEntry) partialFields() []string {
 	if entry.Timestamp.Decode == FieldDecodePartial {
 		fields = append(fields, "timestamp")
 	}
+
 	if entry.ToolUseResult.Decode == FieldDecodePartial {
 		fields = append(fields, "toolUseResult")
 	}
-	if entry.ToolUseResult.Detail != nil && entry.ToolUseResult.Detail.Content.Decode == FieldDecodePartial {
+
+	if entry.ToolUseResult.Detail != nil &&
+		entry.ToolUseResult.Detail.Content.Decode == FieldDecodePartial {
 		fields = append(fields, "toolUseResult.content")
 	}
+
 	if entry.Error.Decode == FieldDecodePartial {
 		fields = append(fields, "error")
 	}
+
 	if entry.Attachment != nil {
 		if entry.Attachment.Decode == FieldDecodePartial {
 			fields = append(fields, "attachment")
 		}
+
 		if entry.Attachment.Timestamp.Decode == FieldDecodePartial {
 			fields = append(fields, "attachment.timestamp")
 		}
 	}
+
 	if entry.Snapshot != nil {
 		if entry.Snapshot.Timestamp.Decode == FieldDecodePartial {
 			fields = append(fields, "snapshot.timestamp")
 		}
+
 		if snapshotBackupTimePartial(entry.Snapshot.TrackedFileBackups) {
 			fields = append(fields, "snapshot.trackedFileBackups")
 		}
 	}
+
 	if entry.Backup != nil && entry.Backup.BackupTime.Decode == FieldDecodePartial {
 		fields = append(fields, "backup.backupTime")
 	}
+
 	return fields
 }
 
@@ -102,5 +112,6 @@ func snapshotBackupTimePartial(backups map[string]FileBackup) bool {
 			return true
 		}
 	}
+
 	return false
 }

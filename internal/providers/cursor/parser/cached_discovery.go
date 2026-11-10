@@ -24,24 +24,31 @@ func (p *Parser) discoverCachedSQLite(
 	if err != nil || !sameCursorSourceStamps(sources, priorStamps) {
 		return nil, nil, false
 	}
+
 	candidates := make([]conversation.ScanCandidate, 0, len(prior))
 	for _, record := range prior {
 		if record.Provider != providerid.ProviderCursor || record.ArtifactPath == "" ||
 			record.ArtifactKind == artifactKindCursorAgent || seenConversationIDs[record.NativeID] {
 			continue
 		}
+
 		stamp, ok := priorStamps[cachedRecordStampKey(record.ArtifactPath, record.Selector)]
 		if !ok {
 			return nil, nil, false
 		}
-		candidates = append(candidates, conversation.ScanCandidate{
-			Path:            record.ArtifactPath,
-			Selector:        record.Selector,
-			Stamp:           stamp,
-			MetadataChanged: false,
-		})
+
+		candidates = append(
+			candidates,
+			conversation.ScanCandidate{
+				Path:            record.ArtifactPath,
+				Selector:        record.Selector,
+				Stamp:           stamp,
+				MetadataChanged: false,
+			},
+		)
 		seenConversationIDs[record.NativeID] = true
 	}
+
 	return candidates, cursorSourceCandidates(sources), true
 }
 
@@ -50,25 +57,47 @@ func (p *Parser) sourceCheckpointCandidates(ctx context.Context) []conversation.
 	if err != nil {
 		return nil
 	}
+
 	return cursorSourceCandidates(sources)
 }
 
 func cursorSourceStamps(ctx context.Context) (map[string]conversation.FileStamp, error) {
 	roots, err := cursorstore.ResolveDataRootsFromEnv(ctx)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.resolve_data_roots_failed", "concern", concern, "err", err)
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.parser.resolve_data_roots_failed",
+			"concern",
+			concern,
+			"err",
+			err,
+		)
+
 		return nil, fmt.Errorf("resolve cursor data roots: %w", err)
 	}
+
 	sources := make(map[string]conversation.FileStamp)
+
 	for _, root := range roots {
 		addCursorSourceStamp(sources, root.GlobalDBPath)
 		addCursorSourceStamp(sources, root.GlobalDBPath+"-wal")
 		addCursorSourceStamp(sources, root.WorkspaceStorageDir)
 		listing, listingErr := root.ListWorkspaceEntries()
 		if listingErr != nil {
-			slog.WarnContext(ctx, "providers.cursor.parser.list_workspace_entries_failed", "concern", concern, "path", root.WorkspaceStorageDir, "err", listingErr)
+			slog.WarnContext(
+				ctx,
+				"providers.cursor.parser.list_workspace_entries_failed",
+				"concern",
+				concern,
+				"path",
+				root.WorkspaceStorageDir,
+				"err",
+				listingErr,
+			)
+
 			return nil, fmt.Errorf("list cursor workspace entries: %w", listingErr)
 		}
+
 		for _, entry := range listing.DiscoveryEntries() {
 			addCursorSourceStamp(sources, entry.StateDBPath)
 			addCursorSourceStamp(sources, entry.StateDBPath+"-wal")
@@ -77,6 +106,7 @@ func cursorSourceStamps(ctx context.Context) (map[string]conversation.FileStamp,
 			}
 		}
 	}
+
 	return sources, nil
 }
 
@@ -86,37 +116,56 @@ func addCursorSourceStamp(sources map[string]conversation.FileStamp, path string
 		sources[path] = conversation.FileStamp{Size: 0, Mtime: time.Time{}}
 		return
 	}
+
 	sources[path] = conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()}
 }
 
-func sameCursorSourceStamps(sources map[string]conversation.FileStamp, prior map[string]conversation.FileStamp) bool {
+func sameCursorSourceStamps(
+	sources map[string]conversation.FileStamp,
+	prior map[string]conversation.FileStamp,
+) bool {
 	priorSources := make(map[string]conversation.FileStamp)
+
 	for key, stamp := range prior {
 		if !strings.HasPrefix(key, checkpointPrefix) {
 			continue
 		}
+
 		priorSources[strings.TrimPrefix(key, checkpointPrefix)] = stamp
 	}
+
 	if len(priorSources) == 0 || len(priorSources) != len(sources) {
 		return false
 	}
+
 	for path, stamp := range sources {
 		priorStamp, ok := priorSources[path]
 		if !ok || !priorStamp.Equal(stamp) {
 			return false
 		}
 	}
+
 	return true
 }
 
-func cursorSourceCandidates(sources map[string]conversation.FileStamp) []conversation.ScanCandidate {
+func cursorSourceCandidates(
+	sources map[string]conversation.FileStamp,
+) []conversation.ScanCandidate {
 	candidates := make([]conversation.ScanCandidate, 0, len(sources))
 	for path, stamp := range sources {
-		candidates = append(candidates, conversation.ScanCandidate{
-			Path: checkpointPrefix + path, Selector: "", Stamp: stamp, MetadataChanged: false,
-		})
+		candidates = append(
+			candidates,
+			conversation.ScanCandidate{
+				Path:            checkpointPrefix + path,
+				Selector:        "",
+				Stamp:           stamp,
+				MetadataChanged: false,
+			},
+		)
 	}
+
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].Path < candidates[j].Path })
+
 	return candidates
 }
 
@@ -124,6 +173,7 @@ func cachedRecordStampKey(path, selector string) string {
 	if selector == "" {
 		return path
 	}
+
 	return path + "\x00" + selector
 }
 
@@ -138,21 +188,32 @@ func (p *Parser) finishDiscovery(
 		if !ok || artifact.Kind != discoveredKindJSONL {
 			continue
 		}
+
 		previousParent := ""
 		if previous.Lineage != nil {
 			previousParent = previous.Lineage.ParentNativeID
 		}
-		candidates[i].MetadataChanged = previous.Origin != artifact.Origin || previousParent != artifact.ParentConversationID
+
+		candidates[i].MetadataChanged = previous.Origin != artifact.Origin ||
+			previousParent != artifact.ParentConversationID
 		if artifact.TranscriptHeader != nil {
 			header := artifact.TranscriptHeader
-			title := firstNonEmptyString(truncateTitle(header.FirstUserText), untitledCursorConversationText)
-			candidates[i].MetadataChanged = candidates[i].MetadataChanged || previous.Title != title || previous.TitleUncertain != header.FirstUserTextUncertain
+			title := firstNonEmptyString(
+				truncateTitle(header.FirstUserText),
+				untitledCursorConversationText,
+			)
+			candidates[i].MetadataChanged = candidates[i].MetadataChanged ||
+				previous.Title != title ||
+				previous.TitleUncertain != header.FirstUserTextUncertain
 		}
 	}
 
-	sort.SliceStable(candidates, func(i int, j int) bool {
-		return candidates[i].Path < candidates[j].Path
-	})
+	sort.SliceStable(
+		candidates,
+		func(i int, j int) bool {
+			return candidates[i].Path < candidates[j].Path
+		},
+	)
 
 	composerStamps := make(map[string]conversation.FileStamp, len(candidates))
 	for _, candidate := range candidates {

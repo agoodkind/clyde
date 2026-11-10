@@ -38,6 +38,7 @@ func LoadRulesTag(kinds ContentKindSet) string {
 			included = append(included, string(kind))
 		}
 	}
+
 	return loadRulesTagVersionV1 + strings.Join(included, ",")
 }
 
@@ -59,11 +60,14 @@ func LoadOptionsForRules(tag string) (options LoadOptions, known bool) {
 	if tag == "" {
 		return defaultOptions, true
 	}
+
 	list, versioned := strings.CutPrefix(tag, loadRulesTagVersionV1)
 	if !versioned {
 		return defaultOptions, false
 	}
+
 	options = defaultOptions
+
 	for name := range strings.SplitSeq(list, ",") {
 		switch ContentKind(strings.TrimSpace(name)) {
 		case ContentKindToolOutputs:
@@ -80,5 +84,6 @@ func LoadOptionsForRules(tag string) (options LoadOptions, known bool) {
 			// in a foreign tag has no load gate to set, so it is ignored.
 		}
 	}
+
 	return options, true
 }

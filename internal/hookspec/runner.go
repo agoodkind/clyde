@@ -86,6 +86,7 @@ func (input hookInput) eventName() string {
 	if strings.TrimSpace(input.HookEventName) != "" {
 		return strings.TrimSpace(input.HookEventName)
 	}
+
 	return strings.TrimSpace(input.EventName)
 }
 
@@ -94,6 +95,7 @@ func (input hookInput) compactSource() bool {
 	if source == "" {
 		source = strings.TrimSpace(input.Trigger)
 	}
+
 	return source == "compact"
 }
 
@@ -101,11 +103,13 @@ func (input hookInput) workspace() string {
 	if strings.TrimSpace(input.CWD) != "" {
 		return strings.TrimSpace(input.CWD)
 	}
+
 	for _, root := range input.WorkspaceRoots {
 		if strings.TrimSpace(root) != "" {
 			return strings.TrimSpace(root)
 		}
 	}
+
 	return ""
 }
 
@@ -113,9 +117,11 @@ func (input hookInput) conversationSelector() string {
 	if strings.TrimSpace(input.TranscriptPath) != "" {
 		return strings.TrimSpace(input.TranscriptPath)
 	}
+
 	if strings.TrimSpace(input.ConversationID) != "" {
 		return strings.TrimSpace(input.ConversationID)
 	}
+
 	return strings.TrimSpace(input.ConversationKey)
 }
 
@@ -123,18 +129,24 @@ func (input hookInput) detectRuntime(getenv func(string) string) Client {
 	if getenv == nil {
 		getenv = os.Getenv
 	}
+
 	if getenv("CODEX_THREAD_ID") != "" || getenv("CODEX_CI") != "" {
 		return ClientCodex
 	}
-	if getenv("CURSOR_VERSION") != "" || getenv("CURSOR_WORKSPACE_NAME") != "" || getenv("CURSOR_MODE") != "" {
+
+	if getenv("CURSOR_VERSION") != "" || getenv("CURSOR_WORKSPACE_NAME") != "" ||
+		getenv("CURSOR_MODE") != "" {
 		return ClientCursor
 	}
+
 	if getenv("CLAUDE_CODE_ENTRYPOINT") != "" {
 		return ClientClaudeCode
 	}
+
 	if value := getenv("AI_AGENT"); strings.HasPrefix(value, "claude-code/") {
 		return ClientClaudeCode
 	}
+
 	return input.detectedClient()
 }
 
@@ -143,9 +155,11 @@ func (input hookInput) detectedClient() Client {
 	if isCursorEventName(eventName) || input.hasCursorPayload() {
 		return ClientCursor
 	}
+
 	if input.Model != "" || input.PermissionMode != "" {
 		return ClientCodex
 	}
+
 	return ClientClaudeCode
 }
 
@@ -164,18 +178,22 @@ func isCursorEventName(name string) bool {
 	if name == EventCursorPre || name == EventCursorStop {
 		return true
 	}
+
 	if name == "" {
 		return false
 	}
+
 	first, size := utf8.DecodeRuneInString(name)
 	if !unicode.IsLower(first) {
 		return false
 	}
+
 	for _, r := range name[size:] {
 		if unicode.IsUpper(r) {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -185,32 +203,41 @@ func (runner Runner) Run(ctx context.Context, id HookID) error {
 	if !ok {
 		return fmt.Errorf("hook %q is not registered", id)
 	}
+
 	if hook.Run == nil {
 		return fmt.Errorf("hook %q has no runtime handler", id)
 	}
+
 	input := runner.Input
 	if input == nil {
 		input = strings.NewReader("")
 	}
+
 	output := runner.Output
 	if output == nil {
 		output = io.Discard
 	}
+
 	store := runner.SnapshotStore
 	if store == nil {
 		store = NewFileSnapshotStore("")
 	}
+
 	getenv := runner.Getenv
 	if getenv == nil {
 		getenv = os.Getenv
 	}
-	return hook.Run(ctx, RunEnvironment{
-		Input:         input,
-		Output:        output,
-		Getenv:        getenv,
-		Reorient:      runner.Reorient,
-		SnapshotStore: store,
-	})
+
+	return hook.Run(
+		ctx,
+		RunEnvironment{
+			Input:         input,
+			Output:        output,
+			Getenv:        getenv,
+			Reorient:      runner.Reorient,
+			SnapshotStore: store,
+		},
+	)
 }
 
 func runReorientBeforeCompact(ctx context.Context, env RunEnvironment) error {
@@ -218,39 +245,88 @@ func runReorientBeforeCompact(ctx context.Context, env RunEnvironment) error {
 	if err != nil {
 		return err
 	}
+
 	eventName := input.eventName()
 	if !isBeforeCompactEvent(eventName) {
 		return nil
 	}
+
 	if env.Reorient == nil {
 		err := fmt.Errorf("reorient-before-compact requires a reorient function")
-		slog.WarnContext(ctx, "reorient hook failed", "hook_id", HookIDReorientBeforeCompact, "err", err)
+		slog.WarnContext(
+			ctx,
+			"reorient hook failed",
+			"hook_id",
+			HookIDReorientBeforeCompact,
+			"err",
+			err,
+		)
+
 		return err
 	}
+
 	if env.SnapshotStore == nil {
 		err := fmt.Errorf("reorient-before-compact requires a snapshot store")
-		slog.WarnContext(ctx, "reorient hook failed", "hook_id", HookIDReorientBeforeCompact, "err", err)
+		slog.WarnContext(
+			ctx,
+			"reorient hook failed",
+			"hook_id",
+			HookIDReorientBeforeCompact,
+			"err",
+			err,
+		)
+
 		return err
 	}
+
 	conversationID := input.conversationSelector()
 	workspace := input.workspace()
 	if conversationID == "" && workspace == "" {
-		err := fmt.Errorf("reorient-before-compact requires transcript_path, conversation_id, or cwd")
-		slog.WarnContext(ctx, "reorient hook failed", "hook_id", HookIDReorientBeforeCompact, "err", err)
+		err := fmt.Errorf(
+			"reorient-before-compact requires transcript_path, conversation_id, or cwd",
+		)
+		slog.WarnContext(
+			ctx,
+			"reorient hook failed",
+			"hook_id",
+			HookIDReorientBeforeCompact,
+			"err",
+			err,
+		)
+
 		return err
 	}
+
 	body, err := collectReorientPages(ctx, env.Reorient, conversationID, workspace, true)
 	if err != nil {
 		wrapped := fmt.Errorf("reorient-before-compact capture: %w", err)
-		slog.WarnContext(ctx, "reorient hook failed", "hook_id", HookIDReorientBeforeCompact, "err", wrapped)
+		slog.WarnContext(
+			ctx,
+			"reorient hook failed",
+			"hook_id",
+			HookIDReorientBeforeCompact,
+			"err",
+			wrapped,
+		)
+
 		return wrapped
 	}
+
 	key := input.reorientSnapshotKey()
 	if err := env.SnapshotStore.Save(ctx, key, body); err != nil {
 		wrapped := fmt.Errorf("store reorient snapshot: %w", err)
-		slog.WarnContext(ctx, "reorient hook failed", "hook_id", HookIDReorientBeforeCompact, "err", wrapped)
+		slog.WarnContext(
+			ctx,
+			"reorient hook failed",
+			"hook_id",
+			HookIDReorientBeforeCompact,
+			"err",
+			wrapped,
+		)
+
 		return wrapped
 	}
+
 	return nil
 }
 
@@ -259,23 +335,40 @@ func runReorientAfterCompact(ctx context.Context, env RunEnvironment) error {
 	if err != nil {
 		return err
 	}
+
 	eventName := input.eventName()
 	if !isSessionStartEvent(eventName) || !input.compactSource() {
 		return nil
 	}
+
 	client := input.detectRuntime(env.Getenv)
 	if client == ClientCursor {
 		return nil
 	}
+
 	// The before-compact hook saved a snapshot for this conversation. The note
 	// path does not use it, so drain it here to keep snapshots from accumulating
 	// on disk. A missing snapshot or a store error is not fatal to the note.
 	if env.SnapshotStore != nil {
 		key := input.reorientSnapshotKey()
 		if _, _, consumeErr := env.SnapshotStore.Consume(ctx, key); consumeErr != nil {
-			slog.WarnContext(ctx, "reorient after-compact snapshot drain failed", "hook_id", HookIDReorientAfterCompact, "transcript_path", key.TranscriptPath, "session_id", key.SessionID, "cwd", key.CWD, "err", consumeErr)
+			slog.WarnContext(
+				ctx,
+				"reorient after-compact snapshot drain failed",
+				"hook_id",
+				HookIDReorientAfterCompact,
+				"transcript_path",
+				key.TranscriptPath,
+				"session_id",
+				key.SessionID,
+				"cwd",
+				key.CWD,
+				"err",
+				consumeErr,
+			)
 		}
 	}
+
 	return nil
 }
 
@@ -284,26 +377,48 @@ func runReorientStopFollowup(ctx context.Context, env RunEnvironment) error {
 	if err != nil {
 		return err
 	}
+
 	if input.eventName() != EventCursorStop {
 		return nil
 	}
+
 	if input.detectRuntime(env.Getenv) != ClientCursor {
 		return nil
 	}
+
 	if env.SnapshotStore == nil {
 		err := fmt.Errorf("reorient-stop-followup requires a snapshot store")
-		slog.WarnContext(ctx, "reorient hook failed", "hook_id", HookIDReorientStopFollowup, "err", err)
+		slog.WarnContext(
+			ctx,
+			"reorient hook failed",
+			"hook_id",
+			HookIDReorientStopFollowup,
+			"err",
+			err,
+		)
+
 		return err
 	}
+
 	_, ok, err := env.SnapshotStore.Consume(ctx, input.reorientSnapshotKey())
 	if err != nil {
 		wrapped := fmt.Errorf("consume reorient snapshot: %w", err)
-		slog.WarnContext(ctx, "reorient hook failed", "hook_id", HookIDReorientStopFollowup, "err", wrapped)
+		slog.WarnContext(
+			ctx,
+			"reorient hook failed",
+			"hook_id",
+			HookIDReorientStopFollowup,
+			"err",
+			wrapped,
+		)
+
 		return wrapped
 	}
+
 	if !ok {
 		return nil
 	}
+
 	return nil
 }
 
@@ -312,42 +427,70 @@ func decodeHookInput(reader io.Reader) (hookInput, error) {
 	if err := json.NewDecoder(reader).Decode(&input); err != nil {
 		wrapped := fmt.Errorf("decode hook input: %w", err)
 		slog.Warn("hook input decode failed", "err", wrapped)
+
 		return hookInput{}, wrapped
 	}
+
 	return input, nil
 }
 
-func collectReorientPages(ctx context.Context, reorient ReorientFunc, conversationID string, workspace string, syntheticPreCompact bool) (string, error) {
+func collectReorientPages(
+	ctx context.Context,
+	reorient ReorientFunc,
+	conversationID string,
+	workspace string,
+	syntheticPreCompact bool,
+) (string, error) {
 	cursor := ""
 	allowWorkspaceFallback := conversationID != "" && workspace != ""
 	seenCursors := map[string]bool{}
 	var builder strings.Builder
+
 	for {
 		if err := ctx.Err(); err != nil {
 			wrapped := fmt.Errorf("reorient hook context: %w", err)
 			slog.WarnContext(ctx, "reorient hook page collection failed", "err", wrapped)
+
 			return "", wrapped
 		}
-		page, err := reorient(ctx, conversationID, workspace, cursor, 0, 0, false, syntheticPreCompact)
+
+		page, err := reorient(
+			ctx,
+			conversationID,
+			workspace,
+			cursor,
+			0,
+			0,
+			false,
+			syntheticPreCompact,
+		)
 		if err != nil {
 			if allowWorkspaceFallback && cursor == "" && isReorientNotFoundError(err) {
 				conversationID = ""
 				allowWorkspaceFallback = false
 				continue
 			}
+
 			return "", err
 		}
+
 		builder.WriteString(conversation.RenderReorientPageText(page))
 		if page.Remaining <= 0 {
 			return builder.String(), nil
 		}
+
 		nextCursor := strings.TrimSpace(page.NextCursor)
 		if nextCursor == "" {
-			return "", fmt.Errorf("reorient hook remaining %d but next cursor is empty", page.Remaining)
+			return "", fmt.Errorf(
+				"reorient hook remaining %d but next cursor is empty",
+				page.Remaining,
+			)
 		}
+
 		if seenCursors[nextCursor] {
 			return "", fmt.Errorf("reorient hook repeated next cursor %q", nextCursor)
 		}
+
 		seenCursors[nextCursor] = true
 		cursor = nextCursor
 	}
@@ -355,11 +498,14 @@ func collectReorientPages(ctx context.Context, reorient ReorientFunc, conversati
 
 func isReorientNotFoundError(err error) bool {
 	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "not found") || strings.Contains(message, "no conversations found")
+
+	return strings.Contains(message, "not found") ||
+		strings.Contains(message, "no conversations found")
 }
 
 func isBeforeCompactEvent(eventName string) bool {
-	return eventName == EventPreCompact || eventName == EventCursorPre || eventName == codexEventName(EventPreCompact)
+	return eventName == EventPreCompact || eventName == EventCursorPre ||
+		eventName == codexEventName(EventPreCompact)
 }
 
 func isSessionStartEvent(eventName string) bool {
