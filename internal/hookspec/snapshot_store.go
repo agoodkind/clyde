@@ -59,20 +59,8 @@ func (store FileSnapshotStore) Save(
 	}
 
 	path := store.pathForKey(key)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		wrapped := fmt.Errorf("create reorient snapshot dir: %w", err)
-		slog.WarnContext(
-			ctx,
-			"hooks.reorient_snapshot.save_failed",
-			"component",
-			"hooks",
-			"path",
-			path,
-			"err",
-			wrapped,
-		)
-
-		return wrapped
+	if err := ensureSnapshotDirectory(ctx, path); err != nil {
+		return err
 	}
 
 	temp, err := os.CreateTemp(filepath.Dir(path), ".snapshot-*.tmp")
@@ -101,36 +89,8 @@ func (store FileSnapshotStore) Save(
 
 		_ = os.Remove(tempPath)
 	}()
-	if _, err := temp.WriteString(body); err != nil {
-		wrapped := fmt.Errorf("write reorient snapshot temp: %w", err)
-		slog.WarnContext(
-			ctx,
-			"hooks.reorient_snapshot.save_failed",
-			"component",
-			"hooks",
-			"path",
-			path,
-			"err",
-			wrapped,
-		)
-
-		return wrapped
-	}
-
-	if err := temp.Chmod(0o600); err != nil {
-		wrapped := fmt.Errorf("chmod reorient snapshot temp: %w", err)
-		slog.WarnContext(
-			ctx,
-			"hooks.reorient_snapshot.save_failed",
-			"component",
-			"hooks",
-			"path",
-			path,
-			"err",
-			wrapped,
-		)
-
-		return wrapped
+	if err := writeSnapshotTemp(ctx, temp, path, body); err != nil {
+		return err
 	}
 
 	if err := temp.Close(); err != nil {
@@ -282,4 +242,60 @@ func normalizeSnapshotKey(key ReorientSnapshotKey) ReorientSnapshotKey {
 	}
 
 	return normalized
+}
+
+func ensureSnapshotDirectory(ctx context.Context, path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		wrapped := fmt.Errorf("create reorient snapshot dir: %w", err)
+		slog.WarnContext(
+			ctx,
+			"hooks.reorient_snapshot.save_failed",
+			"component",
+			"hooks",
+			"path",
+			path,
+			"err",
+			wrapped,
+		)
+
+		return wrapped
+	}
+
+	return nil
+}
+
+func writeSnapshotTemp(ctx context.Context, temp *os.File, path string, body string) error {
+	if _, err := temp.WriteString(body); err != nil {
+		wrapped := fmt.Errorf("write reorient snapshot temp: %w", err)
+		slog.WarnContext(
+			ctx,
+			"hooks.reorient_snapshot.save_failed",
+			"component",
+			"hooks",
+			"path",
+			path,
+			"err",
+			wrapped,
+		)
+
+		return wrapped
+	}
+
+	if err := temp.Chmod(0o600); err != nil {
+		wrapped := fmt.Errorf("chmod reorient snapshot temp: %w", err)
+		slog.WarnContext(
+			ctx,
+			"hooks.reorient_snapshot.save_failed",
+			"component",
+			"hooks",
+			"path",
+			path,
+			"err",
+			wrapped,
+		)
+
+		return wrapped
+	}
+
+	return nil
 }
