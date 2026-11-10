@@ -77,20 +77,9 @@ func RunInitialConversationIndex(
 		output = io.Discard
 	}
 
-	cfg, err := config.LoadGlobalOrDefault()
+	cfg, err := loadInitialConversationConfig(ctx)
 	if err != nil {
-		slog.WarnContext(
-			ctx,
-			"daemon.initial_index.config_load_failed",
-			"concern",
-			"conversation.index",
-			"component",
-			"daemon",
-			"err",
-			err,
-		)
-
-		return fmt.Errorf("load config for initial conversation indexing: %w", err)
+		return err
 	}
 
 	if _, err := os.Stat(conversation.CachePath()); err == nil {
@@ -176,6 +165,26 @@ func RunInitialConversationIndex(
 	_, _ = fmt.Fprintf(output, "Initial indexing: complete with %d conversations\n", len(records))
 
 	return nil
+}
+
+func loadInitialConversationConfig(ctx context.Context) (*config.Config, error) {
+	cfg, err := config.LoadGlobalOrDefault()
+	if err != nil {
+		slog.WarnContext(
+			ctx,
+			"daemon.initial_index.config_load_failed",
+			"concern",
+			"conversation.index",
+			"component",
+			"daemon",
+			"err",
+			err,
+		)
+
+		return nil, fmt.Errorf("load config for initial conversation indexing: %w", err)
+	}
+
+	return cfg, nil
 }
 
 func refreshInitialConversationIndex(
