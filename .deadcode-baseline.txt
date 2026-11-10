@@ -1,1 +1,12 @@
-# deadcode: generated_at=2026-05-27T02:23:10Z
+# deadcode: generated_at=2026-11-10T04:57:48Z
+internal/conversation/vectorsearch/checkpointtest/checkpointtest.go:29:6: unreachable func: WriteRecord	# deadcode:first_added=2026-11-10T04:57:48Z last_seen=2026-11-10T04:57:48Z
+internal/conversation/vectorsearch/checkpointtest/checkpointtest.go:68:6: unreachable func: Records	# deadcode:first_added=2026-11-10T04:57:48Z last_seen=2026-11-10T04:57:48Z
+internal/daemon/localtest/localtest.go:169:6: unreachable func: LocalBackendSearchCLIOutput	# deadcode:first_added=2026-11-10T04:57:48Z last_seen=2026-11-10T04:57:48Z
+internal/daemon/localtest/localtest.go:192:6: unreachable func: LocalBackendSearchMCPOutput	# deadcode:first_added=2026-11-10T04:57:48Z last_seen=2026-11-10T04:57:48Z
+internal/daemon/localtest/localtest.go:40:6: unreachable func: WriteRawTextTranscript	# deadcode:first_added=2026-11-10T04:57:48Z last_seen=2026-11-10T04:57:48Z
+internal/daemon/localtest/localtest.go:83:6: unreachable func: StartRawTextDaemon	# deadcode:first_added=2026-11-10T04:57:48Z last_seen=2026-11-10T04:57:48Z
+internal/daemon/metrics_rollup_worker.go:300:6: unreachable func: StartMetricsRollup	# deadcode:first_added=2026-11-10T04:57:48Z last_seen=2026-11-10T04:57:48Z
+internal/slogger/cleanup.go:100:6: unreachable func: applyCleanupPolicy	# deadcode:first_added=2026-11-10T04:57:48Z last_seen=2026-11-10T04:57:48Z
+internal/slogger/cleanup.go:91:6: unreachable func: RunCleanupOnce	# deadcode:first_added=2026-11-10T04:57:48Z last_seen=2026-11-10T04:57:48Z
+internal/xdgtest/xdgtest.go:24:6: unreachable func: Main	# deadcode:first_added=2026-11-10T04:57:48Z last_seen=2026-11-10T04:57:48Z
+internal/xdgtest/xdgtest.go:94:6: unreachable func: keepGoBuildCache	# deadcode:first_added=2026-11-10T04:57:48Z last_seen=2026-11-10T04:57:48Z
