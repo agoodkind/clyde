@@ -244,6 +244,24 @@ func (s *metricsRollupState) openSource(path string, now time.Time) error {
 	return nil
 }
 
+func metricsRollupReplay(
+	input metricsRollupDistillInput,
+) (MetricsHistoryReport, MetricsHistoryInput) {
+	report := newRollupReport(MetricsWindow{
+		Since: input.Now.Add(-metricsRollupRetention),
+		Until: input.Now,
+	})
+	// Lines appended after pass start must remain available for the next pass.
+	replay := MetricsHistoryInput{
+		Since:   report.Window.Since,
+		Now:     time.Time{},
+		LogPath: input.LogPath,
+		Pricing: input.Pricing,
+	}
+
+	return report, replay
+}
+
 func (s *metricsRollupState) readTail(
 	ctx context.Context,
 	input metricsRollupDistillInput,
@@ -258,17 +276,7 @@ func (s *metricsRollupState) readTail(
 		)
 	}
 
-	report := newRollupReport(MetricsWindow{
-		Since: input.Now.Add(-metricsRollupRetention),
-		Until: input.Now,
-	})
-	// Lines appended after pass start must remain available for the next pass.
-	replay := MetricsHistoryInput{
-		Since:   report.Window.Since,
-		Now:     time.Time{},
-		LogPath: input.LogPath,
-		Pricing: input.Pricing,
-	}
+	report, replay := metricsRollupReplay(input)
 	offset, count, err := readMetricsHistoryTail(
 		ctx,
 		s.source,
