@@ -266,18 +266,17 @@ func newControlServer(
 		}
 		return runtime.semantic.currentSearchClient()
 	}
-	searchSource := &rawTextFallbackSearchSource{
-		primary: &semanticConversationSearchSource{
-			index: index,
-			searchEnabled: func() bool {
-				return cfg.Conversation.Semantic.AnswersSearch()
-			},
-			searchClient: semanticSearch,
-			collectionID: cfg.Conversation.Semantic.CollectionID,
-			backend:      cfg.Conversation.Semantic.Backend,
+	var searchSource conversationSearchSource = &semanticConversationSearchSource{
+		index: index,
+		searchEnabled: func() bool {
+			return cfg.Conversation.Semantic.AnswersSearch()
 		},
-		index:    index,
-		disabled: !cfg.Conversation.Semantic.RawTextFallbackEnabled(),
+		searchClient: semanticSearch,
+		collectionID: cfg.Conversation.Semantic.CollectionID,
+		backend:      cfg.Conversation.Semantic.Backend,
+	}
+	if cfg.Conversation.Semantic.RawTextFallbackEnabled() {
+		searchSource = &rawTextFallbackSearchSource{primary: searchSource, index: index}
 	}
 	return &controlServer{
 		UnimplementedClydeServiceServer: clydev1.UnimplementedClydeServiceServer{},
