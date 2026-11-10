@@ -137,24 +137,7 @@ func (c *Client) RepairTimestampsFromSource(
 	sources []TimestampSourceRepairSource,
 	dryRun bool,
 ) (TimestampSourceRepairReport, error) {
-	report := TimestampSourceRepairReport{
-		TimestampRepairReport: TimestampRepairReport{
-			Conversations:        0,
-			RowsRead:             0,
-			RowsCurrent:          0,
-			RowsChanged:          0,
-			RowsWritten:          0,
-			RowsUnmatched:        0,
-			RowsMissingTimestamp: 0,
-			RowsAmbiguous:        0,
-			RowsInvalidMetadata:  0,
-		},
-		RowsNotZeroTime:  0,
-		RowsEmptyContent: 0,
-		RowsIncomplete:   0,
-		Evidence:         nil,
-		Outcomes:         map[string]int{},
-	}
+	report := newTimestampSourceRepairReport()
 	if c == nil {
 		return report, errors.New("conversation search client is nil")
 	}
@@ -203,25 +186,9 @@ func (c *Client) RepairTimestampsFromSource(
 		}
 
 		report.Conversations++
-		rows, queryErr := c.store.QueryRows(
-			ctx,
-			collection.RowsRequest{
-				Collection:  collectionName,
-				Declaration: sourceRepairRowsDeclaration(),
-				ItemIDs:     []string{conversationID},
-				PathPrefixes: []string{
-					conversationRelativePathPrefix(conversationID),
-					conversationToolRelativePathPrefix(conversationID),
-					conversationThinkingRelativePathPrefix(conversationID),
-				},
-				IncludeVector: false,
-			},
-		)
+		rows, queryErr := c.readSourceRepairRows(ctx, collectionName, conversationID)
 		if queryErr != nil {
-			return report, failRead(
-				"read conversation rows from collection "+collectionName,
-				queryErr,
-			)
+			return report, queryErr
 		}
 
 		lookup := newSourceTimeLookup(source)
@@ -252,46 +219,35 @@ func (c *Client) RepairTimestampsFromSource(
 		}
 	}
 
-	slog.InfoContext(
-		ctx,
-		"conversation.vectorsearch.source_timestamp_repair_completed",
-		"concern",
-		"conversation.semantic",
-		"component",
-		"conversation",
-		"collection",
-		collectionName,
-		"shared_layout",
-		milvus.shared != nil,
-		"conversations",
-		report.Conversations,
-		"rows_read",
-		report.RowsRead,
-		"rows_not_zero_time",
-		report.RowsNotZeroTime,
-		"rows_empty_content",
-		report.RowsEmptyContent,
-		"rows_incomplete",
-		report.RowsIncomplete,
-		"rows_current",
-		report.RowsCurrent,
-		"rows_changed",
-		report.RowsChanged,
-		"rows_written",
-		report.RowsWritten,
-		"rows_unmatched",
-		report.RowsUnmatched,
-		"rows_missing_timestamp",
-		report.RowsMissingTimestamp,
-		"rows_ambiguous",
-		report.RowsAmbiguous,
-		"rows_invalid_metadata",
-		report.RowsInvalidMetadata,
-		"dry_run",
-		dryRun,
-	)
+	logSourceTimestampRepairCompleted(ctx, collectionName, milvus, &report, dryRun)
 
 	return report, nil
+}
+
+func (c *Client) readSourceRepairRows(
+	ctx context.Context,
+	collectionName string,
+	conversationID string,
+) ([]collection.StoredRow, error) {
+	rows, queryErr := c.store.QueryRows(
+		ctx,
+		collection.RowsRequest{
+			Collection:  collectionName,
+			Declaration: sourceRepairRowsDeclaration(),
+			ItemIDs:     []string{conversationID},
+			PathPrefixes: []string{
+				conversationRelativePathPrefix(conversationID),
+				conversationToolRelativePathPrefix(conversationID),
+				conversationThinkingRelativePathPrefix(conversationID),
+			},
+			IncludeVector: false,
+		},
+	)
+	if queryErr != nil {
+		return nil, failRead("read conversation rows from collection "+collectionName, queryErr)
+	}
+
+	return rows, nil
 }
 
 // TimestampSourceRepairPlan stores one conversation's report and planned timestamp updates before any write.
