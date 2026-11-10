@@ -583,20 +583,7 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 	}
 
 	manifest, recordsByID, stampsByID, failedSuppressed := w.buildManifest(stampedRecords)
-	stats := conversationSemanticSyncStats{
-		manifest:            len(manifest),
-		needed:              0,
-		sentConversations:   0,
-		documents:           0,
-		deferred:            0,
-		failed:              0,
-		failedSuppressed:    failedSuppressed,
-		policySkipped:       0,
-		injectedStripped:    0,
-		systemStripped:      0,
-		sentConversationIDs: nil,
-		unchangedPinned:     0,
-	}
+	stats := newConversationSemanticSyncStats(len(manifest), failedSuppressed)
 	// An empty manifest still syncs when this pass omitted anything, because
 	// the engine's copy of the manifest is whatever the last sync stated.
 	// Skipping the sync would leave an omitted conversation in the engine's
@@ -637,6 +624,26 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 	w.logPass(ctx, stats)
 
 	return nil
+}
+
+func newConversationSemanticSyncStats(
+	manifestCount int,
+	failedSuppressed int,
+) conversationSemanticSyncStats {
+	return conversationSemanticSyncStats{
+		manifest:            manifestCount,
+		needed:              0,
+		sentConversations:   0,
+		documents:           0,
+		deferred:            0,
+		failed:              0,
+		failedSuppressed:    failedSuppressed,
+		policySkipped:       0,
+		injectedStripped:    0,
+		systemStripped:      0,
+		sentConversationIDs: nil,
+		unchangedPinned:     0,
+	}
 }
 
 // engineBusyWithLastJob reports whether the engine job from the last accepted
