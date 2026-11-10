@@ -14,36 +14,9 @@ import (
 // Uninstall stops Clyde daemon processes and removes only the native service
 // registration. It preserves all Clyde data, configuration, and binaries.
 func Uninstall(ctx context.Context, output io.Writer) error {
-	executable, err := os.Executable()
+	executable, err := uninstallExecutable(ctx)
 	if err != nil {
-		slog.WarnContext(
-			ctx,
-			"daemon.uninstall.executable_failed",
-			"concern",
-			"process.daemon.lifecycle",
-			"component",
-			"daemon",
-			"err",
-			err,
-		)
-
-		return fmt.Errorf("resolve Clyde executable: %w", err)
-	}
-
-	executable, err = filepath.EvalSymlinks(executable)
-	if err != nil {
-		slog.WarnContext(
-			ctx,
-			"daemon.uninstall.symlink_failed",
-			"concern",
-			"process.daemon.lifecycle",
-			"component",
-			"daemon",
-			"err",
-			err,
-		)
-
-		return fmt.Errorf("resolve Clyde executable symlinks: %w", err)
+		return err
 	}
 
 	lookup := func(key string) (string, bool) {
@@ -133,4 +106,40 @@ func Uninstall(ctx context.Context, output io.Writer) error {
 	_, _ = fmt.Fprintln(output, "Clyde daemon uninstalled.")
 
 	return nil
+}
+
+func uninstallExecutable(ctx context.Context) (string, error) {
+	executable, err := os.Executable()
+	if err != nil {
+		slog.WarnContext(
+			ctx,
+			"daemon.uninstall.executable_failed",
+			"concern",
+			"process.daemon.lifecycle",
+			"component",
+			"daemon",
+			"err",
+			err,
+		)
+
+		return "", fmt.Errorf("resolve Clyde executable: %w", err)
+	}
+
+	executable, err = filepath.EvalSymlinks(executable)
+	if err != nil {
+		slog.WarnContext(
+			ctx,
+			"daemon.uninstall.symlink_failed",
+			"concern",
+			"process.daemon.lifecycle",
+			"component",
+			"daemon",
+			"err",
+			err,
+		)
+
+		return "", fmt.Errorf("resolve Clyde executable symlinks: %w", err)
+	}
+
+	return executable, nil
 }
