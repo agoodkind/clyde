@@ -122,21 +122,9 @@ func NewProxy(
 	}
 
 	log = slogger.WithConcern(log, slogger.ConcernProviderMITMLifecycle)
-	ca, err := loadOrCreateCertAuthority(cfg.CA.CertPath, cfg.CA.KeyPath, time.Now)
+	ca, err := loadProxyAuthority(cfg, log)
 	if err != nil {
-		log.Warn(
-			"mitm.tls.ca_load_failed",
-			"concern",
-			"providers.mitm.wire",
-			"cert_path",
-			cfg.CA.CertPath,
-			"key_path",
-			cfg.CA.KeyPath,
-			"err",
-			err,
-		)
-
-		return nil, fmt.Errorf("load mitm ca: %w", err)
+		return nil, err
 	}
 
 	p := &Proxy{
@@ -189,6 +177,27 @@ func NewProxy(
 	}
 
 	return p, nil
+}
+
+func loadProxyAuthority(cfg config.MITMConfig, log *slog.Logger) (*certAuthority, error) {
+	authority, err := loadOrCreateCertAuthority(cfg.CA.CertPath, cfg.CA.KeyPath, time.Now)
+	if err != nil {
+		log.Warn(
+			"mitm.tls.ca_load_failed",
+			"concern",
+			"providers.mitm.wire",
+			"cert_path",
+			cfg.CA.CertPath,
+			"key_path",
+			cfg.CA.KeyPath,
+			"err",
+			err,
+		)
+
+		return nil, fmt.Errorf("load mitm ca: %w", err)
+	}
+
+	return authority, nil
 }
 
 // mitmEmitterOptions converts the typed [config.LoggingRequest] into the
