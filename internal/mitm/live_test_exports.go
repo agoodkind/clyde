@@ -33,16 +33,8 @@ type LiveIdentityCaptureProxy struct {
 
 // NewLiveIdentityCaptureProxy opens a capture store and proxy that record
 // exchanges under captureDir without binding a listener.
-func NewLiveIdentityCaptureProxy(
-	captureDir string,
-	dbPath string,
-	upstreamClient *http.Client,
-) (*LiveIdentityCaptureProxy, error) {
-	store, err := capture.Open(
-		context.Background(),
-		capture.Config{DBPath: dbPath},
-		slog.New(slog.NewTextHandler(io.Discard, nil)),
-	)
+func NewLiveIdentityCaptureProxy(captureDir string, dbPath string, upstreamClient *http.Client) (*LiveIdentityCaptureProxy, error) {
+	store, err := capture.Open(context.Background(), capture.Config{DBPath: dbPath}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		return nil, fmt.Errorf("open capture store %q: %w", dbPath, err)
 	}
@@ -53,23 +45,19 @@ func NewLiveIdentityCaptureProxy(
 	}
 	logger := slog.New(gklog.FileJSON(path, slog.LevelDebug, gklog.RotationConfig{}))
 	group := livetrack.NewGroup(livetrack.GroupOptions{Log: nil})
-	tunnels := livetrack.Attach[TunnelMeta](
-		group,
-		livetrack.MemberSpec{
-			Phase:         livetrack.PhaseIngress,
-			QuietRelevant: true,
-			CancelNoWait:  false,
-		},
-		livetrack.Options[TunnelMeta]{
-			Component:     "mitm",
-			Concern:       "providers.mitm.lifecycle",
-			Log:           slog.New(slog.NewTextHandler(io.Discard, nil)),
-			PollEvery:     5 * time.Millisecond,
-			CloserGrace:   200 * time.Millisecond,
-			ParallelClose: false,
-			Now:           nil,
-		},
-	)
+	tunnels := livetrack.Attach[TunnelMeta](group, livetrack.MemberSpec{
+		Phase:         livetrack.PhaseIngress,
+		QuietRelevant: true,
+		CancelNoWait:  false,
+	}, livetrack.Options[TunnelMeta]{
+		Component:     "mitm",
+		Concern:       "providers.mitm.lifecycle",
+		Log:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+		PollEvery:     5 * time.Millisecond,
+		CloserGrace:   200 * time.Millisecond,
+		ParallelClose: false,
+		Now:           nil,
+	})
 	proxy := &Proxy{
 		log:             logger,
 		httpClient:      upstreamClient,
@@ -80,14 +68,11 @@ func NewLiveIdentityCaptureProxy(
 		store:           store,
 		client:          "live-sandbox",
 		Tunnels:         tunnels,
-		requestLog: logevent.NewEmitter(
-			slogger.WithConcern(logger, slogger.ConcernProviderMITMWire),
-			nil,
-		),
-		mu:     sync.RWMutex{},
-		cfg:    config.MITMConfig{CaptureDir: captureDir},
-		base:   "http://[::1]",
-		server: nil,
+		requestLog:      logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
+		mu:              sync.RWMutex{},
+		cfg:             config.MITMConfig{CaptureDir: captureDir},
+		base:            "http://[::1]",
+		server:          nil,
 	}
 	return &LiveIdentityCaptureProxy{proxy: proxy, store: store}, nil
 }
@@ -125,9 +110,7 @@ func requestRowExists(dbPath string, requestID string) (bool, error) {
 	}
 	defer func() { _ = db.Close() }()
 	var count int
-	if err := db.QueryRow(`SELECT count(*) FROM requests WHERE request_id=?`, requestID).Scan(
-		&count,
-	); err != nil {
+	if err := db.QueryRow(`SELECT count(*) FROM requests WHERE request_id=?`, requestID).Scan(&count); err != nil {
 		return false, err
 	}
 	return count > 0, nil

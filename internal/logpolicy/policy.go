@@ -106,27 +106,19 @@ func Resolve(cfg config.Config) (PolicySet, error) {
 	if err != nil {
 		return PolicySet{}, err
 	}
-
-	globalRotation := resolveRotation(
-		cfg.Logging.Rotation,
-		RotationPolicy{
-			Enabled:    true,
-			MaxSizeMB:  1,
-			MaxBackups: 1,
-			MaxAgeDays: 7,
-			Compress:   true,
-		},
-	)
-	globalCleanup, err := resolveCleanup(
-		"logging.cleanup",
-		cfg.Logging.Cleanup,
-		CleanupPolicy{
-			Enabled:    true,
-			MaxAgeDays: intPointer(7),
-			MaxBackups: intPointer(1),
-			MaxTotalMB: intPointer(5),
-		},
-	)
+	globalRotation := resolveRotation(cfg.Logging.Rotation, RotationPolicy{
+		Enabled:    true,
+		MaxSizeMB:  1,
+		MaxBackups: 1,
+		MaxAgeDays: 7,
+		Compress:   true,
+	})
+	globalCleanup, err := resolveCleanup("logging.cleanup", cfg.Logging.Cleanup, CleanupPolicy{
+		Enabled:    true,
+		MaxAgeDays: intPointer(7),
+		MaxBackups: intPointer(1),
+		MaxTotalMB: intPointer(5),
+	})
 	if err != nil {
 		return PolicySet{}, err
 	}
@@ -136,7 +128,6 @@ func Resolve(cfg config.Config) (PolicySet, error) {
 	if err != nil {
 		return PolicySet{}, err
 	}
-
 	return PolicySet{
 		Sinks:    cloneSinkPolicies(sinkPolicies),
 		Concerns: cloneConcernPolicies(concernPolicies),
@@ -151,7 +142,6 @@ func resolveSinks(
 ) map[SinkName]SinkPolicy {
 	enabledOverride := enabledSinkOverride(cfg.Logging.Sinks.Enabled)
 	specs := config.LoggingSinkSpecs()
-
 	policies := make(map[SinkName]SinkPolicy, len(specs))
 	for _, spec := range specs {
 		sinkName := SinkName(spec.Name)
@@ -165,7 +155,6 @@ func resolveSinks(
 				enabled = *override.Enabled
 			}
 		}
-
 		policies[sinkName] = SinkPolicy{
 			Name:     sinkName,
 			Enabled:  enabled,
@@ -175,7 +164,6 @@ func resolveSinks(
 			Cleanup:  globalCleanup,
 		}
 	}
-
 	return policies
 }
 
@@ -188,7 +176,6 @@ func sinkOverrideLevel(path string, value string, inherited Level) Level {
 	if err != nil {
 		return inherited
 	}
-
 	return level
 }
 
@@ -196,12 +183,10 @@ func enabledSinkOverride(enabled []string) map[SinkName]bool {
 	if len(enabled) == 0 {
 		return nil
 	}
-
 	override := make(map[SinkName]bool, len(enabled))
 	for _, sinkName := range enabled {
 		override[SinkName(strings.ToLower(strings.TrimSpace(sinkName)))] = true
 	}
-
 	return override
 }
 
@@ -218,14 +203,12 @@ func resolveConcerns(
 		if !ok {
 			policy = baseConcernPolicy(concernName, sinkPolicies[SinkConcerns])
 		}
-
 		if concernConfig.Sink != "" {
 			sinkName := SinkName(strings.ToLower(strings.TrimSpace(concernConfig.Sink)))
 			sinkPolicy, ok := sinkPolicies[sinkName]
 			if !ok {
 				return nil, fmt.Errorf("logging.concerns.%s.sink is not a known sink", concernName)
 			}
-
 			policy.Sink = sinkName
 			policy.Enabled = sinkPolicy.Enabled
 			policy.Level = sinkPolicy.Level
@@ -233,35 +216,22 @@ func resolveConcerns(
 			policy.Rotation = sinkPolicy.Rotation
 			policy.Cleanup = sinkPolicy.Cleanup
 		}
-
 		if concernConfig.Enabled != nil {
 			policy.Enabled = *concernConfig.Enabled
 		}
-
-		level, err := parseLevel(
-			"logging.concerns."+concernName+".level",
-			concernConfig.Level,
-			policy.Level,
-		)
+		level, err := parseLevel("logging.concerns."+concernName+".level", concernConfig.Level, policy.Level)
 		if err != nil {
 			return nil, err
 		}
-
-		detail, err := parseDetail(
-			"logging.concerns."+concernName+".detail",
-			concernConfig.Detail,
-			policy.Detail,
-		)
+		detail, err := parseDetail("logging.concerns."+concernName+".detail", concernConfig.Detail, policy.Detail)
 		if err != nil {
 			return nil, err
 		}
-
 		policy.Level = level
 		policy.Detail = detail
 		policy.Rotation = resolveRotation(concernConfig.Rotation, policy.Rotation)
 		policies[concernName] = policy
 	}
-
 	return policies, nil
 }
 
@@ -284,60 +254,44 @@ func resolveRotation(cfg config.LoggingRotation, inherited RotationPolicy) Rotat
 	if cfg.Enabled != nil {
 		policy.Enabled = *cfg.Enabled
 	}
-
 	if cfg.MaxSizeMB > 0 {
 		policy.MaxSizeMB = cfg.MaxSizeMB
 	}
-
 	if cfg.MaxBackups > 0 {
 		policy.MaxBackups = cfg.MaxBackups
 	}
-
 	if cfg.MaxAgeDays > 0 {
 		policy.MaxAgeDays = cfg.MaxAgeDays
 	}
-
 	if cfg.Compress != nil {
 		policy.Compress = *cfg.Compress
 	}
-
 	return policy
 }
 
-func resolveCleanup(
-	path string,
-	cfg config.LoggingCleanup,
-	inherited CleanupPolicy,
-) (CleanupPolicy, error) {
+func resolveCleanup(path string, cfg config.LoggingCleanup, inherited CleanupPolicy) (CleanupPolicy, error) {
 	policy := inherited
 	if cfg.Enabled != nil {
 		policy.Enabled = *cfg.Enabled
 	}
-
 	if cfg.MaxAgeDays != nil {
 		if *cfg.MaxAgeDays < 0 {
 			return CleanupPolicy{}, fmt.Errorf("%s.max_age_days must be >= 0", path)
 		}
-
 		policy.MaxAgeDays = cloneIntPointer(cfg.MaxAgeDays)
 	}
-
 	if cfg.MaxBackups != nil {
 		if *cfg.MaxBackups < 0 {
 			return CleanupPolicy{}, fmt.Errorf("%s.max_backups must be >= 0", path)
 		}
-
 		policy.MaxBackups = cloneIntPointer(cfg.MaxBackups)
 	}
-
 	if cfg.MaxTotalMB != nil {
 		if *cfg.MaxTotalMB < 0 {
 			return CleanupPolicy{}, fmt.Errorf("%s.max_total_mb must be >= 0", path)
 		}
-
 		policy.MaxTotalMB = cloneIntPointer(cfg.MaxTotalMB)
 	}
-
 	return policy, nil
 }
 
@@ -346,7 +300,6 @@ func parseLevel(path string, value string, inherited Level) (Level, error) {
 	if normalized == "" {
 		return inherited, nil
 	}
-
 	switch Level(normalized) {
 	case LevelDebug, LevelInfo, LevelWarn, LevelError:
 		return Level(normalized), nil
@@ -360,7 +313,6 @@ func parseDetail(path string, value string, inherited Detail) (Detail, error) {
 	if normalized == "" {
 		return inherited, nil
 	}
-
 	switch Detail(normalized) {
 	case DetailSummary, DetailVerbose:
 		return Detail(normalized), nil
@@ -373,16 +325,11 @@ func parseDetail(path string, value string, inherited Detail) (Detail, error) {
 // spec. The registry tags each sink with a [config.LoggingSinkDefaultRule]; this
 // resolver applies the config-dependent gate the rule names so the per-sink
 // roster lives in the registry rather than in a hand-maintained switch here.
-func defaultSinkEnabled(
-	cfg config.Config,
-	spec config.LoggingSinkSpec,
-	enabledOverride map[SinkName]bool,
-) bool {
+func defaultSinkEnabled(cfg config.Config, spec config.LoggingSinkSpec, enabledOverride map[SinkName]bool) bool {
 	baseEnabled := true
 	if enabledOverride != nil {
 		baseEnabled = enabledOverride[SinkName(spec.Name)]
 	}
-
 	switch spec.DefaultRule {
 	case config.LoggingSinkDefaultTranscript:
 		return baseEnabled && cfg.Logging.Transcript.IsEnabled()
@@ -399,7 +346,6 @@ func cloneSinkPolicies(policies map[SinkName]SinkPolicy) map[SinkName]SinkPolicy
 		policy.Cleanup = cloneCleanupPolicy(policy.Cleanup)
 		clonedPolicies[sinkName] = policy
 	}
-
 	return clonedPolicies
 }
 
@@ -409,7 +355,6 @@ func cloneConcernPolicies(policies map[string]ConcernPolicy) map[string]ConcernP
 		policy.Cleanup = cloneCleanupPolicy(policy.Cleanup)
 		clonedPolicies[concernName] = policy
 	}
-
 	return clonedPolicies
 }
 
@@ -426,9 +371,7 @@ func cloneIntPointer(value *int) *int {
 	if value == nil {
 		return nil
 	}
-
 	clonedValue := *value
-
 	return &clonedValue
 }
 
@@ -440,12 +383,10 @@ func ResolveSloggerSetup(cfg config.Config, role slogger.ProcessRole) (slogger.S
 	if err != nil {
 		return slogger.SetupPolicy{}, err
 	}
-
 	processSink := policies.Sinks[SinkCLI]
 	if role == slogger.ProcessRoleDaemon {
 		processSink = policies.Sinks[SinkDaemon]
 	}
-
 	concernSink := policies.Sinks[SinkConcerns]
 	setupPolicy := slogger.SetupPolicy{
 		Level: levelToSlog(processSink.Level),
@@ -506,7 +447,6 @@ func ResolveSloggerSetup(cfg config.Config, role slogger.ProcessRole) (slogger.S
 			setupPolicy.ConcernPolicies[concernName] = concernPolicy
 		}
 	}
-
 	return setupPolicy, nil
 }
 
@@ -518,7 +458,6 @@ func resolveSloggerConcernPolicies(policies PolicySet) map[string]slogger.Concer
 		if concernPolicy.Sink != SinkConcerns {
 			enabled = false
 		}
-
 		rotationPolicy := slogger.RotationPolicy{
 			Enabled:    concernPolicy.Rotation.Enabled,
 			MaxSizeMB:  concernPolicy.Rotation.MaxSizeMB,
@@ -533,7 +472,6 @@ func resolveSloggerConcernPolicies(policies PolicySet) map[string]slogger.Concer
 			Rotation: &rotationPolicy,
 		}
 	}
-
 	return concernPolicies
 }
 
@@ -571,6 +509,5 @@ func cleanupInt(value *int) int {
 	if value == nil {
 		return 0
 	}
-
 	return *value
 }

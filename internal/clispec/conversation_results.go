@@ -166,22 +166,18 @@ func listConversationsOutputFromDomain(result conv.ListResult) listConversations
 func conversationInfoOutputFromDomain(info conv.Info) conversationInfoOutput {
 	segments := make([]conversationSegmentInfoOutput, 0, len(info.Segments))
 	for _, segment := range info.Segments {
-		segments = append(
-			segments,
-			conversationSegmentInfoOutput{
-				Index:               segment.Index,
-				StartMessageIndex:   segment.StartMessageIndex,
-				EndMessageIndex:     segment.EndMessageIndex,
-				HasStartingSummary:  segment.HasStartingSummary,
-				SummaryMessageIndex: segment.SummaryMessageIndex,
-				SummaryUUID:         segment.SummaryUUID,
-				SummaryTimestamp:    segment.SummaryTimestamp,
-				VisibleMessageCount: segment.VisibleMessageCount,
-				ToolCallCount:       segment.ToolCallCount,
-			},
-		)
+		segments = append(segments, conversationSegmentInfoOutput{
+			Index:               segment.Index,
+			StartMessageIndex:   segment.StartMessageIndex,
+			EndMessageIndex:     segment.EndMessageIndex,
+			HasStartingSummary:  segment.HasStartingSummary,
+			SummaryMessageIndex: segment.SummaryMessageIndex,
+			SummaryUUID:         segment.SummaryUUID,
+			SummaryTimestamp:    segment.SummaryTimestamp,
+			VisibleMessageCount: segment.VisibleMessageCount,
+			ToolCallCount:       segment.ToolCallCount,
+		})
 	}
-
 	return conversationInfoOutput{
 		Conversation: info.Record,
 		Stats: conversationInfoStatsOutput{
@@ -198,27 +194,21 @@ func conversationInfoOutputFromDomain(info conv.Info) conversationInfoOutput {
 	}
 }
 
-func searchConversationsOutputFromDomain(
-	result conv.SearchConversationsResult,
-) searchConversationsOutput {
+func searchConversationsOutputFromDomain(result conv.SearchConversationsResult) searchConversationsOutput {
 	matches := make([]searchConversationsMatchOutput, 0, len(result.Matches))
 	for _, match := range result.Matches {
-		matches = append(
-			matches,
-			searchConversationsMatchOutput{
-				Conversation:  match.Record,
-				MessageIndex:  match.MessageIndex,
-				Role:          match.Role,
-				Timestamp:     match.Timestamp,
-				Snippet:       match.Snippet,
-				Score:         match.Score,
-				ContextWindow: match.ContextWindow,
-				LoadRules:     match.LoadRules,
-				ContextState:  match.ContextState,
-			},
-		)
+		matches = append(matches, searchConversationsMatchOutput{
+			Conversation:  match.Record,
+			MessageIndex:  match.MessageIndex,
+			Role:          match.Role,
+			Timestamp:     match.Timestamp,
+			Snippet:       match.Snippet,
+			Score:         match.Score,
+			ContextWindow: match.ContextWindow,
+			LoadRules:     match.LoadRules,
+			ContextState:  match.ContextState,
+		})
 	}
-
 	return searchConversationsOutput{
 		ReturnedCount:        result.ReturnedCount,
 		Limit:                result.Limit,
@@ -247,18 +237,13 @@ func searchFacetCountOutputsFromDomain(counts []conv.SearchFacetCount) []searchF
 	if len(counts) == 0 {
 		return nil
 	}
-
 	outputs := make([]searchFacetCountOutput, 0, len(counts))
 	for _, count := range counts {
-		outputs = append(
-			outputs,
-			searchFacetCountOutput{
-				Value: count.Value,
-				Count: count.Count,
-			},
-		)
+		outputs = append(outputs, searchFacetCountOutput{
+			Value: count.Value,
+			Count: count.Count,
+		})
 	}
-
 	return outputs
 }
 
@@ -276,18 +261,13 @@ func filterStageOutputsFromDomain(stages []conv.FilterStage) []filterStageOutput
 	if len(stages) == 0 {
 		return nil
 	}
-
 	outputs := make([]filterStageOutput, 0, len(stages))
 	for _, stage := range stages {
-		outputs = append(
-			outputs,
-			filterStageOutput{
-				Name:      stage.Name,
-				Remaining: stage.Remaining,
-			},
-		)
+		outputs = append(outputs, filterStageOutput{
+			Name:      stage.Name,
+			Remaining: stage.Remaining,
+		})
 	}
-
 	return outputs
 }
 
@@ -302,7 +282,6 @@ func installHooksOutputFromResult(result hookspec.InstallResult) installHooksOut
 		for _, id := range file.Installed {
 			installed = append(installed, string(id))
 		}
-
 		fileOutput := installHooksFileOutput{
 			Client:       string(file.Client),
 			SettingsPath: file.SettingsPath,
@@ -313,9 +292,7 @@ func installHooksOutputFromResult(result hookspec.InstallResult) installHooksOut
 		if result.DryRun {
 			fileOutput.Preview = string(file.Preview)
 		}
-
 		output.Files = append(output.Files, fileOutput)
 	}
-
 	return output
 }

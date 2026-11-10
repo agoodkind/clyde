@@ -23,13 +23,9 @@ func TestRunPeriodicDriftReturnsWhenDisabled(t *testing.T) {
 			},
 		},
 	}
-	if !returnsBefore(
-		t,
-		2*time.Second,
-		func(ctx context.Context) {
-			RunPeriodicDrift(ctx, store, cfg, slog.Default())
-		},
-	) {
+	if !returnsBefore(t, 2*time.Second, func(ctx context.Context) {
+		RunPeriodicDrift(ctx, store, cfg, slog.Default())
+	}) {
 		t.Fatalf("RunPeriodicDrift did not return promptly when disabled")
 	}
 }
@@ -45,13 +41,9 @@ func TestRunPeriodicDriftReturnsWithNoUpstreams(t *testing.T) {
 			Upstreams: nil,
 		},
 	}
-	if !returnsBefore(
-		t,
-		2*time.Second,
-		func(ctx context.Context) {
-			RunPeriodicDrift(ctx, store, cfg, slog.Default())
-		},
-	) {
+	if !returnsBefore(t, 2*time.Second, func(ctx context.Context) {
+		RunPeriodicDrift(ctx, store, cfg, slog.Default())
+	}) {
 		t.Fatalf("RunPeriodicDrift did not return promptly with no upstreams")
 	}
 }
@@ -68,13 +60,9 @@ func TestRunPeriodicDriftReturnsWithNilStore(t *testing.T) {
 			},
 		},
 	}
-	if !returnsBefore(
-		t,
-		2*time.Second,
-		func(ctx context.Context) {
-			RunPeriodicDrift(ctx, nil, cfg, slog.Default())
-		},
-	) {
+	if !returnsBefore(t, 2*time.Second, func(ctx context.Context) {
+		RunPeriodicDrift(ctx, nil, cfg, slog.Default())
+	}) {
 		t.Fatalf("RunPeriodicDrift did not return promptly with a nil store")
 	}
 }
@@ -152,15 +140,11 @@ func TestRunPeriodicDriftFallsBackToDefaultInterval(t *testing.T) {
 			},
 		},
 	}
-	if !returnsBefore(
-		t,
-		2*time.Second,
-		func(ctx context.Context) {
-			ctx, cancel := context.WithCancel(ctx)
-			cancel()
-			RunPeriodicDrift(ctx, store, cfg, slog.Default())
-		},
-	) {
+	if !returnsBefore(t, 2*time.Second, func(ctx context.Context) {
+		ctx, cancel := context.WithCancel(ctx)
+		cancel()
+		RunPeriodicDrift(ctx, store, cfg, slog.Default())
+	}) {
 		t.Fatalf("RunPeriodicDrift stalled with a non-positive interval")
 	}
 }
@@ -174,23 +158,17 @@ func TestRunDriftCheckRecordsCheckWithoutWritingBaseline(t *testing.T) {
 	seedClaudeShape(t, proxy, cfg, claudeSystemBillingBody(t, "abc123def"))
 	waitForUpstreamShapes(t, store, "claude-code", 1)
 
-	outcome, err := RunDriftCheck(
-		context.Background(),
-		store,
-		DriftCheckOptions{
-			Upstream:  "claude-code",
-			IncludeUA: []string{"claude-cli"},
-		},
-	)
+	outcome, err := RunDriftCheck(context.Background(), store, DriftCheckOptions{
+		Upstream:  "claude-code",
+		IncludeUA: []string{"claude-cli"},
+	})
 	if err != nil {
 		t.Fatalf("RunDriftCheck: %v", err)
 	}
-
 	// No baseline exists yet, so the check is non-divergent and writes nothing.
 	if outcome.Diverged {
 		t.Fatalf("Diverged=true want false with no baseline")
 	}
-
 	if _, ok, _ := store.CurrentBaseline(context.Background(), "claude-code"); ok {
 		t.Fatalf("RunDriftCheck wrote a baseline; it must be compare-only")
 	}

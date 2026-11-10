@@ -236,19 +236,16 @@ func (f *Facets) Set(facet Facet) {
 	if facet == nil {
 		return
 	}
-
 	key := facet.FacetKey()
 	if key == "" {
 		return
 	}
-
 	for i, existing := range f.items {
 		if existing.FacetKey() == key {
 			f.items[i] = facet
 			return
 		}
 	}
-
 	f.items = append(f.items, facet)
 }
 
@@ -259,7 +256,6 @@ func (f *Facets) Get(key string) (Facet, bool) {
 			return existing, true
 		}
 	}
-
 	return nil, false
 }
 
@@ -273,10 +269,8 @@ func (f *Facets) Items() []Facet {
 	if len(f.items) == 0 {
 		return nil
 	}
-
 	out := make([]Facet, len(f.items))
 	copy(out, f.items)
-
 	return out
 }
 
@@ -288,36 +282,25 @@ func (f *Facets) MarshalJSON() ([]byte, error) {
 	if len(f.items) == 0 {
 		return []byte("null"), nil
 	}
-
 	var buf []byte
 	buf = append(buf, '{')
-
 	for index, facet := range f.items {
 		if index > 0 {
 			buf = append(buf, ',')
 		}
-
 		keyBytes, err := json.Marshal(facet.FacetKey())
 		if err != nil {
 			return nil, fmt.Errorf("logevent: marshal facet key %q: %w", facet.FacetKey(), err)
 		}
-
 		buf = append(buf, keyBytes...)
 		buf = append(buf, ':')
 		valueBytes, err := json.Marshal(facet)
 		if err != nil {
-			return nil, fmt.Errorf(
-				"logevent: marshal facet value for %q: %w",
-				facet.FacetKey(),
-				err,
-			)
+			return nil, fmt.Errorf("logevent: marshal facet value for %q: %w", facet.FacetKey(), err)
 		}
-
 		buf = append(buf, valueBytes...)
 	}
-
 	buf = append(buf, '}')
-
 	return buf, nil
 }
 
@@ -326,11 +309,9 @@ func (f *Facets) MarshalJSON() ([]byte, error) {
 // naming any facet.
 func (f *Facets) AggregateSinkHints() SinkHints {
 	var hints SinkHints
-
 	for _, facet := range f.items {
 		hints = hints.Merge(facet.SinkHints())
 	}
-
 	return hints
 }
 
@@ -355,7 +336,6 @@ func (e Event) Attrs() []slog.Attr {
 	if len(e.Sinks) > 0 {
 		attrs = append(attrs, slog.Any("sinks", e.Sinks))
 	}
-
 	return attrs
 }
 
@@ -363,47 +343,36 @@ func appendIdentityAttrs(attrs []slog.Attr, identity Identity) []slog.Attr {
 	if identity.TraceID != "" {
 		attrs = append(attrs, slog.String("trace_id", identity.TraceID))
 	}
-
 	if identity.SpanID != "" {
 		attrs = append(attrs, slog.String("span_id", identity.SpanID))
 	}
-
 	if identity.ParentSpanID != "" {
 		attrs = append(attrs, slog.String("parent_span_id", identity.ParentSpanID))
 	}
-
 	if identity.RequestID != "" {
 		attrs = append(attrs, slog.String("request_id", identity.RequestID))
 	}
-
 	if identity.UpstreamRequestID != "" {
 		attrs = append(attrs, slog.String("upstream_request_id", identity.UpstreamRequestID))
 	}
-
 	if identity.UpstreamResponseID != "" {
 		attrs = append(attrs, slog.String("upstream_response_id", identity.UpstreamResponseID))
 	}
-
 	if identity.ChatKey != "" {
 		attrs = append(attrs, slog.String("chat_key", identity.ChatKey))
 	}
-
 	if identity.ChatKeySource != "" {
 		attrs = append(attrs, slog.String("chat_key_source", identity.ChatKeySource))
 	}
-
 	if identity.ChatRootKey != "" {
 		attrs = append(attrs, slog.String("chat_root_key", identity.ChatRootKey))
 	}
-
 	if identity.ChatBranchKey != "" {
 		attrs = append(attrs, slog.String("chat_branch_key", identity.ChatBranchKey))
 	}
-
 	if identity.SessionID != "" {
 		attrs = append(attrs, slog.String("session_id", identity.SessionID))
 	}
-
 	return attrs
 }
 
@@ -411,9 +380,7 @@ func appendPathAttrs(attrs []slog.Attr, path Path) []slog.Attr {
 	if component := componentForSurface(path.Surface); component != "" {
 		attrs = append(attrs, slog.String("component", component))
 	}
-
-	attrs = append(
-		attrs,
+	attrs = append(attrs,
 		slog.String("surface", string(path.Surface)),
 		slog.String("route_family", string(path.RouteFamily)),
 		slog.String("leg", string(path.Leg)),
@@ -422,27 +389,21 @@ func appendPathAttrs(attrs []slog.Attr, path Path) []slog.Attr {
 	if path.Path != "" {
 		attrs = append(attrs, slog.String("path", path.Path))
 	}
-
 	if path.Method != "" {
 		attrs = append(attrs, slog.String("method", path.Method))
 	}
-
 	if path.Host != "" {
 		attrs = append(attrs, slog.String("host", path.Host))
 	}
-
 	if path.Backend != "" {
 		attrs = append(attrs, slog.String("backend", path.Backend))
 	}
-
 	if path.Provider != "" {
 		attrs = append(attrs, slog.String("provider", path.Provider))
 	}
-
 	if path.UpstreamURL != "" {
 		attrs = append(attrs, slog.String("upstream_url", path.UpstreamURL))
 	}
-
 	return attrs
 }
 
@@ -461,31 +422,24 @@ func appendOutcomeAttrs(attrs []slog.Attr, outcome Outcome) []slog.Attr {
 	if outcome.Status != "" {
 		attrs = append(attrs, slog.String("status", string(outcome.Status)))
 	}
-
 	if outcome.StatusCode != 0 {
 		attrs = append(attrs, slog.Int("status_code", outcome.StatusCode))
 	}
-
 	if outcome.ErrorCode != "" {
 		attrs = append(attrs, slog.String("error_code", outcome.ErrorCode))
 	}
-
 	if outcome.ErrorMessage != "" {
 		attrs = append(attrs, slog.String("error_message", outcome.ErrorMessage))
 	}
-
 	if outcome.Duration > 0 {
 		attrs = append(attrs, slog.Int64("duration_ms", outcome.Duration.Milliseconds()))
 	}
-
 	if outcome.BytesIn > 0 {
 		attrs = append(attrs, slog.Int64("bytes_in", outcome.BytesIn))
 	}
-
 	if outcome.BytesOut > 0 {
 		attrs = append(attrs, slog.Int64("bytes_out", outcome.BytesOut))
 	}
-
 	return attrs
 }
 
@@ -495,13 +449,8 @@ func appendFacetAttrs(attrs []slog.Attr, facets Facets) []slog.Attr {
 		if len(facetAttrs) == 0 {
 			continue
 		}
-
-		attrs = append(
-			attrs,
-			slog.Attr{Key: facet.FacetKey(), Value: slog.GroupValue(facetAttrs...)},
-		)
+		attrs = append(attrs, slog.Attr{Key: facet.FacetKey(), Value: slog.GroupValue(facetAttrs...)})
 	}
-
 	return attrs
 }
 
@@ -563,14 +512,12 @@ func RequiredLegsFromStrings(values map[string][]string) RequiredLegs {
 	if len(values) == 0 {
 		return DefaultRequiredLegs()
 	}
-
 	parsed := make(RequiredLegs, len(values))
 	for surfaceName, legNames := range values {
 		surface, ok := ParseSurface(surfaceName)
 		if !ok {
 			continue
 		}
-
 		legs := make([]Leg, 0, len(legNames))
 		for _, legName := range legNames {
 			leg, legOK := ParseLeg(legName)
@@ -578,16 +525,13 @@ func RequiredLegsFromStrings(values map[string][]string) RequiredLegs {
 				legs = append(legs, leg)
 			}
 		}
-
 		if len(legs) > 0 {
 			parsed[surface] = legs
 		}
 	}
-
 	if len(parsed) == 0 {
 		return DefaultRequiredLegs()
 	}
-
 	return parsed
 }
 
@@ -697,11 +641,9 @@ func NewEmitter(logger *slog.Logger, required RequiredLegs, opts ...EmitterOptio
 	if logger == nil {
 		logger = slog.Default()
 	}
-
 	if len(required) == 0 {
 		required = DefaultRequiredLegs()
 	}
-
 	emitter := &Emitter{
 		logger:       logger,
 		required:     cloneRequiredLegs(required),
@@ -709,15 +651,12 @@ func NewEmitter(logger *slog.Logger, required RequiredLegs, opts ...EmitterOptio
 		policy:       IncompletePolicyWarn,
 		onIncomplete: nil,
 	}
-
 	for _, opt := range opts {
 		if opt == nil {
 			continue
 		}
-
 		opt(emitter)
 	}
-
 	return emitter
 }
 
@@ -726,25 +665,16 @@ func (e *Emitter) Emit(ctx context.Context, event Event) {
 	if e == nil {
 		e = NewEmitter(nil, nil)
 	}
-
 	if len(event.Sinks) == 0 {
 		event.Sinks = DefaultSinksForEvent(event)
 	}
-
 	if event.Time.IsZero() {
 		event.Time = e.now()
 	}
-
 	if event.Name == "" {
 		event.Name = "logging.request.leg"
 	}
-
-	e.logger.LogAttrs(
-		ctx,
-		legLevel(event),
-		event.Name,
-		append([]slog.Attr{slog.String("concern", "adapter.chat.dispatch")}, event.Attrs()...)...,
-	)
+	e.logger.LogAttrs(ctx, legLevel(event), event.Name, append([]slog.Attr{slog.String("concern", "adapter.chat.dispatch")}, event.Attrs()...)...)
 }
 
 // legLevel keeps healthy request legs at Debug so a busy adapter does not flood
@@ -754,7 +684,6 @@ func legLevel(event Event) slog.Level {
 	if event.Outcome.Status == StatusError || event.Path.Phase == PhaseFailed {
 		return slog.LevelInfo
 	}
-
 	return slog.LevelDebug
 }
 
@@ -763,7 +692,6 @@ func (e *Emitter) Begin(identity Identity, path Path) *Recorder {
 	if e == nil {
 		e = NewEmitter(nil, nil)
 	}
-
 	return &Recorder{
 		mu:        sync.Mutex{},
 		emitter:   e,
@@ -793,7 +721,6 @@ func (r *Recorder) UpdateIdentity(identity Identity) {
 	if r == nil {
 		return
 	}
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.identity = identity
@@ -804,69 +731,50 @@ func (r *Recorder) Emit(ctx context.Context, event Event) {
 	if r == nil || r.emitter == nil {
 		return
 	}
-
 	r.mu.Lock()
 	if event.Identity.RequestID == "" {
 		event.Identity = r.identity
 	}
-
 	if event.Path.Surface == "" {
 		event.Path.Surface = r.basePath.Surface
 	}
-
 	if event.Path.RouteFamily == "" {
 		event.Path.RouteFamily = r.basePath.RouteFamily
 	}
-
 	if event.Path.Path == "" {
 		event.Path.Path = r.basePath.Path
 	}
-
 	if event.Path.Method == "" {
 		event.Path.Method = r.basePath.Method
 	}
-
 	if event.Path.Host == "" {
 		event.Path.Host = r.basePath.Host
 	}
-
 	if event.Path.Backend == "" {
 		event.Path.Backend = r.basePath.Backend
 	}
-
 	if event.Path.Provider == "" {
 		event.Path.Provider = r.basePath.Provider
 	}
-
 	if event.Path.UpstreamURL == "" {
 		event.Path.UpstreamURL = r.basePath.UpstreamURL
 	}
-
 	if len(event.Sinks) == 0 {
 		event.Sinks = DefaultSinksForEvent(event)
 	}
-
 	if event.Time.IsZero() {
 		event.Time = r.emitter.now()
 	}
-
 	if event.Name == "" {
 		event.Name = "logging.request.leg"
 	}
-
 	if event.Path.Leg != "" {
 		r.observed[event.Path.Leg] = true
 	}
-
 	r.lastPhase = event.Path.Phase
 	logger := r.emitter.logger
 	r.mu.Unlock()
-	logger.LogAttrs(
-		ctx,
-		legLevel(event),
-		event.Name,
-		append([]slog.Attr{slog.String("concern", "adapter.chat.dispatch")}, event.Attrs()...)...,
-	)
+	logger.LogAttrs(ctx, legLevel(event), event.Name, append([]slog.Attr{slog.String("concern", "adapter.chat.dispatch")}, event.Attrs()...)...)
 }
 
 // EmitError closes an early failure with the request error leg.
@@ -874,7 +782,6 @@ func (r *Recorder) EmitError(ctx context.Context, errorCode string, errorMessage
 	if r == nil {
 		return
 	}
-
 	var event Event
 	event.Name = "logging.request.leg"
 	event.Path.Leg = LegRequestError
@@ -891,7 +798,6 @@ func (r *Recorder) Duration() time.Duration {
 	if r == nil || r.emitter == nil || r.started.IsZero() {
 		return 0
 	}
-
 	return r.emitter.now().Sub(r.started)
 }
 
@@ -905,13 +811,11 @@ func (r *Recorder) Complete(ctx context.Context) bool {
 	if r == nil || r.emitter == nil {
 		return true
 	}
-
 	r.mu.Lock()
 	if r.completed {
 		r.mu.Unlock()
 		return true
 	}
-
 	r.completed = true
 	identity := r.identity
 	basePath := r.basePath
@@ -929,7 +833,6 @@ func (r *Recorder) Complete(ctx context.Context) bool {
 	if len(missing) == 0 || observed[LegRequestError] {
 		return true
 	}
-
 	observedSlice := observedLegs(observed)
 	durationMS := duration.Milliseconds()
 	attrs := []slog.Attr{
@@ -943,12 +846,7 @@ func (r *Recorder) Complete(ctx context.Context) bool {
 		slog.String("incomplete_policy", string(policy)),
 	}
 	attrs = appendIdentityAttrs(attrs, identity)
-	logger.LogAttrs(
-		ctx,
-		slog.LevelWarn,
-		"logging.request.incomplete",
-		append([]slog.Attr{slog.String("concern", "adapter.chat.dispatch")}, attrs...)...,
-	)
+	logger.LogAttrs(ctx, slog.LevelWarn, "logging.request.incomplete", append([]slog.Attr{slog.String("concern", "adapter.chat.dispatch")}, attrs...)...)
 	if policy == IncompletePolicyFailTest && onIncomplete != nil {
 		onIncomplete(IncompleteReport{
 			Surface:     basePath.Surface,
@@ -960,7 +858,6 @@ func (r *Recorder) Complete(ctx context.Context) bool {
 			Identity:    identity,
 		})
 	}
-
 	return false
 }
 
@@ -973,24 +870,20 @@ func DefaultSinksForEvent(event Event) []SinkName {
 	if event.Identity.ChatKey != "" {
 		sinks = append(sinks, SinkPerChat)
 	}
-
 	hints := event.Facets.AggregateSinkHints()
 	if hints.NeedsProviderSidecar {
 		sinks = append(sinks, SinkProviderSidecar)
 	}
-
 	return sinks
 }
 
 func missingLegs(required []Leg, observed map[Leg]bool) []Leg {
 	missing := make([]Leg, 0)
-
 	for _, leg := range required {
 		if !observed[leg] {
 			missing = append(missing, leg)
 		}
 	}
-
 	return missing
 }
 
@@ -999,9 +892,7 @@ func observedLegs(observed map[Leg]bool) []Leg {
 	for leg := range observed {
 		legs = append(legs, leg)
 	}
-
 	slices.Sort(legs)
-
 	return legs
 }
 
@@ -1010,6 +901,5 @@ func cloneRequiredLegs(required RequiredLegs) RequiredLegs {
 	for surface, legs := range required {
 		cloned[surface] = append([]Leg(nil), legs...)
 	}
-
 	return cloned
 }

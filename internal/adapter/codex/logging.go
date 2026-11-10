@@ -33,7 +33,6 @@ func LogPath() string {
 	if p := os.Getenv("CLYDE_CODEX_LOG_PATH"); p != "" {
 		return p
 	}
-
 	return filepath.Join(config.DefaultStateDir(), "codex.jsonl")
 }
 
@@ -59,7 +58,6 @@ func ConfigureCodexFileLogger(rotation FileLogRotationConfig) {
 	if codexFileLogger != nil {
 		return
 	}
-
 	codexFileRotation = normalizeCodexLogRotation(rotation)
 }
 
@@ -74,15 +72,12 @@ func dedicatedCodexLogger() *slog.Logger {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return
 		}
-
 		handler := gklog.FileJSON(path, slog.LevelDebug, codexFileRotation.toGKLog())
 		if closer, ok := handler.(io.Closer); ok {
 			codexFileCloser = closer
 		}
-
 		codexFileLogger = slog.New(handler)
 	})
-
 	return codexFileLogger
 }
 
@@ -96,7 +91,6 @@ func normalizeCodexLogRotation(rotation FileLogRotationConfig) FileLogRotationCo
 		MaxAgeDays: rotation.MaxAgeDays,
 		Compress:   rotation.Compress,
 	})
-
 	return FileLogRotationConfig{
 		MaxSizeMB:  normalized.MaxSizeMB,
 		MaxBackups: normalized.MaxBackups,
@@ -107,7 +101,6 @@ func normalizeCodexLogRotation(rotation FileLogRotationConfig) FileLogRotationCo
 
 func (c FileLogRotationConfig) toGKLog() gklog.RotationConfig {
 	c = normalizeCodexLogRotation(c)
-
 	return gklog.RotationConfig{
 		MaxSizeMB:  c.MaxSizeMB,
 		MaxBackups: c.MaxBackups,
@@ -123,13 +116,7 @@ func logCodexEvent(ctx context.Context, level slog.Level, event string, attrs []
 	logCodexEventWithConcern(ctx, level, event, slogger.ConcernAdapterProviderCodex, attrs)
 }
 
-func logCodexEventWithConcern(
-	ctx context.Context,
-	level slog.Level,
-	event string,
-	concern string,
-	attrs []slog.Attr,
-) {
+func logCodexEventWithConcern(ctx context.Context, level slog.Level, event, concern string, attrs []slog.Attr) {
 	enriched := append([]slog.Attr{slog.String("concern", concern)}, attrs...)
 	slog.Default().LogAttrs(ctx, level, event, enriched...)
 	if l := dedicatedCodexLogger(); l != nil {
@@ -142,14 +129,11 @@ func intMapAttrs(values map[string]int) []slog.Attr {
 	for key := range values {
 		keys = append(keys, key)
 	}
-
 	sort.Strings(keys)
-
 	attrs := make([]slog.Attr, 0, len(keys))
 	for _, key := range keys {
 		attrs = append(attrs, slog.Int(key, values[key]))
 	}
-
 	return attrs
 }
 
@@ -157,7 +141,6 @@ func sha256StringHex(value string) string {
 	if strings.TrimSpace(value) == "" {
 		return ""
 	}
-
 	return sha256Hex([]byte(value))
 }
 

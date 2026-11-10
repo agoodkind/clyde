@@ -40,24 +40,19 @@ func PlanRawResponsesCompactionV2(
 	if splitter == nil {
 		return emptyPlan, false
 	}
-
 	if _, ok := ParseRawResponsesCompactionV2(request); !ok {
 		return emptyPlan, false
 	}
-
 	sessionID, ok := rawResponsesCompactionV2SessionID(request)
 	if !ok {
 		return emptyPlan, false
 	}
-
 	split, ok := splitter.Plan(request.Body)
 	if !ok {
 		return emptyPlan, false
 	}
-
 	transformed := request
 	transformed.Body = split.Forwarded
-
 	return RawResponsesCompactionV2Plan{
 		Request:   transformed,
 		Injection: split.Injection,
@@ -78,33 +73,27 @@ func ParseRawResponsesCompactionV2(
 	if !rawResponsesCompactionV2MetadataIsValid(request) {
 		return emptyLayout, false
 	}
-
 	inputStart, inputEnd, ok := jsonObjectFieldValueRange(request.Body, "input")
 	if !ok {
 		return emptyLayout, false
 	}
-
 	var rawItems []json.RawMessage
 	if json.Unmarshal(request.Body[inputStart:inputEnd], &rawItems) != nil {
 		return emptyLayout, false
 	}
-
 	items := codexstore.NormalizeResponseInputItems(rawItems)
 	triggerIndex, ok := rawResponsesCompactionV2TriggerIndex(items)
 	if !ok {
 		return emptyLayout, false
 	}
-
 	transcriptStart, ok := rawResponsesCompactionV2TranscriptStart(items[:triggerIndex])
 	if !ok {
 		return emptyLayout, false
 	}
-
 	transcriptItems := items[transcriptStart:triggerIndex]
 	if !rawResponsesCompactionV2TranscriptIsKnown(transcriptItems) {
 		return emptyLayout, false
 	}
-
 	completeEnd, ok := rawResponsesCompactionV2CompletePrefixEnd(transcriptItems)
 	if !ok {
 		return RawResponsesCompactionV2Layout{
@@ -113,11 +102,9 @@ func ParseRawResponsesCompactionV2(
 			TriggerIndex:    triggerIndex,
 		}, rawCompactionPairsAreComplete(transcriptItems)
 	}
-
 	if !rawResponsesCompactionV2UnfinishedSuffixIsValid(transcriptItems[completeEnd:]) {
 		return emptyLayout, false
 	}
-
 	return RawResponsesCompactionV2Layout{
 		SetupEnd:        transcriptStart,
 		TranscriptStart: transcriptStart,
@@ -125,68 +112,52 @@ func ParseRawResponsesCompactionV2(
 	}, true
 }
 
-func rawResponsesCompactionV2CompletePrefixEnd(
-	items []transcript.CompactedContextItem,
-) (int, bool) {
+func rawResponsesCompactionV2CompletePrefixEnd(items []transcript.CompactedContextItem) (int, bool) {
 	completeEnd := 0
-
 	for itemIndex, item := range items {
-		if item.Kind != transcript.CompactedContextItemKindMessage || item.Message == nil ||
-			item.Message.Role != "assistant" {
+		if item.Kind != transcript.CompactedContextItemKindMessage || item.Message == nil || item.Message.Role != "assistant" {
 			continue
 		}
-
 		if item.Message.Phase != "" && item.Message.Phase != "final_answer" {
 			continue
 		}
-
 		completeEnd = itemIndex + 1
 	}
-
 	if completeEnd == 0 || !rawCompactionPairsAreComplete(items[:completeEnd]) {
 		return 0, false
 	}
-
 	return completeEnd, true
 }
 
 func rawResponsesCompactionV2UnfinishedSuffixIsValid(items []transcript.CompactedContextItem) bool {
 	calls := make(map[string]rawCompactionCallKind)
 	outputs := make(map[string]rawCompactionCallKind)
-
 	for _, item := range items {
 		if callID, callKind, ok := rawCompactionCall(item); ok {
 			if callID == "" {
 				return false
 			}
-
 			if _, duplicate := calls[callID]; duplicate {
 				return false
 			}
-
 			calls[callID] = callKind
 		}
-
 		if callID, outputKind, ok := rawCompactionOutput(item); ok {
 			if callID == "" {
 				return false
 			}
-
 			if _, duplicate := outputs[callID]; duplicate {
 				return false
 			}
-
 			outputs[callID] = outputKind
 		}
 	}
-
 	for callID, outputKind := range outputs {
 		callKind, exists := calls[callID]
 		if !exists || !rawCompactionKindsPair(callKind, outputKind) {
 			return false
 		}
 	}
-
 	return true
 }
 
@@ -195,12 +166,10 @@ func rawResponsesCompactionV2MetadataIsValid(request RawResponsesRequest) bool {
 	if metadataValue == "" {
 		return false
 	}
-
 	var metadata rawResponsesCompactionMetadata
 	if json.Unmarshal([]byte(metadataValue), &metadata) != nil {
 		return false
 	}
-
 	return metadata.RequestKind == "compaction" &&
 		metadata.Compaction.Implementation == string(RawResponsesCompactionV2) &&
 		metadata.Compaction.Phase == "mid_turn" &&
@@ -212,9 +181,7 @@ func rawResponsesCompactionV2SessionID(request RawResponsesRequest) (string, boo
 	if json.Unmarshal([]byte(request.Header.Get(CodexTurnMetadataHeader)), &metadata) != nil {
 		return "", false
 	}
-
 	sessionID := strings.TrimSpace(metadata.SessionID)
-
 	return sessionID, sessionID != ""
 }
 
@@ -222,23 +189,18 @@ func rawResponsesCompactionV2TriggerIndex(
 	items []transcript.CompactedContextItem,
 ) (int, bool) {
 	triggerIndex := -1
-
 	for itemIndex, item := range items {
 		if item.Kind != transcript.CompactedContextItemKindCompactionTrigger {
 			continue
 		}
-
 		if triggerIndex >= 0 {
 			return 0, false
 		}
-
 		triggerIndex = itemIndex
 	}
-
 	if triggerIndex < 0 || triggerIndex != len(items)-1 {
 		return 0, false
 	}
-
 	return triggerIndex, true
 }
 
@@ -251,7 +213,6 @@ func rawResponsesCompactionV2TranscriptStart(
 			return itemIndex, true
 		}
 	}
-
 	return 0, false
 }
 
@@ -264,6 +225,5 @@ func rawResponsesCompactionV2TranscriptIsKnown(
 			return false
 		}
 	}
-
 	return true
 }

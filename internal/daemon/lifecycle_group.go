@@ -38,7 +38,6 @@ func resolveReloadQuietWait() time.Duration {
 			return parsed
 		}
 	}
-
 	return defaultReloadQuietWait
 }
 
@@ -56,10 +55,8 @@ func awaitDaemonQuiet(ctx context.Context, group *livetrack.Group) bool {
 	if group == nil {
 		return true
 	}
-
 	waitCtx, cancel := context.WithTimeout(ctx, reloadQuietWait)
 	defer cancel()
-
 	return group.AwaitQuiet(waitCtx, budgetReload.IdleGrace)
 }
 
@@ -77,22 +74,13 @@ func (r *runtimeServices) addAdapterLifecycleHooks(server *adapter.Server) {
 	if r.group == nil || server == nil {
 		return
 	}
-
-	r.group.AddHookBefore(
-		livetrack.PhaseIngress,
-		"adapter.keepalives_off",
-		func(context.Context) error {
-			server.DisableKeepAlives()
-			return nil
-		},
-	)
-	r.group.AddHookBefore(
-		livetrack.PhaseEgress,
-		"adapter.http_shutdown",
-		func(ctx context.Context) error {
-			return server.ShutdownHTTP(ctx)
-		},
-	)
+	r.group.AddHookBefore(livetrack.PhaseIngress, "adapter.keepalives_off", func(context.Context) error {
+		server.DisableKeepAlives()
+		return nil
+	})
+	r.group.AddHookBefore(livetrack.PhaseEgress, "adapter.http_shutdown", func(ctx context.Context) error {
+		return server.ShutdownHTTP(ctx)
+	})
 }
 
 // addMITMLifecycleHook registers one MITM proxy's HTTP server shutdown as a
@@ -102,28 +90,15 @@ func (r *runtimeServices) addMITMLifecycleHook(id string, proxy *mitm.Proxy) {
 	if r.group == nil || proxy == nil {
 		return
 	}
-
-	r.group.AddHookBefore(
-		livetrack.PhaseIngress,
-		"mitm.http_shutdown."+id,
-		func(ctx context.Context) error {
-			return proxy.ShutdownHTTP(ctx)
-		},
-	)
-	r.group.AddHookBefore(
-		livetrack.PhaseIngress,
-		"mitm.quic_shutdown."+id,
-		func(ctx context.Context) error {
-			return proxy.ShutdownQUIC(ctx)
-		},
-	)
-	r.group.AddHook(
-		livetrack.PhaseIngress,
-		"mitm.quic_transport_close."+id,
-		func(context.Context) error {
-			return proxy.CloseQUICTransport()
-		},
-	)
+	r.group.AddHookBefore(livetrack.PhaseIngress, "mitm.http_shutdown."+id, func(ctx context.Context) error {
+		return proxy.ShutdownHTTP(ctx)
+	})
+	r.group.AddHookBefore(livetrack.PhaseIngress, "mitm.quic_shutdown."+id, func(ctx context.Context) error {
+		return proxy.ShutdownQUIC(ctx)
+	})
+	r.group.AddHook(livetrack.PhaseIngress, "mitm.quic_transport_close."+id, func(context.Context) error {
+		return proxy.CloseQUICTransport()
+	})
 }
 
 // addCaptureStoreCloseHook registers the shared capture store's close as a
@@ -133,12 +108,7 @@ func (r *runtimeServices) addCaptureStoreCloseHook(store *capture.Store) {
 	if r.group == nil || store == nil {
 		return
 	}
-
-	r.group.AddHook(
-		livetrack.PhaseStorage,
-		"capture_store.close",
-		func(ctx context.Context) error {
-			return store.Close(ctx, storageHookReason)
-		},
-	)
+	r.group.AddHook(livetrack.PhaseStorage, "capture_store.close", func(ctx context.Context) error {
+		return store.Close(ctx, storageHookReason)
+	})
 }

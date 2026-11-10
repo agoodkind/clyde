@@ -17,32 +17,26 @@ import (
 func RenderCobra(reg *Registry, f *cli.Factory) []*cobra.Command {
 	commands := make([]*cobra.Command, 0, len(reg.ops)+len(reg.handwritten))
 	parents := map[*Group]*cobra.Command{}
-
-	for _, operation := range reg.ops {
-		if !operation.surfaceSet().CLI {
+	for _, op := range reg.ops {
+		if !op.surfaceSet().CLI {
 			continue
 		}
-
-		child := operation.cobraCommand(f)
-		groupRef := operation.group()
+		child := op.cobraCommand(f)
+		groupRef := op.group()
 		if groupRef == nil {
 			commands = append(commands, child)
 			continue
 		}
-
 		parent := ensureGroup(groupRef, parents, &commands)
 		parent.AddCommand(child)
 	}
-
 	for _, hand := range reg.handwritten {
 		if hand.Parent != nil {
 			ensureGroup(hand.Parent, parents, &commands).AddCommand(hand.Build(f))
 			continue
 		}
-
 		mergeOrAppendRoot(&commands, hand.Build(f))
 	}
-
 	return commands
 }
 
@@ -51,31 +45,22 @@ func mergeOrAppendRoot(roots *[]*cobra.Command, candidate *cobra.Command) {
 		if existing.Name() != candidate.Name() {
 			continue
 		}
-
 		for _, child := range existing.Commands() {
 			candidate.AddCommand(child)
 		}
-
 		(*roots)[index] = candidate
-
 		return
 	}
-
 	*roots = append(*roots, candidate)
 }
 
 // ensureGroup returns the cobra parent for one group, building the whole parent
 // chain on first use. A top-level group lands among roots; a nested group is
 // attached under its own parent, so a chain renders as nested commands.
-func ensureGroup(
-	group *Group,
-	parents map[*Group]*cobra.Command,
-	roots *[]*cobra.Command,
-) *cobra.Command {
+func ensureGroup(group *Group, parents map[*Group]*cobra.Command, roots *[]*cobra.Command) *cobra.Command {
 	if existing, ok := parents[group]; ok {
 		return existing
 	}
-
 	cmd := &cobra.Command{
 		Use:     group.Use,
 		Short:   group.Short,
@@ -92,7 +77,6 @@ func ensureGroup(
 	} else {
 		ensureGroup(group.Parent, parents, roots).AddCommand(cmd)
 	}
-
 	return cmd
 }
 
@@ -105,13 +89,12 @@ func RenderMCP(reg *Registry, mcpServer *server.MCPServer) {
 	}
 }
 
-func renderMCPTools(operation renderable, mcpServer *server.MCPServer) {
-	if operation.surfaceSet().MCP {
-		tool, handler := operation.mcpTool()
+func renderMCPTools(op renderable, mcpServer *server.MCPServer) {
+	if op.surfaceSet().MCP {
+		tool, handler := op.mcpTool()
 		mcpServer.AddTool(tool, handler)
 	}
-
-	for _, child := range operation.children() {
+	for _, child := range op.children() {
 		renderMCPTools(child, mcpServer)
 	}
 }

@@ -38,10 +38,7 @@ func SanitizeForUpstreamCache(text string) string {
 // (Anthropic, or unknown for pre-upgrade transcripts) cannot reproduce a
 // Codex Reasoning input item. The body is injected into the assistant
 // message text instead so the prior reasoning stays in context.
-func SanitizeForUpstreamCacheWithStrategy(
-	text string,
-	strategy adapterrender.MaterializationStrategy,
-) string {
+func SanitizeForUpstreamCacheWithStrategy(text string, strategy adapterrender.MaterializationStrategy) string {
 	return sanitizeForUpstreamCacheWithEncryptedMode(text, strategy, RoundTripEncryptedRoundTrip)
 }
 
@@ -50,11 +47,7 @@ func sanitizeForUpstreamCacheWithRequestConfig(
 	strategy adapterrender.MaterializationStrategy,
 	cfg RequestBuilderConfig,
 ) string {
-	return sanitizeForUpstreamCacheWithEncryptedMode(
-		text,
-		strategy,
-		effectiveRoundTripEncrypted(cfg.RoundTripEncrypted),
-	)
+	return sanitizeForUpstreamCacheWithEncryptedMode(text, strategy, effectiveRoundTripEncrypted(cfg.RoundTripEncrypted))
 }
 
 func sanitizeForUpstreamCacheWithEncryptedMode(
@@ -66,9 +59,7 @@ func sanitizeForUpstreamCacheWithEncryptedMode(
 	if len(parts) == 1 && parts[0].Kind == adapterrender.SyntheticKindText {
 		return parts[0].Body
 	}
-
 	var b strings.Builder
-
 	for _, p := range parts {
 		switch p.Kind {
 		case adapterrender.SyntheticKindText:
@@ -80,7 +71,6 @@ func sanitizeForUpstreamCacheWithEncryptedMode(
 			// Codex upstream message body.
 		}
 	}
-
 	return b.String()
 }
 
@@ -101,7 +91,6 @@ func sanitizeReasoningPartForCodex(
 	if body == "" {
 		return ""
 	}
-
 	hasRef := strings.TrimSpace(part.Ref) != ""
 	if part.Origin == adapterrender.OriginCodex {
 		switch strategy {
@@ -113,25 +102,15 @@ func sanitizeReasoningPartForCodex(
 			if hasRef && codexReasoningEncryptedContent(part, encryptedMode) == "" {
 				return body
 			}
-
 			return ""
 		default:
 			return ""
 		}
 	}
-
-	codexConcernLog.Logger().Debug(
-		"adapter.codex.thinking.foreign_origin_injected",
-		"concern",
-		"adapter.providers.codex.request",
-		"subcomponent",
-		"codex_mapper",
-		"origin",
-		string(part.Origin),
-		"body_len",
-		len(body),
+	codexConcernLog.Logger().Debug("adapter.codex.thinking.foreign_origin_injected", "concern", "adapter.providers.codex.request", "subcomponent", "codex_mapper",
+		"origin", string(part.Origin),
+		"body_len", len(body),
 	)
-
 	return body
 }
 
@@ -139,7 +118,6 @@ func effectiveRoundTripEncrypted(encryptedMode RoundTripEncrypted) RoundTripEncr
 	if encryptedMode == "" {
 		return RoundTripEncryptedRoundTrip
 	}
-
 	return encryptedMode
 }
 
@@ -150,6 +128,5 @@ func codexReasoningEncryptedContent(
 	if effectiveRoundTripEncrypted(encryptedMode) != RoundTripEncryptedRoundTrip {
 		return ""
 	}
-
 	return strings.TrimSpace(part.Encrypted)
 }

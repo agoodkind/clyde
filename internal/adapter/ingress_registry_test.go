@@ -22,20 +22,13 @@ func newTestServer(t *testing.T) (*Server, *livetrack.Group) {
 	t.Helper()
 	cfg := baseConfig()
 	group := livetrack.NewGroup(livetrack.GroupOptions{Log: nil})
-	srv, err := New(
-		context.Background(),
-		cfg,
-		config.LoggingConfig{},
-		Deps{
-			ScratchDir: func() string { return t.TempDir() },
-			Group:      group,
-		},
-		slog.New(slog.NewTextHandler(io.Discard, nil)),
-	)
+	srv, err := New(context.Background(), cfg, config.LoggingConfig{}, Deps{
+		ScratchDir: func() string { return t.TempDir() },
+		Group:      group,
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-
 	return srv, group
 }
 
@@ -51,16 +44,12 @@ func TestIngressRegistryRegisterAndRelease(t *testing.T) {
 	release := make(chan struct{})
 
 	// Wire through s.handle so the ingress boundary runs.
-	handler := srv.handle(
-		adapterRouteOpenAI,
-		func(ctx context.Context, hctx *handlerCtx) error {
-			close(inFlight)
-			<-release
-			writeJSON(hctx.Writer, json.RawMessage(`{"ok":"true"}`))
-
-			return nil
-		},
-	)
+	handler := srv.handle(adapterRouteOpenAI, func(ctx context.Context, hctx *handlerCtx) error {
+		close(inFlight)
+		<-release
+		writeJSON(hctx.Writer, json.RawMessage(`{"ok":"true"}`))
+		return nil
+	})
 
 	if count := srv.requests.Count(); count != 0 {
 		t.Fatalf("initial count = %d, want 0", count)
@@ -110,22 +99,14 @@ func TestIngressRegistryDrainRejectsNewRequests(t *testing.T) {
 	// public drain entry point.
 	drainCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	group.Quiesce(
-		drainCtx,
-		"test.drain",
-		livetrack.Budget{Cap: 50 * time.Millisecond, IdleGrace: 0},
-	)
+	group.Quiesce(drainCtx, "test.drain", livetrack.Budget{Cap: 50 * time.Millisecond, IdleGrace: 0})
 
 	handlerCalled := false
-	handler := srv.handle(
-		adapterRouteOpenAI,
-		func(_ context.Context, hctx *handlerCtx) error {
-			handlerCalled = true
-			writeJSON(hctx.Writer, json.RawMessage(`{"ok":"true"}`))
-
-			return nil
-		},
-	)
+	handler := srv.handle(adapterRouteOpenAI, func(_ context.Context, hctx *handlerCtx) error {
+		handlerCalled = true
+		writeJSON(hctx.Writer, json.RawMessage(`{"ok":"true"}`))
+		return nil
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	rec := httptest.NewRecorder()
@@ -134,7 +115,6 @@ func TestIngressRegistryDrainRejectsNewRequests(t *testing.T) {
 	if handlerCalled {
 		t.Fatal("handler should not have been called while registry is draining")
 	}
-
 	if rec.Code == http.StatusOK {
 		t.Fatalf("status = %d, want non-2xx when draining", rec.Code)
 	}
@@ -151,15 +131,11 @@ func TestIngressRegistryForceCloseOnDeadline(t *testing.T) {
 	inFlight := make(chan struct{}, 1)
 	release := make(chan struct{})
 
-	handler := srv.handle(
-		adapterRouteOpenAI,
-		func(ctx context.Context, hctx *handlerCtx) error {
-			inFlight <- struct{}{}
-			<-release
-
-			return nil
-		},
-	)
+	handler := srv.handle(adapterRouteOpenAI, func(ctx context.Context, hctx *handlerCtx) error {
+		inFlight <- struct{}{}
+		<-release
+		return nil
+	})
 
 	reqDone := make(chan struct{})
 	go func() {
@@ -182,11 +158,7 @@ func TestIngressRegistryForceCloseOnDeadline(t *testing.T) {
 	// Quiesce waits the short cap then force-closes the still-active session
 	// (the closer cancels the handler context) and removes it from the
 	// registry, so the count drops to 0.
-	group.Quiesce(
-		context.Background(),
-		"test.force_close",
-		livetrack.Budget{Cap: 200 * time.Millisecond, IdleGrace: 0},
-	)
+	group.Quiesce(context.Background(), "test.force_close", livetrack.Budget{Cap: 200 * time.Millisecond, IdleGrace: 0})
 	close(release)
 
 	if count := srv.requests.Count(); count != 0 {
@@ -218,19 +190,15 @@ func TestIngressRegistryConnContextInjectsCloser(t *testing.T) {
 
 	blockStarted := make(chan struct{})
 	released := make(chan struct{})
-	srv.mux.HandleFunc(
-		"/test/closer-check",
-		func(w http.ResponseWriter, r *http.Request) {
-			// Verify the conn is present in the context via ingressConnKey.
-			if conn, ok := r.Context().Value(ingressConnKey{}).(net.Conn); !ok || conn == nil {
-				t.Errorf("ingressConnKey not present in request context on real TCP conn")
-			}
-
-			close(blockStarted)
-			<-released
-			w.WriteHeader(http.StatusOK)
-		},
-	)
+	srv.mux.HandleFunc("/test/closer-check", func(w http.ResponseWriter, r *http.Request) {
+		// Verify the conn is present in the context via ingressConnKey.
+		if conn, ok := r.Context().Value(ingressConnKey{}).(net.Conn); !ok || conn == nil {
+			t.Errorf("ingressConnKey not present in request context on real TCP conn")
+		}
+		close(blockStarted)
+		<-released
+		w.WriteHeader(http.StatusOK)
+	})
 
 	srvDone := make(chan error, 1)
 	go func() {
@@ -243,12 +211,9 @@ func TestIngressRegistryConnContextInjectsCloser(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		if _, err := conn.Write(
-			[]byte("GET /test/closer-check HTTP/1.1\r\nHost: localhost\r\n\r\n"),
-		); err != nil {
+		if _, err := conn.Write([]byte("GET /test/closer-check HTTP/1.1\r\nHost: localhost\r\n\r\n")); err != nil {
 			return
 		}
-
 		buf := make([]byte, 64)
 		_, _ = conn.Read(buf)
 	}()
@@ -290,12 +255,10 @@ func TestIngressContextCancelCloserClose(t *testing.T) {
 	if err := c.Close("test"); err != nil {
 		t.Fatalf("contextCancelCloser.Close returned error: %v", err)
 	}
-
 	select {
 	case <-ctx.Done():
 	case <-time.After(time.Second):
 		t.Fatal("contextCancelCloser.Close did not cancel context")
 	}
-
 	cancel()
 }

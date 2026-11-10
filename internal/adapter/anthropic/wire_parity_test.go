@@ -27,18 +27,12 @@ func TestOutboundHeadersMatchClaudeCLIInteractiveFlavor(t *testing.T) {
 	t.Parallel()
 
 	var captured atomic.Pointer[http.Header]
-	srv := httptest.NewServer(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			hdr := r.Header.Clone()
-			captured.Store(&hdr)
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write(
-				[]byte(
-					`{"id":"x","type":"message","role":"assistant","content":[],"model":"claude-test","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`,
-				),
-			)
-		}),
-	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hdr := r.Header.Clone()
+		captured.Store(&hdr)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"x","type":"message","role":"assistant","content":[],"model":"claude-test","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
 	t.Cleanup(srv.Close)
 
 	srvURL, err := url.Parse(srv.URL)
@@ -77,12 +71,10 @@ func TestOutboundHeadersMatchClaudeCLIInteractiveFlavor(t *testing.T) {
 	if got == nil {
 		t.Fatal("server did not capture any request")
 	}
-
 	loaded, err := cli.flavorLoader.Load(context.Background(), baselineStore)
 	if err != nil {
 		t.Fatalf("load baseline flavors: %v", err)
 	}
-
 	flavor, err := selectInteractiveFlavor(loaded, req.FeatureVector)
 	if err != nil {
 		t.Fatalf("selectInteractiveFlavor: %v", err)
@@ -91,11 +83,9 @@ func TestOutboundHeadersMatchClaudeCLIInteractiveFlavor(t *testing.T) {
 	if v := got.Get("User-Agent"); v != flavor.UserAgent {
 		t.Errorf("User-Agent = %q, want %q", v, flavor.UserAgent)
 	}
-
 	if v := got.Get("anthropic-beta"); v != flavor.AnthropicBeta {
 		t.Errorf("anthropic-beta = %q, want %q", v, flavor.AnthropicBeta)
 	}
-
 	if v := got.Get("anthropic-version"); v != flavor.AnthropicVersion {
 		t.Errorf("anthropic-version = %q, want %q", v, flavor.AnthropicVersion)
 	}
@@ -110,10 +100,8 @@ func TestOutboundHeadersMatchClaudeCLIInteractiveFlavor(t *testing.T) {
 			if got.Get(h.Name) == "" {
 				t.Errorf("%s missing on outbound", h.Name)
 			}
-
 			continue
 		}
-
 		if v := got.Get(h.Name); v != want {
 			t.Errorf("%s = %q, want %q (from WireFlavor.StaticHeaders)", h.Name, v, want)
 		}
@@ -138,11 +126,9 @@ func TestFeatureAwareFlavorSelectionMatchesModelBeforeFlags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("selectInteractiveFlavor: %v", err)
 	}
-
 	if flavor.Slug != testSonnetFlavorSlug {
 		t.Fatalf("selected slug = %q, want %q", flavor.Slug, testSonnetFlavorSlug)
 	}
-
 	if flavor.Slug == testFableStandardFlavorSlug || flavor.Slug == testFable1MFlavorSlug {
 		t.Fatalf("sonnet request selected fable flavor %q", flavor.Slug)
 	}
@@ -167,16 +153,10 @@ func TestOutboundBetaHeaderStripsConfiguredWireFlags(t *testing.T) {
 			StripWireFlags:        []string{"strip-me-a", "strip-me-b"},
 		},
 	}
-	httpReq, err := http.NewRequestWithContext(
-		context.Background(),
-		http.MethodPost,
-		cli.cfg.MessagesURL,
-		http.NoBody,
-	)
+	httpReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost, cli.cfg.MessagesURL, http.NoBody)
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	flavor := WireFlavor{
 		Slug:             "test-wire-flag-strip",
 		UserAgent:        "claude-cli/2.1.123 (external, sdk-cli)",
@@ -201,18 +181,12 @@ func TestOutboundHeadersAllowNonBetaConfigOverride(t *testing.T) {
 	t.Parallel()
 
 	var captured atomic.Pointer[http.Header]
-	srv := httptest.NewServer(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			hdr := r.Header.Clone()
-			captured.Store(&hdr)
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write(
-				[]byte(
-					`{"id":"x","type":"message","role":"assistant","content":[],"model":"claude-test","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`,
-				),
-			)
-		}),
-	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hdr := r.Header.Clone()
+		captured.Store(&hdr)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"x","type":"message","role":"assistant","content":[],"model":"claude-test","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
 	t.Cleanup(srv.Close)
 
 	srvURL, err := url.Parse(srv.URL)
@@ -252,7 +226,6 @@ func TestOutboundHeadersAllowNonBetaConfigOverride(t *testing.T) {
 	if got == nil {
 		t.Fatal("server did not capture any request")
 	}
-
 	wants := map[string]string{
 		"User-Agent":                  "override-cli/9.9.9 (test)",
 		"X-Stainless-Package-Version": "override-pkg",
@@ -264,7 +237,6 @@ func TestOutboundHeadersAllowNonBetaConfigOverride(t *testing.T) {
 			t.Errorf("%s = %q, want %q", name, v, want)
 		}
 	}
-
 	if v := got.Get("anthropic-beta"); v != testStandardBetaHeader {
 		t.Errorf("anthropic-beta = %q, want selected flavor beta %q", v, testStandardBetaHeader)
 	}

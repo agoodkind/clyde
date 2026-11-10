@@ -24,7 +24,6 @@ func newDeclaredCustomTools(tools []adapteropenai.Tool) declaredCustomTools {
 		if name == "" {
 			continue
 		}
-
 		if !adapteropenai.ToolIsCustom(tool) {
 			// A name declared as a function tool is never replayed as a
 			// custom call, even when a same-named custom declaration also
@@ -34,12 +33,10 @@ func newDeclaredCustomTools(tools []adapteropenai.Tool) declaredCustomTools {
 			names[name] = false
 			continue
 		}
-
 		if _, seen := names[name]; !seen {
 			names[name] = true
 		}
 	}
-
 	return names
 }
 
@@ -48,7 +45,6 @@ func (d declaredCustomTools) has(name string) bool {
 	if len(d) == 0 {
 		return false
 	}
-
 	return d[strings.TrimSpace(name)]
 }
 
@@ -62,7 +58,6 @@ func toolSpecs(req adapteropenai.ChatRequest) []codexwire.ToolSpec {
 	if len(tools) == 0 {
 		return nil
 	}
-
 	out := make([]codexwire.ToolSpec, 0, len(tools))
 	for _, tool := range tools {
 		// The tool name passes through verbatim: it is opaque
@@ -75,18 +70,8 @@ func toolSpecs(req adapteropenai.ChatRequest) []codexwire.ToolSpec {
 			out = append(out, CustomToolSpec(name, tool.Function.Description, format))
 			continue
 		}
-
-		out = append(
-			out,
-			FunctionToolSpec(
-				name,
-				tool.Function.Description,
-				tool.Function.Parameters,
-				tool.Function.Strict,
-			),
-		)
+		out = append(out, FunctionToolSpec(name, tool.Function.Description, tool.Function.Parameters, tool.Function.Strict))
 	}
-
 	return out
 }
 
@@ -97,7 +82,6 @@ func codexToolFormat(format *adapteropenai.ToolGrammarFormat) *codexwire.ToolFor
 	if format == nil {
 		return nil
 	}
-
 	out := &codexwire.ToolFormat{Type: codexwire.ToolFormatTypeText, Syntax: "", Definition: ""}
 	switch format.Type {
 	case adapteropenai.ToolGrammarFormatGrammar:
@@ -111,7 +95,6 @@ func codexToolFormat(format *adapteropenai.ToolGrammarFormat) *codexwire.ToolFor
 		// rather than forwarding a value the upstream may reject.
 		out.Type = codexwire.ToolFormatTypeText
 	}
-
 	return out
 }
 
@@ -127,29 +110,18 @@ func logUnconstrainedCustomTool(name string, format *codexwire.ToolFormat) {
 	if hasDefinition {
 		return
 	}
-
 	formatType := ""
 	if format != nil {
 		formatType = string(format.Type)
 	}
-
-	slog.Warn(
-		"adapter.codex.custom_tool_unconstrained",
-		"concern",
-		"adapter.chat.dispatch",
-		"component",
-		"adapter",
-		"subcomponent",
-		"codex",
-		"tool_name",
-		name,
-		"declared_type",
-		string(codexwire.ToolSpecTypeCustom),
-		"format_type",
-		formatType,
-		"has_format",
-		format != nil,
-		"has_definition",
-		hasDefinition,
+	slog.Warn("adapter.codex.custom_tool_unconstrained",
+		"concern", "adapter.chat.dispatch",
+		"component", "adapter",
+		"subcomponent", "codex",
+		"tool_name", name,
+		"declared_type", string(codexwire.ToolSpecTypeCustom),
+		"format_type", formatType,
+		"has_format", format != nil,
+		"has_definition", hasDefinition,
 	)
 }

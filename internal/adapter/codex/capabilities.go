@@ -19,21 +19,16 @@ type CapabilityReport struct {
 }
 
 // CapabilityReportForModel is part of Clyde's typed adapter surface.
-func CapabilityReportForModel(
-	model adaptermodel.ResolvedAlias,
-	mode CapabilityMode,
-) CapabilityReport {
+func CapabilityReportForModel(model adaptermodel.ResolvedAlias, mode CapabilityMode) CapabilityReport {
 	advertised := model.Context
 	transport := config.AdapterModelTransportCodexHTTP
 	if mode.WebsocketEnabled {
 		transport = config.AdapterModelTransportCodexWebsocket
 	}
-
 	effective := advertised
 	if limit := model.TransportLimits[transport]; limit > 0 {
 		effective = limit
 	}
-
 	return CapabilityReport{
 		AdvertisedContextWindow: advertised,
 		ObservedContextWindow:   effective,
@@ -42,10 +37,7 @@ func CapabilityReportForModel(
 }
 
 // ApplyCapabilityReport is part of Clyde's typed adapter surface.
-func ApplyCapabilityReport(
-	entry adapteropenai.ModelEntry,
-	report CapabilityReport,
-) adapteropenai.ModelEntry {
+func ApplyCapabilityReport(entry adapteropenai.ModelEntry, report CapabilityReport) adapteropenai.ModelEntry {
 	entry.Context = report.ObservedContextWindow
 	entry.ContextWindow = report.ObservedContextWindow
 	entry.ContextLength = report.ObservedContextWindow
@@ -59,6 +51,5 @@ func ApplyCapabilityReport(
 	entry.ContextTokenLimitCamel = report.EffectiveSafeWindow
 	entry.ContextTokenLimitForMaxMode = report.EffectiveSafeWindow
 	entry.ContextTokenLimitForMaxModeCamel = report.EffectiveSafeWindow
-
 	return entry
 }

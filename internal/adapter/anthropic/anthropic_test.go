@@ -39,26 +39,21 @@ func (t *rewriteMessagesHost) RoundTrip(req *http.Request) (*http.Response, erro
 		if t.inner == nil {
 			t.inner = http.DefaultTransport
 		}
-
 		cloned := req.Clone(req.Context())
 		dest := *t.serverURL
 		dest.Path = "/v1/messages"
 		dest.RawPath = ""
 		cloned.URL = &dest
-
 		return t.inner.RoundTrip(cloned)
 	}
-
 	if t.inner == nil {
 		t.inner = http.DefaultTransport
 	}
-
 	return t.inner.RoundTrip(req)
 }
 
 func TestMessageMarshalJSON(t *testing.T) {
 	t.Parallel()
-
 	tests := []struct {
 		name string
 		msg  Message
@@ -78,30 +73,23 @@ func TestMessageMarshalJSON(t *testing.T) {
 				Role: "user",
 				Content: []ContentBlock{
 					{Type: "text", Text: "see"},
-					{
-						Type:   "image",
-						Source: &ImageSource{Type: "url", URL: "https://example.com/x.png"},
-					},
+					{Type: "image", Source: &ImageSource{Type: "url", URL: "https://example.com/x.png"}},
 				},
 			},
 			want: `{"role":"user","content":[{"type":"text","text":"see"},{"type":"image","source":{"type":"url","url":"https://example.com/x.png"}}]}`,
 		},
 	}
 	for _, tt := range tests {
-		t.Run(
-			tt.name,
-			func(t *testing.T) {
-				t.Parallel()
-				got, err := json.Marshal(tt.msg)
-				if err != nil {
-					t.Fatalf("marshal: %v", err)
-				}
-
-				if string(got) != tt.want {
-					t.Fatalf("got %s want %s", got, tt.want)
-				}
-			},
-		)
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := json.Marshal(tt.msg)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			if string(got) != tt.want {
+				t.Fatalf("got %s want %s", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -109,19 +97,16 @@ func TestMessageMarshalJSONWithCacheControlStaysArray(t *testing.T) {
 	t.Parallel()
 	msg := Message{
 		Role: "user",
-		Content: []ContentBlock{
-			{
-				Type:         "text",
-				Text:         "hello",
-				CacheControl: &CacheControl{Type: "ephemeral"},
-			},
-		},
+		Content: []ContentBlock{{
+			Type:         "text",
+			Text:         "hello",
+			CacheControl: &CacheControl{Type: "ephemeral"},
+		}},
 	}
 	raw, err := json.Marshal(msg)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-
 	want := `{"role":"user","content":[{"type":"text","text":"hello","cache_control":{"type":"ephemeral"}}]}`
 	if string(raw) != want {
 		t.Fatalf("got %s want %s", raw, want)
@@ -152,9 +137,7 @@ func TestRequestMarshalToolsAndToolChoice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-
 	s := string(raw)
-
 	keys := []string{
 		`"tools"`,
 		`"tool_choice"`,
@@ -176,29 +159,22 @@ func TestRequestMarshalToolsAndToolChoice(t *testing.T) {
 // user-facing rate-limit error message.
 func TestStreamEvents_429InvokesOnHeaders(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("anthropic-ratelimit-unified-status", "rejected")
-			w.Header().Set("anthropic-ratelimit-unified-overage-status", "allowed")
-			w.Header().Set("anthropic-ratelimit-unified-representative-claim", "five_hour")
-			w.Header().Set("anthropic-ratelimit-unified-overage-reset", "9999999999")
-			w.Header().Set("anthropic-ratelimit-unified-reset", "9999999999")
-			w.Header().Set("retry-after", "60")
-			w.WriteHeader(http.StatusTooManyRequests)
-			_, _ = w.Write(
-				[]byte(
-					`{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}`,
-				),
-			)
-		}),
-	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("anthropic-ratelimit-unified-status", "rejected")
+		w.Header().Set("anthropic-ratelimit-unified-overage-status", "allowed")
+		w.Header().Set("anthropic-ratelimit-unified-representative-claim", "five_hour")
+		w.Header().Set("anthropic-ratelimit-unified-overage-reset", "9999999999")
+		w.Header().Set("anthropic-ratelimit-unified-reset", "9999999999")
+		w.Header().Set("retry-after", "60")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}`))
+	}))
 	t.Cleanup(srv.Close)
 
 	srvURL, err := url.Parse(srv.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	hc := &http.Client{Transport: &rewriteMessagesHost{serverURL: srvURL}}
 	cli := &Client{
 		http:         hc,
@@ -216,26 +192,18 @@ func TestStreamEvents_429InvokesOnHeaders(t *testing.T) {
 	}
 
 	var observed http.Header
-	_, _, err = cli.StreamEvents(
-		context.Background(),
-		Request{
-			Model: "claude-test",
-			Messages: []Message{
-				{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}},
-			},
-			MaxTokens: 10,
-			OnHeaders: func(h http.Header) { observed = h },
-		},
-		func(StreamEvent) error { return nil },
-	)
+	_, _, err = cli.StreamEvents(context.Background(), Request{
+		Model:     "claude-test",
+		Messages:  []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}}},
+		MaxTokens: 10,
+		OnHeaders: func(h http.Header) { observed = h },
+	}, func(StreamEvent) error { return nil })
 	if err == nil {
 		t.Fatalf("StreamEvents returned nil error on 429; want one")
 	}
-
 	if !strings.Contains(err.Error(), "anthropic 429") {
 		t.Fatalf("err = %q; want anthropic 429 prefix", err.Error())
 	}
-
 	// The 429 error must surface as a typed UpstreamError so downstream
 	// callers can route on the classification rather than re-parsing the
 	// error string.
@@ -243,23 +211,18 @@ func TestStreamEvents_429InvokesOnHeaders(t *testing.T) {
 	if !ok {
 		t.Fatalf("err must be *UpstreamError; got %T (%v)", err, err)
 	}
-
 	if ue.Class() != ResponseClassRetryableError {
 		t.Fatalf("UpstreamError.Class() = %s; want retryable", ue.Class())
 	}
-
 	if !ue.Retryable() {
 		t.Fatalf("UpstreamError.Retryable() must be true on 429")
 	}
-
 	if ue.Status != http.StatusTooManyRequests {
 		t.Fatalf("UpstreamError.Status = %d; want %d", ue.Status, http.StatusTooManyRequests)
 	}
-
 	if observed == nil {
 		t.Fatalf("OnHeaders was not invoked on 429 response")
 	}
-
 	if got := observed.Get("anthropic-ratelimit-unified-status"); got != "rejected" {
 		t.Fatalf("OnHeaders received status=%q; want rejected", got)
 	}
@@ -273,12 +236,10 @@ func TestStreamEvents_429InvokesOnHeaders(t *testing.T) {
 func TestStreamEvents_UpstreamErrorKeepsBodyOutOfLogButInClientMessage(t *testing.T) {
 	const sentinel = "anthropic-error-body-sentinel-9a1b"
 	upstreamBody := `{"type":"error","error":{"type":"api_error","message":"` + sentinel + `"}}`
-	srv := httptest.NewServer(
-		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusInternalServerError)
-			_, _ = io.WriteString(w, upstreamBody)
-		}),
-	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, upstreamBody)
+	}))
 	t.Cleanup(srv.Close)
 
 	logPath := filepath.Join(t.TempDir(), "anthropic.jsonl")
@@ -289,7 +250,6 @@ func TestStreamEvents_UpstreamErrorKeepsBodyOutOfLogButInClientMessage(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	hc := &http.Client{Transport: &rewriteMessagesHost{serverURL: srvURL}}
 	cli := &Client{
 		http:         hc,
@@ -306,26 +266,18 @@ func TestStreamEvents_UpstreamErrorKeepsBodyOutOfLogButInClientMessage(t *testin
 		},
 	}
 
-	_, _, err = cli.StreamEvents(
-		context.Background(),
-		Request{
-			Model: "claude-test",
-			Messages: []Message{
-				{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}},
-			},
-			MaxTokens: 10,
-		},
-		func(StreamEvent) error { return nil },
-	)
+	_, _, err = cli.StreamEvents(context.Background(), Request{
+		Model:     "claude-test",
+		Messages:  []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}}},
+		MaxTokens: 10,
+	}, func(StreamEvent) error { return nil })
 	if err == nil {
 		t.Fatalf("StreamEvents returned nil error on 500; want one")
 	}
-
 	ue, ok := AsUpstreamError(err)
 	if !ok {
 		t.Fatalf("err must be *UpstreamError; got %T (%v)", err, err)
 	}
-
 	if !strings.Contains(ue.Message, sentinel) {
 		t.Fatalf("client-facing message must carry upstream body text; got %q", ue.Message)
 	}
@@ -336,21 +288,17 @@ func TestStreamEvents_UpstreamErrorKeepsBodyOutOfLogButInClientMessage(t *testin
 			t.Fatalf("close anthropic logger: %v", err)
 		}
 	}
-
 	logBytes, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatalf("read anthropic log: %v", err)
 	}
-
 	logText := string(logBytes)
 	if !strings.Contains(logText, "anthropic.messages.upstream_error") {
 		t.Fatalf("missing upstream_error event in anthropic log: %s", logText)
 	}
-
 	if strings.Contains(logText, sentinel) {
 		t.Fatalf("error body leaked into anthropic log: %s", logText)
 	}
-
 	if strings.Contains(logText, `"body":`) {
 		t.Fatalf("anthropic log carries a body field: %s", logText)
 	}
@@ -364,30 +312,26 @@ func TestDoUsesIdentityEncodingForStreams(t *testing.T) {
 	var nonStreamEncoding string
 	var nonStreamSeen bool
 
-	srv := httptest.NewServer(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			var payload struct {
-				Stream bool `json:"stream"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-
-			if payload.Stream {
-				streamSeen = true
-				streamEncoding = r.Header.Get("Accept-Encoding")
-				w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
-			} else {
-				nonStreamSeen = true
-				nonStreamEncoding = r.Header.Get("Accept-Encoding")
-				w.Header().Set("Content-Type", "application/json")
-			}
-
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{}`))
-		}),
-	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Stream bool `json:"stream"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if payload.Stream {
+			streamSeen = true
+			streamEncoding = r.Header.Get("Accept-Encoding")
+			w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		} else {
+			nonStreamSeen = true
+			nonStreamEncoding = r.Header.Get("Accept-Encoding")
+			w.Header().Set("Content-Type", "application/json")
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
 	t.Cleanup(srv.Close)
 
 	cli := &Client{
@@ -416,7 +360,6 @@ func TestDoUsesIdentityEncodingForStreams(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stream do: %v", err)
 	}
-
 	_ = resp.Body.Close()
 
 	nonStreamReq := req
@@ -425,21 +368,14 @@ func TestDoUsesIdentityEncodingForStreams(t *testing.T) {
 	if err != nil {
 		t.Fatalf("non-stream do: %v", err)
 	}
-
 	_ = resp.Body.Close()
 
 	if !streamSeen || !nonStreamSeen {
-		t.Fatalf(
-			"server did not see both requests: stream=%v non_stream=%v",
-			streamSeen,
-			nonStreamSeen,
-		)
+		t.Fatalf("server did not see both requests: stream=%v non_stream=%v", streamSeen, nonStreamSeen)
 	}
-
 	if streamEncoding != "identity" {
 		t.Fatalf("stream Accept-Encoding = %q; want identity", streamEncoding)
 	}
-
 	if nonStreamEncoding != "gzip, deflate, br, zstd" {
 		t.Fatalf("non-stream Accept-Encoding = %q; want compressed encodings", nonStreamEncoding)
 	}
@@ -455,7 +391,6 @@ func TestStreamEvents_fixtureSSE(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	cbStart, err := json.Marshal(map[string]any{
 		"index": 0,
 		"content_block": map[string]any{
@@ -468,7 +403,6 @@ func TestStreamEvents_fixtureSSE(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	cbDelta, err := json.Marshal(map[string]any{
 		"index": 0,
 		"delta": map[string]any{
@@ -479,12 +413,10 @@ func TestStreamEvents_fixtureSSE(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	cbStop, err := json.Marshal(map[string]any{"index": 0})
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	msgDelta, err := json.Marshal(map[string]any{
 		"delta": map[string]any{"stop_reason": "tool_use"},
 		"usage": map[string]any{"output_tokens": 5},
@@ -493,49 +425,42 @@ func TestStreamEvents_fixtureSSE(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sse := strings.Join(
-		[]string{
-			"event: message_start",
-			"data: " + string(startPayload),
-			"",
-			"event: content_block_start",
-			"data: " + string(cbStart),
-			"",
-			"event: content_block_delta",
-			"data: " + string(cbDelta),
-			"",
-			"event: content_block_stop",
-			"data: " + string(cbStop),
-			"",
-			"event: message_delta",
-			"data: " + string(msgDelta),
-			"",
-			"event: message_stop",
-			"data: {}",
-			"",
-		},
-		"\n",
-	)
+	sse := strings.Join([]string{
+		"event: message_start",
+		"data: " + string(startPayload),
+		"",
+		"event: content_block_start",
+		"data: " + string(cbStart),
+		"",
+		"event: content_block_delta",
+		"data: " + string(cbDelta),
+		"",
+		"event: content_block_stop",
+		"data: " + string(cbStop),
+		"",
+		"event: message_delta",
+		"data: " + string(msgDelta),
+		"",
+		"event: message_stop",
+		"data: {}",
+		"",
+	}, "\n")
 
-	srv := httptest.NewServer(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPost || r.URL.Path != "/v1/messages" {
-				http.NotFound(w, r)
-				return
-			}
-
-			w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(sse))
-		}),
-	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/messages" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(sse))
+	}))
 	t.Cleanup(srv.Close)
 
 	srvURL, err := url.Parse(srv.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	hc := &http.Client{Transport: &rewriteMessagesHost{serverURL: srvURL}}
 	cli := &Client{
 		http:         hc,
@@ -557,28 +482,20 @@ func TestStreamEvents_fixtureSSE(t *testing.T) {
 	}
 
 	var got []StreamEvent
-	usage, stop, err := cli.StreamEvents(
-		context.Background(),
-		Request{
-			Model: "claude-test",
-			Messages: []Message{
-				{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}},
-			},
-			MaxTokens: 10,
-		},
-		func(ev StreamEvent) error {
-			got = append(got, ev)
-			return nil
-		},
-	)
+	usage, stop, err := cli.StreamEvents(context.Background(), Request{
+		Model:     "claude-test",
+		Messages:  []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}}},
+		MaxTokens: 10,
+	}, func(ev StreamEvent) error {
+		got = append(got, ev)
+		return nil
+	})
 	if err != nil {
 		t.Fatalf("StreamEvents: %v", err)
 	}
-
 	if stop != "tool_use" {
 		t.Fatalf("stop reason: got %q want tool_use", stop)
 	}
-
 	if usage.InputTokens != 1 || usage.OutputTokens != 5 {
 		t.Fatalf("usage: got %+v want input 1 output 5", usage)
 	}
@@ -592,7 +509,6 @@ func TestStreamEvents_fixtureSSE(t *testing.T) {
 	if len(got) != len(want) {
 		t.Fatalf("len got %d want %d: %#v", len(got), len(want), got)
 	}
-
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("event %d: got %#v want %#v", i, got[i], want[i])
@@ -615,7 +531,6 @@ func TestStreamEvents_fixtureSSEWithCacheUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	cbStart, err := json.Marshal(map[string]any{
 		"index": 0,
 		"content_block": map[string]any{
@@ -625,7 +540,6 @@ func TestStreamEvents_fixtureSSEWithCacheUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	cbDelta, err := json.Marshal(map[string]any{
 		"index": 0,
 		"delta": map[string]any{
@@ -636,12 +550,10 @@ func TestStreamEvents_fixtureSSEWithCacheUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	cbStop, err := json.Marshal(map[string]any{"index": 0})
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	msgDelta, err := json.Marshal(map[string]any{
 		"delta": map[string]any{"stop_reason": "end_turn"},
 		"usage": map[string]any{
@@ -654,50 +566,42 @@ func TestStreamEvents_fixtureSSEWithCacheUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sse := strings.Join([]string{
+		"event: message_start",
+		"data: " + string(startPayload),
+		"",
+		"event: content_block_start",
+		"data: " + string(cbStart),
+		"",
+		"event: content_block_delta",
+		"data: " + string(cbDelta),
+		"",
+		"event: content_block_stop",
+		"data: " + string(cbStop),
+		"",
+		"event: message_delta",
+		"data: " + string(msgDelta),
+		"",
+		"event: message_stop",
+		"data: {}",
+		"",
+	}, "\n")
 
-	sse := strings.Join(
-		[]string{
-			"event: message_start",
-			"data: " + string(startPayload),
-			"",
-			"event: content_block_start",
-			"data: " + string(cbStart),
-			"",
-			"event: content_block_delta",
-			"data: " + string(cbDelta),
-			"",
-			"event: content_block_stop",
-			"data: " + string(cbStop),
-			"",
-			"event: message_delta",
-			"data: " + string(msgDelta),
-			"",
-			"event: message_stop",
-			"data: {}",
-			"",
-		},
-		"\n",
-	)
-
-	srv := httptest.NewServer(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPost || r.URL.Path != "/v1/messages" {
-				http.NotFound(w, r)
-				return
-			}
-
-			w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(sse))
-		}),
-	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/messages" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(sse))
+	}))
 	t.Cleanup(srv.Close)
 
 	srvURL, err := url.Parse(srv.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	hc := &http.Client{Transport: &rewriteMessagesHost{serverURL: srvURL}}
 	cli := &Client{
 		http:         hc,
@@ -718,41 +622,29 @@ func TestStreamEvents_fixtureSSEWithCacheUsage(t *testing.T) {
 		},
 	}
 
-	usage, stop, err := cli.StreamEvents(
-		context.Background(),
-		Request{
-			Model: "claude-test",
-			Messages: []Message{
-				{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}},
-			},
-			MaxTokens: 10,
-		},
-		func(StreamEvent) error { return nil },
-	)
+	usage, stop, err := cli.StreamEvents(context.Background(), Request{
+		Model:     "claude-test",
+		Messages:  []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}}},
+		MaxTokens: 10,
+	}, func(StreamEvent) error { return nil })
 	if err != nil {
 		t.Fatalf("StreamEvents: %v", err)
 	}
-
 	if stop != "end_turn" {
 		t.Fatalf("stop reason: got %q want end_turn", stop)
 	}
-
 	if usage.InputTokens != 10 || usage.OutputTokens != 8 {
 		t.Fatalf("usage: got %+v want input 10 output 8", usage)
 	}
-
 	if usage.CacheCreationInputTokens != 640 {
 		t.Fatalf("cache_creation_input_tokens = %d want 640", usage.CacheCreationInputTokens)
 	}
-
 	if usage.CacheReadInputTokens != 3200 {
 		t.Fatalf("cache_read_input_tokens = %d want 3200", usage.CacheReadInputTokens)
 	}
-
 	if !usage.CacheCountsReported {
 		t.Fatal("cache counts reported = false, want true")
 	}
-
 	if usage.ThinkingTokens == nil || *usage.ThinkingTokens != 5 {
 		t.Fatalf("thinking tokens = %v, want 5", usage.ThinkingTokens)
 	}
@@ -777,7 +669,6 @@ func TestStreamEvents_egressCaptureDoesNotAbortScan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	cbStart, err := json.Marshal(map[string]any{
 		"index":         0,
 		"content_block": map[string]any{"type": "text"},
@@ -785,7 +676,6 @@ func TestStreamEvents_egressCaptureDoesNotAbortScan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	cbDelta, err := json.Marshal(map[string]any{
 		"index": 0,
 		"delta": map[string]any{"type": "text_delta", "text": "pong"},
@@ -793,12 +683,10 @@ func TestStreamEvents_egressCaptureDoesNotAbortScan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	cbStop, err := json.Marshal(map[string]any{"index": 0})
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	msgDelta, err := json.Marshal(map[string]any{
 		"delta": map[string]any{"stop_reason": "end_turn"},
 		"usage": map[string]any{"output_tokens": 4},
@@ -806,59 +694,46 @@ func TestStreamEvents_egressCaptureDoesNotAbortScan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sse := strings.Join([]string{
+		"event: message_start",
+		"data: " + string(startPayload),
+		"",
+		"event: content_block_start",
+		"data: " + string(cbStart),
+		"",
+		"event: content_block_delta",
+		"data: " + string(cbDelta),
+		"",
+		"event: content_block_stop",
+		"data: " + string(cbStop),
+		"",
+		"event: message_delta",
+		"data: " + string(msgDelta),
+		"",
+		"event: message_stop",
+		"data: {}",
+		"",
+	}, "\n")
 
-	sse := strings.Join(
-		[]string{
-			"event: message_start",
-			"data: " + string(startPayload),
-			"",
-			"event: content_block_start",
-			"data: " + string(cbStart),
-			"",
-			"event: content_block_delta",
-			"data: " + string(cbDelta),
-			"",
-			"event: content_block_stop",
-			"data: " + string(cbStop),
-			"",
-			"event: message_delta",
-			"data: " + string(msgDelta),
-			"",
-			"event: message_stop",
-			"data: {}",
-			"",
-		},
-		"\n",
-	)
-
-	srv := httptest.NewServer(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPost || r.URL.Path != "/v1/messages" {
-				http.NotFound(w, r)
-				return
-			}
-
-			w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(sse))
-		}),
-	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/messages" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(sse))
+	}))
 	t.Cleanup(srv.Close)
 
 	srvURL, err := url.Parse(srv.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	store, err := capture.Open(
-		context.Background(),
-		capture.Config{DBPath: filepath.Join(t.TempDir(), "capture.db")},
-		slog.New(slog.NewTextHandler(io.Discard, nil)),
-	)
+	store, err := capture.Open(context.Background(), capture.Config{DBPath: filepath.Join(t.TempDir(), "capture.db")}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("open capture store: %v", err)
 	}
-
 	t.Cleanup(func() { _ = store.Close(context.Background(), "test cleanup") })
 	seedBaselineIntoStore(t, store)
 	hc := &http.Client{Transport: &rewriteMessagesHost{serverURL: srvURL}}
@@ -882,32 +757,23 @@ func TestStreamEvents_egressCaptureDoesNotAbortScan(t *testing.T) {
 	}
 
 	var got []StreamEvent
-	usage, stop, err := cli.StreamEvents(
-		context.Background(),
-		Request{
-			Model: "claude-test",
-			Messages: []Message{
-				{Role: "user", Content: []ContentBlock{{Type: "text", Text: "ping"}}},
-			},
-			MaxTokens: 10,
-		},
-		func(ev StreamEvent) error {
-			got = append(got, ev)
-			return nil
-		},
-	)
+	usage, stop, err := cli.StreamEvents(context.Background(), Request{
+		Model:     "claude-test",
+		Messages:  []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "ping"}}}},
+		MaxTokens: 10,
+	}, func(ev StreamEvent) error {
+		got = append(got, ev)
+		return nil
+	})
 	if err != nil {
 		t.Fatalf("StreamEvents with egress capture returned error on healthy 200 stream: %v", err)
 	}
-
 	if stop != "end_turn" {
 		t.Fatalf("stop reason: got %q want end_turn", stop)
 	}
-
 	if usage.InputTokens != 3 || usage.OutputTokens != 4 {
 		t.Fatalf("usage: got %+v want input 3 output 4", usage)
 	}
-
 	if len(got) == 0 {
 		t.Fatalf("expected at least one stream event, got none")
 	}

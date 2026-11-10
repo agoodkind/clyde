@@ -40,10 +40,7 @@ func CollectMessage(events []Event) CollectedMessage {
 // CollectMessageWithNativePatchRepresentation collects a non-streaming
 // response while applying the Cursor route's selected native patch contract.
 // Ordinary function arguments keep their existing accumulation behavior.
-func CollectMessageWithNativePatchRepresentation(
-	events []Event,
-	representation NativePatchRepresentation,
-) CollectedMessage {
+func CollectMessageWithNativePatchRepresentation(events []Event, representation NativePatchRepresentation) CollectedMessage {
 	return collectMessage(events, representation)
 }
 
@@ -52,12 +49,7 @@ func collectMessage(events []Event, representation NativePatchRepresentation) Co
 	var text strings.Builder
 	var reasoning strings.Builder
 	toolCalls := make(map[int]*collectedToolCall)
-	reasoningState := collectedReasoningState{
-		lastKind:      "",
-		lastSummary:   0,
-		haveSummary:   false,
-		haveReasoning: false,
-	}
+	reasoningState := collectedReasoningState{lastKind: "", lastSummary: 0, haveSummary: false, haveReasoning: false}
 
 	for _, ev := range events {
 		switch e := ev.(type) {
@@ -75,19 +67,13 @@ func collectMessage(events []Event, representation NativePatchRepresentation) Co
 	out.Text = text.String()
 	out.Reasoning = reasoning.String()
 	out.ToolCalls = finalizeCollectedToolCalls(toolCalls, representation)
-
 	return out
 }
 
-func appendCollectedReasoning(
-	dst *strings.Builder,
-	ev ReasoningDelta,
-	state *collectedReasoningState,
-) {
+func appendCollectedReasoning(dst *strings.Builder, ev ReasoningDelta, state *collectedReasoningState) {
 	if dst == nil || state == nil {
 		return
 	}
-
 	if strings.TrimSpace(ev.Text) == "" && ev.Text == "" {
 		return
 	}
@@ -96,20 +82,16 @@ func appendCollectedReasoning(
 	if kind == "" {
 		kind = "text"
 	}
-
 	if state.haveReasoning && state.lastKind != kind {
 		dst.WriteString("\n\n")
 	}
-
 	if kind == "summary" && strings.HasPrefix(strings.TrimSpace(ev.Text), "**") {
 		dst.WriteString("\n\n")
 	}
-
 	if ev.SummaryIndex != nil {
 		if state.haveSummary && state.lastSummary != *ev.SummaryIndex {
 			dst.WriteString("\n\n")
 		}
-
 		state.lastSummary = *ev.SummaryIndex
 		state.haveSummary = true
 	}
@@ -123,43 +105,28 @@ func accumulateCollectedToolCalls(acc map[int]*collectedToolCall, delta ToolCall
 	for _, tc := range delta.ToolCalls {
 		slot := acc[tc.Index]
 		if slot == nil {
-			slot = &collectedToolCall{
-				id:               "",
-				typ:              "",
-				name:             "",
-				args:             "",
-				nativePatchInput: strings.Builder{},
-				hasNativePatch:   false,
-			}
+			slot = &collectedToolCall{id: "", typ: "", name: "", args: "", nativePatchInput: strings.Builder{}, hasNativePatch: false}
 			acc[tc.Index] = slot
 		}
-
 		if tc.ID != "" {
 			slot.id = tc.ID
 		}
-
 		if tc.Type != "" {
 			slot.typ = tc.Type
 		}
-
 		if tc.Function.Name != "" {
 			slot.name = tc.Function.Name
 		}
-
 		if delta.NativePatchInput == nil {
 			slot.args += tc.Function.Arguments
 			continue
 		}
-
 		slot.hasNativePatch = true
 		slot.nativePatchInput.WriteString(delta.NativePatchInput.Input)
 	}
 }
 
-func finalizeCollectedToolCalls(
-	acc map[int]*collectedToolCall,
-	representation NativePatchRepresentation,
-) []adapteropenai.ToolCall {
+func finalizeCollectedToolCalls(acc map[int]*collectedToolCall, representation NativePatchRepresentation) []adapteropenai.ToolCall {
 	if len(acc) == 0 {
 		return nil
 	}
@@ -168,7 +135,6 @@ func finalizeCollectedToolCalls(
 	for idx := range acc {
 		order = append(order, idx)
 	}
-
 	sort.Ints(order)
 
 	out := make([]adapteropenai.ToolCall, 0, len(order))
@@ -178,26 +144,20 @@ func finalizeCollectedToolCalls(
 		if callType == "" {
 			callType = "function"
 		}
-
 		arguments := slot.args
 		if slot.hasNativePatch {
 			arguments = renderCollectedNativePatch(slot.nativePatchInput.String(), representation)
 		}
-
-		out = append(
-			out,
-			adapteropenai.ToolCall{
-				Index: idx,
-				ID:    slot.id,
-				Type:  callType,
-				Function: adapteropenai.ToolCallFunction{
-					Name:      slot.name,
-					Arguments: arguments,
-				},
+		out = append(out, adapteropenai.ToolCall{
+			Index: idx,
+			ID:    slot.id,
+			Type:  callType,
+			Function: adapteropenai.ToolCallFunction{
+				Name:      slot.name,
+				Arguments: arguments,
 			},
-		)
+		})
 	}
-
 	return out
 }
 
@@ -205,11 +165,9 @@ func renderCollectedNativePatch(input string, representation NativePatchRepresen
 	if representation == NativePatchRepresentationRaw {
 		return input
 	}
-
 	encoded, err := json.Marshal(input)
 	if err != nil {
 		return ""
 	}
-
 	return `{"input":` + string(encoded) + `}`
 }

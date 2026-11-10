@@ -14,7 +14,6 @@ import "testing"
 // into the search corpus.
 func TestUnwrapUserEnvelopeEmptyQueryBody(t *testing.T) {
 	t.Parallel()
-
 	cases := []struct {
 		name  string
 		input string
@@ -52,21 +51,13 @@ func TestUnwrapUserEnvelopeEmptyQueryBody(t *testing.T) {
 		},
 	}
 	for _, testCase := range cases {
-		t.Run(
-			testCase.name,
-			func(t *testing.T) {
-				t.Parallel()
-				got, _ := UnwrapUserEnvelope(testCase.input)
-				if got != testCase.want {
-					t.Fatalf(
-						"UnwrapUserEnvelope(%q) = %q, want %q",
-						testCase.input,
-						got,
-						testCase.want,
-					)
-				}
-			},
-		)
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			got, _ := UnwrapUserEnvelope(testCase.input)
+			if got != testCase.want {
+				t.Fatalf("UnwrapUserEnvelope(%q) = %q, want %q", testCase.input, got, testCase.want)
+			}
+		})
 	}
 }
 
@@ -74,7 +65,6 @@ func TestUnwrapUserEnvelopeEmptyQueryBody(t *testing.T) {
 // one, so a fix for the inverted slice cannot quietly widen what it removes.
 func TestUnwrapUserEnvelopeKeepsTypedQuery(t *testing.T) {
 	t.Parallel()
-
 	cases := []struct {
 		name  string
 		input string
@@ -97,20 +87,12 @@ func TestUnwrapUserEnvelopeKeepsTypedQuery(t *testing.T) {
 		},
 	}
 	for _, testCase := range cases {
-		t.Run(
-			testCase.name,
-			func(t *testing.T) {
-				t.Parallel()
-				got, _ := UnwrapUserEnvelope(testCase.input)
-				if got != testCase.want {
-					t.Fatalf(
-						"UnwrapUserEnvelope(%q) = %q, want %q",
-						testCase.input,
-						got,
-						testCase.want,
-					)
-				}
-			},
-		)
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			got, _ := UnwrapUserEnvelope(testCase.input)
+			if got != testCase.want {
+				t.Fatalf("UnwrapUserEnvelope(%q) = %q, want %q", testCase.input, got, testCase.want)
+			}
+		})
 	}
 }

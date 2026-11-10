@@ -38,14 +38,12 @@ type syncBuffer struct {
 func (b *syncBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-
 	return b.buf.Write(p)
 }
 
 func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-
 	return b.buf.String()
 }
 
@@ -60,41 +58,32 @@ func TestProxyWebsocketCaptureRecordsFramesBothDirections(t *testing.T) {
 
 	// Spin up an upstream ws echo server.
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
-	upstream := httptest.NewServer(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			conn, err := upgrader.Upgrade(w, r, nil)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("upstream upgrade: %v", err)
+		}
+		defer conn.Close()
+		for {
+			mt, payload, err := conn.ReadMessage()
 			if err != nil {
-				t.Fatalf("upstream upgrade: %v", err)
+				return
 			}
-			defer conn.Close()
-
-			for {
-				mt, payload, err := conn.ReadMessage()
-				if err != nil {
-					return
-				}
-
-				reply := map[string]any{"echo": string(payload)}
-				raw, _ := json.Marshal(reply)
-				if err := conn.WriteMessage(mt, raw); err != nil {
-					return
-				}
+			reply := map[string]any{"echo": string(payload)}
+			raw, _ := json.Marshal(reply)
+			if err := conn.WriteMessage(mt, raw); err != nil {
+				return
 			}
-		}),
-	)
+		}
+	}))
 	defer upstream.Close()
 
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "capture.db")
-	store, err := capture.Open(
-		context.Background(),
-		capture.Config{DBPath: dbPath},
-		slog.New(slog.NewTextHandler(io.Discard, nil)),
-	)
+	store, err := capture.Open(context.Background(), capture.Config{DBPath: dbPath}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("open capture store: %v", err)
 	}
-
 	t.Cleanup(func() {
 		_ = store.Close(context.Background(), "test cleanup")
 	})
@@ -107,12 +96,10 @@ func TestProxyWebsocketCaptureRecordsFramesBothDirections(t *testing.T) {
 
 	// Start the proxy on a random port.
 	requestDone := make(chan struct{})
-	srv := httptest.NewServer(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			defer close(requestDone)
-			p.handle(w, r)
-		}),
-	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer close(requestDone)
+		p.handle(w, r)
+	}))
 	defer srv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/backend-api/codex/responses"
@@ -120,16 +107,10 @@ func TestProxyWebsocketCaptureRecordsFramesBothDirections(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse ws url: %v", err)
 	}
-
-	conn, resp, err := websocket.DefaultDialer.DialContext(
-		context.Background(),
-		parsed.String(),
-		nil,
-	)
+	conn, resp, err := websocket.DefaultDialer.DialContext(context.Background(), parsed.String(), nil)
 	if err != nil {
 		t.Fatalf("client dial: %v", err)
 	}
-
 	if resp != nil && resp.Body != nil {
 		defer resp.Body.Close()
 	}
@@ -138,16 +119,13 @@ func TestProxyWebsocketCaptureRecordsFramesBothDirections(t *testing.T) {
 	if err := conn.WriteMessage(websocket.TextMessage, requestFrame); err != nil {
 		t.Fatalf("write client frame: %v", err)
 	}
-
 	_, raw, err := conn.ReadMessage()
 	if err != nil {
 		t.Fatalf("read echo: %v", err)
 	}
-
 	if !strings.Contains(string(raw), `"echo"`) {
 		t.Fatalf("expected echo, got %s", string(raw))
 	}
-
 	_ = conn.Close()
 	waitForWebsocketHandler(t, requestDone)
 
@@ -156,32 +134,26 @@ func TestProxyWebsocketCaptureRecordsFramesBothDirections(t *testing.T) {
 	capturePath := mitmWireConcernTestPath(dir)
 	deadline := time.Now().Add(2 * time.Second)
 	var lines []string
-
 	for time.Now().Before(deadline) {
 		f, err := os.Open(capturePath)
 		if err != nil {
 			time.Sleep(20 * time.Millisecond)
 			continue
 		}
-
 		scanner := bufio.NewScanner(f)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		lines = lines[:0]
-
 		for scanner.Scan() {
 			lines = append(lines, scanner.Text())
 		}
-
 		if err := scanner.Err(); err != nil {
 			f.Close()
 			t.Fatalf("scan capture file: %v", err)
 		}
-
 		f.Close()
 		if hasWSEvents(lines) {
 			break
 		}
-
 		time.Sleep(20 * time.Millisecond)
 	}
 
@@ -196,26 +168,21 @@ func TestProxyWebsocketCaptureRecordsFramesBothDirections(t *testing.T) {
 	phases := map[string]int{}
 	directions := map[string]int{}
 	var completedLeg map[string]any
-
 	for _, line := range lines {
 		var ev map[string]any
 		if err := json.Unmarshal([]byte(line), &ev); err != nil {
 			t.Fatalf("parse capture line: %v (%q)", err, line)
 		}
-
 		if ev["leg"] != string(logevent.LegMITMCaptureIndex) {
 			continue
 		}
-
 		phase, _ := ev["phase"].(string)
 		if phase != "" {
 			phases[phase]++
 		}
-
 		if phase == string(logevent.PhaseCompleted) {
 			completedLeg = ev
 		}
-
 		if mitmFields, ok := ev["mitm"].(map[string]any); ok {
 			if direction, _ := mitmFields["direction"].(string); direction != "" {
 				directions[direction]++
@@ -229,27 +196,21 @@ func TestProxyWebsocketCaptureRecordsFramesBothDirections(t *testing.T) {
 	if phases[string(logevent.PhaseStarted)] != 0 {
 		t.Errorf("expected no capture-index started leg, got phases=%v", phases)
 	}
-
 	if phases[string(logevent.PhaseCompleted)] != 1 {
 		t.Errorf("expected exactly one terminal lifecycle leg, got phases=%v", phases)
 	}
-
 	if len(directions) != 0 {
 		t.Errorf("expected no per-frame direction legs, got directions=%v", directions)
 	}
-
 	if completedLeg == nil {
 		t.Fatalf("missing terminal lifecycle leg in %v", lines)
 	}
-
 	if _, present := completedLeg["mitm_ws_capture"]; present {
 		t.Errorf("terminal leg carries a content summary facet; want none: %#v", completedLeg)
 	}
-
 	if _, present := completedLeg["payload_summary"]; present {
 		t.Errorf("terminal leg carries a payload summary; want none: %#v", completedLeg)
 	}
-
 	if strings.Contains(rawWire, `"sha256"`) {
 		t.Errorf("wire JSONL carries a content sha256; want none:\n%s", rawWire)
 	}
@@ -257,31 +218,27 @@ func TestProxyWebsocketCaptureRecordsFramesBothDirections(t *testing.T) {
 	if err := store.Close(context.Background(), "test"); err != nil {
 		t.Fatalf("close capture store: %v", err)
 	}
-
 	assertWebsocketCaptureStoreRow(t, dbPath, requestFrame, raw)
 }
 
 func TestProxyWebsocketCaptureBridgesCodexRemoteControlPath(t *testing.T) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	upstreamPath := make(chan string, 1)
-	upstream := httptest.NewServer(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			upstreamPath <- r.URL.Path
-			conn, err := upgrader.Upgrade(w, r, nil)
-			if err != nil {
-				t.Fatalf("upstream upgrade: %v", err)
-			}
-			defer conn.Close()
-			messageType, payload, err := conn.ReadMessage()
-			if err != nil {
-				return
-			}
-
-			if err := conn.WriteMessage(messageType, payload); err != nil {
-				return
-			}
-		}),
-	)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamPath <- r.URL.Path
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("upstream upgrade: %v", err)
+		}
+		defer conn.Close()
+		messageType, payload, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		if err := conn.WriteMessage(messageType, payload); err != nil {
+			return
+		}
+	}))
 	defer upstream.Close()
 
 	logBuffer := &syncBuffer{}
@@ -298,19 +255,15 @@ func TestProxyWebsocketCaptureBridgesCodexRemoteControlPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client dial: %v", err)
 	}
-
 	if resp != nil && resp.Body != nil {
 		defer resp.Body.Close()
 	}
-
 	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"hello":"phone"}`)); err != nil {
 		t.Fatalf("write client frame: %v", err)
 	}
-
 	if _, _, err := conn.ReadMessage(); err != nil {
 		t.Fatalf("read upstream echo: %v", err)
 	}
-
 	_ = conn.Close()
 
 	select {
@@ -330,10 +283,8 @@ func TestProxyWebsocketCaptureBridgesCodexRemoteControlPath(t *testing.T) {
 				return
 			}
 		}
-
 		time.Sleep(20 * time.Millisecond)
 	}
-
 	t.Fatalf("missing codex request leg for %s in logs:\n%s", remoteControlPath, logBuffer.String())
 }
 
@@ -346,18 +297,12 @@ func waitForWebsocketHandler(t *testing.T, done <-chan struct{}) {
 	}
 }
 
-func assertWebsocketCaptureStoreRow(
-	t *testing.T,
-	dbPath string,
-	wantRequest []byte,
-	wantResponse []byte,
-) {
+func assertWebsocketCaptureStoreRow(t *testing.T, dbPath string, wantRequest []byte, wantResponse []byte) {
 	t.Helper()
 	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("open verifier db: %v", err)
 	}
-
 	defer func() { _ = db.Close() }()
 
 	var (
@@ -370,80 +315,49 @@ func assertWebsocketCaptureStoreRow(
 		reqBytes  int
 		respBytes int
 	)
-	row := db.QueryRow(
-		`
+	row := db.QueryRow(`
 		SELECT id, client, provider, method, path, status, req_bytes, resp_bytes
 		FROM requests
 		WHERE path='/backend-api/codex/responses'
 		ORDER BY ts DESC
 		LIMIT 1
-	`,
-	)
-	if err := row.Scan(
-		&rowID,
-		&client,
-		&provider,
-		&method,
-		&path,
-		&status,
-		&reqBytes,
-		&respBytes,
-	); err != nil {
+	`)
+	if err := row.Scan(&rowID, &client, &provider, &method, &path, &status, &reqBytes, &respBytes); err != nil {
 		t.Fatalf("scan websocket capture row: %v", err)
 	}
-
 	if client != "test" {
 		t.Fatalf("client = %q want test", client)
 	}
-
 	if provider != "codex" {
 		t.Fatalf("provider = %q want codex", provider)
 	}
-
 	if method != "WEBSOCKET" {
 		t.Fatalf("method = %q want WEBSOCKET", method)
 	}
-
 	if path != "/backend-api/codex/responses" {
 		t.Fatalf("path = %q want /backend-api/codex/responses", path)
 	}
-
 	if status != http.StatusSwitchingProtocols {
 		t.Fatalf("status = %d want %d", status, http.StatusSwitchingProtocols)
 	}
-
 	if reqBytes != len(wantRequest) {
 		t.Fatalf("req_bytes = %d want %d", reqBytes, len(wantRequest))
 	}
-
 	if respBytes != len(wantResponse) {
 		t.Fatalf("resp_bytes = %d want %d", respBytes, len(wantResponse))
 	}
 
 	var storedRequest []byte
-	if err := db.QueryRow(
-		`SELECT data FROM bodies WHERE request_row_id=? AND which='request'`,
-		rowID,
-	).Scan(
-		&storedRequest,
-	); err != nil {
+	if err := db.QueryRow(`SELECT data FROM bodies WHERE request_row_id=? AND which='request'`, rowID).Scan(&storedRequest); err != nil {
 		t.Fatalf("scan request body: %v", err)
 	}
-
 	if !bytes.Equal(storedRequest, wantRequest) {
 		t.Fatalf("stored request body = %q want %q", storedRequest, wantRequest)
 	}
-
 	var storedResponse []byte
-	if err := db.QueryRow(
-		`SELECT data FROM bodies WHERE request_row_id=? AND which='response'`,
-		rowID,
-	).Scan(
-		&storedResponse,
-	); err != nil {
+	if err := db.QueryRow(`SELECT data FROM bodies WHERE request_row_id=? AND which='response'`, rowID).Scan(&storedResponse); err != nil {
 		t.Fatalf("scan response body: %v", err)
 	}
-
 	if !bytes.Equal(storedResponse, wantResponse) {
 		t.Fatalf("stored response body = %q want %q", storedResponse, wantResponse)
 	}
@@ -456,26 +370,22 @@ func TestProxyWebsocketCaptureUsesNativeCursorHeadersAndRequiredLegs(t *testing.
 		UnregisterProvider(identityProviderID)
 	})
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
-	upstream := httptest.NewServer(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			conn, err := upgrader.Upgrade(w, r, nil)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("upstream upgrade: %v", err)
+		}
+		defer conn.Close()
+		for {
+			messageType, payload, err := conn.ReadMessage()
 			if err != nil {
-				t.Fatalf("upstream upgrade: %v", err)
+				return
 			}
-			defer conn.Close()
-
-			for {
-				messageType, payload, err := conn.ReadMessage()
-				if err != nil {
-					return
-				}
-
-				if err := conn.WriteMessage(messageType, payload); err != nil {
-					return
-				}
+			if err := conn.WriteMessage(messageType, payload); err != nil {
+				return
 			}
-		}),
-	)
+		}
+	}))
 	defer upstream.Close()
 
 	logBuffer := &syncBuffer{}
@@ -497,74 +407,53 @@ func TestProxyWebsocketCaptureUsesNativeCursorHeadersAndRequiredLegs(t *testing.
 	if err != nil {
 		t.Fatalf("parse ws url: %v", err)
 	}
-
-	conn, resp, err := websocket.DefaultDialer.DialContext(
-		context.Background(),
-		parsed.String(),
-		requestHeaders,
-	)
+	conn, resp, err := websocket.DefaultDialer.DialContext(context.Background(), parsed.String(), requestHeaders)
 	if err != nil {
 		t.Fatalf("client dial: %v", err)
 	}
-
 	if resp != nil && resp.Body != nil {
 		defer resp.Body.Close()
 	}
-
-	if err := conn.WriteMessage(
-		websocket.TextMessage,
-		[]byte(`{"type":"response.create"}`),
-	); err != nil {
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create"}`)); err != nil {
 		t.Fatalf("write client frame: %v", err)
 	}
-
 	if _, _, err := conn.ReadMessage(); err != nil {
 		t.Fatalf("read echo: %v", err)
 	}
-
 	_ = conn.Close()
 
 	deadline := time.Now().Add(2 * time.Second)
 	var events []map[string]any
-
 	for time.Now().Before(deadline) {
 		events = captureLogEvents(t, logBuffer.String(), "logging.request.leg")
 		seen := make(map[string]bool)
-
 		for _, event := range events {
 			if event["surface"] != string(logevent.SurfaceMITMIDE) {
 				continue
 			}
-
 			if leg, ok := event["leg"].(string); ok {
 				seen[leg] = true
 			}
 		}
-
 		complete := true
-
 		for _, leg := range logevent.DefaultRequiredLegs()[logevent.SurfaceMITMIDE] {
 			if !seen[string(leg)] {
 				complete = false
 				break
 			}
 		}
-
 		if complete {
 			break
 		}
-
 		time.Sleep(20 * time.Millisecond)
 	}
 
 	seen := make(map[string]bool)
 	var ingressEvent map[string]any
-
 	for _, event := range events {
 		if event["surface"] != string(logevent.SurfaceMITMIDE) {
 			continue
 		}
-
 		if leg, ok := event["leg"].(string); ok {
 			seen[leg] = true
 			if leg == string(logevent.LegMITMIngress) && ingressEvent == nil {
@@ -572,60 +461,42 @@ func TestProxyWebsocketCaptureUsesNativeCursorHeadersAndRequiredLegs(t *testing.
 			}
 		}
 	}
-
 	for _, leg := range logevent.DefaultRequiredLegs()[logevent.SurfaceMITMIDE] {
 		if !seen[string(leg)] {
 			t.Fatalf("missing required leg %s in events %v", leg, seen)
 		}
 	}
-
 	if ingressEvent == nil {
 		t.Fatalf("missing mitm_ingress event in %v", events)
 	}
-
 	if ingressEvent["request_id"] != "cursor-native-req" {
 		t.Fatalf("request_id = %v want cursor-native-req", ingressEvent["request_id"])
 	}
-
 	cursorFacet, ok := ingressEvent["cursor"].(map[string]any)
 	if !ok {
 		t.Fatalf("cursor facet missing: %#v", ingressEvent)
 	}
-
 	if cursorFacet["request_id"] != "cursor-native-req" {
 		t.Fatalf("cursor request_id = %v want cursor-native-req", cursorFacet["request_id"])
 	}
-
 	if ingressEvent["upstream_request_id"] != "cursor-native-orig" {
-		t.Fatalf(
-			"upstream_request_id = %v want cursor-native-orig",
-			ingressEvent["upstream_request_id"],
-		)
+		t.Fatalf("upstream_request_id = %v want cursor-native-orig", ingressEvent["upstream_request_id"])
 	}
-
 	if ingressEvent["session_id"] != "cursor-session-1" {
 		t.Fatalf("session_id = %v want cursor-session-1", ingressEvent["session_id"])
 	}
-
 	if ingressEvent["trace_id"] != "0123456789abcdef0123456789abcdef" {
 		t.Fatalf("trace_id = %v want traceparent trace", ingressEvent["trace_id"])
 	}
-
-	if event := firstCaptureLogEvent(
-		t,
-		logBuffer.String(),
-		"logging.request.incomplete",
-	); event != nil {
+	if event := firstCaptureLogEvent(t, logBuffer.String(), "logging.request.incomplete"); event != nil {
 		t.Fatalf("did not expect incomplete request event: %v", event)
 	}
 }
 
 func TestProxyWebsocketCaptureEarlyDialFailureEmitsRequestErrorWithoutIncomplete(t *testing.T) {
-	upstream := httptest.NewServer(
-		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			http.Error(w, "not a websocket", http.StatusNotFound)
-		}),
-	)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "not a websocket", http.StatusNotFound)
+	}))
 	defer upstream.Close()
 
 	logBuffer := &syncBuffer{}
@@ -641,18 +512,12 @@ func TestProxyWebsocketCaptureEarlyDialFailureEmitsRequestErrorWithoutIncomplete
 	if err != nil {
 		t.Fatalf("parse ws url: %v", err)
 	}
-
-	if _, _, err := websocket.DefaultDialer.DialContext(
-		context.Background(),
-		parsed.String(),
-		nil,
-	); err == nil {
+	if _, _, err := websocket.DefaultDialer.DialContext(context.Background(), parsed.String(), nil); err == nil {
 		t.Fatalf("expected websocket dial to fail")
 	}
 
 	deadline := time.Now().Add(2 * time.Second)
 	var events []map[string]any
-
 	for time.Now().Before(deadline) {
 		events = captureLogEvents(t, logBuffer.String(), "logging.request.leg")
 		for _, event := range events {
@@ -661,16 +526,13 @@ func TestProxyWebsocketCaptureEarlyDialFailureEmitsRequestErrorWithoutIncomplete
 				break
 			}
 		}
-
 		if !time.Now().Before(deadline) {
 			break
 		}
-
 		time.Sleep(20 * time.Millisecond)
 	}
 
 	foundError := false
-
 	for _, event := range events {
 		if event["leg"] == string(logevent.LegRequestError) {
 			foundError = true
@@ -679,16 +541,10 @@ func TestProxyWebsocketCaptureEarlyDialFailureEmitsRequestErrorWithoutIncomplete
 			}
 		}
 	}
-
 	if !foundError {
 		t.Fatalf("expected request_error leg in %v", events)
 	}
-
-	if event := firstCaptureLogEvent(
-		t,
-		logBuffer.String(),
-		"logging.request.incomplete",
-	); event != nil {
+	if event := firstCaptureLogEvent(t, logBuffer.String(), "logging.request.incomplete"); event != nil {
 		t.Fatalf("did not expect incomplete request event: %v", event)
 	}
 }
@@ -719,19 +575,13 @@ func newProxyForTest(t *testing.T, cfg config.MITMConfig) *Proxy {
 		certMu:          sync.Mutex{},
 		ca:              nil,
 		tlsClientConfig: nil,
-		Tunnels: newTestTunnelRegistry(
-			livetrack.NewGroup(livetrack.GroupOptions{Log: nil}),
-		),
-		requestLog: logevent.NewEmitter(
-			slogger.WithConcern(logger, slogger.ConcernProviderMITMWire),
-			nil,
-		),
-		mu:     sync.RWMutex{},
-		cfg:    cfg,
-		base:   "",
-		server: nil,
+		Tunnels:         newTestTunnelRegistry(livetrack.NewGroup(livetrack.GroupOptions{Log: nil})),
+		requestLog:      logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
+		mu:              sync.RWMutex{},
+		cfg:             cfg,
+		base:            "",
+		server:          nil,
 	}
-
 	return proxy
 }
 
@@ -744,19 +594,13 @@ func newWebsocketRequestLogProxy(t *testing.T, captureDir string, logger *slog.L
 		certMu:          sync.Mutex{},
 		ca:              nil,
 		tlsClientConfig: nil,
-		Tunnels: newTestTunnelRegistry(
-			livetrack.NewGroup(livetrack.GroupOptions{Log: nil}),
-		),
-		requestLog: logevent.NewEmitter(
-			slogger.WithConcern(logger, slogger.ConcernProviderMITMWire),
-			nil,
-		),
-		mu:     sync.RWMutex{},
-		cfg:    config.MITMConfig{CaptureDir: captureDir},
-		base:   "",
-		server: nil,
+		Tunnels:         newTestTunnelRegistry(livetrack.NewGroup(livetrack.GroupOptions{Log: nil})),
+		requestLog:      logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
+		mu:              sync.RWMutex{},
+		cfg:             config.MITMConfig{CaptureDir: captureDir},
+		base:            "",
+		server:          nil,
 	}
-
 	return proxy
 }
 
@@ -769,16 +613,13 @@ func hasWSEvents(lines []string) bool {
 		if !strings.Contains(line, `"leg":"`+string(logevent.LegMITMCaptureIndex)+`"`) {
 			continue
 		}
-
 		if !strings.Contains(line, `"phase":"`+string(logevent.PhaseCompleted)+`"`) {
 			continue
 		}
-
 		if strings.Contains(line, `"transport":"websocket"`) {
 			return true
 		}
 	}
-
 	return false
 }
 

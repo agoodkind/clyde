@@ -18,16 +18,13 @@ func (idx *Index) RenderPlainText(record Record, lastN int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-
 	if lastN > 0 && lastN < len(messages) {
 		messages = messages[len(messages)-lastN:]
 	}
-
 	text := transcript.RenderPlainTextWithOptions(messages, transcript.DefaultShapeOptions())
 	if text == "" {
 		return "No conversation messages found.", nil
 	}
-
 	return text, nil
 }
 
@@ -43,40 +40,27 @@ func (idx *Index) RenderPlainText(record Record, lastN int) (string, error) {
 // index refers to. Empty means the row predates tagging and was written under
 // the default rules. The tag only applies to the index-centered path; a
 // timestamp center does not depend on positions.
-func (idx *Index) ContextWindowText(
-	record Record,
-	timestamp string,
-	messageIndex int,
-	before int,
-	after int,
-	loadRules string,
-) (string, error) {
+func (idx *Index) ContextWindowText(record Record, timestamp string, messageIndex, before, after int, loadRules string) (string, error) {
 	if timestamp == "" && messageIndex >= 0 {
 		return idx.contextWindowByIndex(record, messageIndex, before, after, loadRules)
 	}
-
 	messages, err := idx.LoadMessages(record, false, false)
 	if err != nil {
 		return "", err
 	}
-
 	if len(messages) == 0 {
 		return "No conversation messages found.", nil
 	}
-
 	center := -1
 	if timestamp != "" {
 		center = findNearestMessage(messages, timestamp)
 	}
-
 	if center < 0 && messageIndex >= 0 && messageIndex < len(messages) {
 		center = messageIndex
 	}
-
 	if center < 0 {
 		return "Provide timestamp or message_index to center on.", nil
 	}
-
 	return renderContextWindow(messages, len(messages), center, before, after), nil
 }
 
@@ -84,13 +68,7 @@ func (idx *Index) ContextWindowText(
 // inlining a small window beside a search hit. It wraps the index-centered
 // reader, so it stops pulling the stream at the window end instead of reading
 // the whole artifact. loadRules is the hit row's stored loading-rules tag.
-func (idx *Index) HitContextWindow(
-	record Record,
-	messageIndex int,
-	before int,
-	after int,
-	loadRules string,
-) (string, error) {
+func (idx *Index) HitContextWindow(record Record, messageIndex, before, after int, loadRules string) (string, error) {
 	return idx.contextWindowByIndex(record, messageIndex, before, after, loadRules)
 }
 
@@ -105,61 +83,32 @@ func (idx *Index) HitContextWindow(
 // search row that produced messageIndex, so position counting here matches the
 // sequence the writer numbered. A tag from a newer version than this build
 // falls back to the default rules with a warning rather than failing the read.
-func (idx *Index) contextWindowByIndex(
-	record Record,
-	messageIndex int,
-	before int,
-	after int,
-	loadRules string,
-) (string, error) {
+func (idx *Index) contextWindowByIndex(record Record, messageIndex, before, after int, loadRules string) (string, error) {
 	options, known := LoadOptionsForRules(loadRules)
 	if !known {
-		slog.Warn(
-			"conversation.render.load_rules_unknown",
-			"concern",
-			"conversation.render",
-			"component",
-			"conversation",
-			"conversation_id",
-			record.ID,
-			"load_rules",
-			loadRules,
+		slog.Warn("conversation.render.load_rules_unknown",
+			"concern", "conversation.render",
+			"component", "conversation",
+			"conversation_id", record.ID,
+			"load_rules", loadRules,
 		)
 	}
-
 	stream, err := idx.resolveStream(record, options)
 	if err != nil {
 		return "", err
 	}
-
 	start := max(messageIndex-before, 0)
 	end := messageIndex + after + 1
 	var window []transcript.Message
 	seen := 0
-
 	for message, streamErr := range stream {
 		if streamErr != nil {
-			slog.Warn(
-				"conversation.render.context_stream_failed",
-				"concern",
-				"conversation.render",
-				"component",
-				"conversation",
-				"provider",
-				record.Provider.String(),
-				"conversation_id",
-				record.ID,
-				"err",
-				streamErr,
-			)
-
+			slog.Warn("conversation.render.context_stream_failed", "concern", "conversation.render", "component", "conversation", "provider", record.Provider.String(), "conversation_id", record.ID, "err", streamErr)
 			return "", fmt.Errorf("read %s conversation: %w", record.Provider.String(), streamErr)
 		}
-
 		if seen >= start && seen < end {
 			window = append(window, message)
 		}
-
 		seen++
 		if seen >= end {
 			// The window is complete; stop pulling so the rest of the artifact is
@@ -167,21 +116,14 @@ func (idx *Index) contextWindowByIndex(
 			break
 		}
 	}
-
 	if seen == 0 {
 		return "No conversation messages found.", nil
 	}
-
 	if messageIndex >= seen {
 		return "Provide timestamp or message_index to center on.", nil
 	}
-
 	renderedEnd := start + len(window)
-	rendered := transcript.RenderPlainTextWithOptions(
-		window,
-		transcript.ContextWindowShapeOptions(),
-	)
-
+	rendered := transcript.RenderPlainTextWithOptions(window, transcript.ContextWindowShapeOptions())
 	return fmt.Sprintf(
 		"Messages %d-%d centered on %d:\n\n%s",
 		start,
@@ -196,17 +138,13 @@ func (idx *Index) contextWindowByIndex(
 func renderContextWindow(messages []transcript.Message, total, center, before, after int) string {
 	start := max(center-before, 0)
 	end := min(center+after+1, total)
-
 	return fmt.Sprintf(
 		"Messages %d-%d of %d centered on %d:\n\n%s",
 		start,
 		end-1,
 		total,
 		center,
-		transcript.RenderPlainTextWithOptions(
-			messages[start:end],
-			transcript.ContextWindowShapeOptions(),
-		),
+		transcript.RenderPlainTextWithOptions(messages[start:end], transcript.ContextWindowShapeOptions()),
 	)
 }
 
@@ -214,7 +152,6 @@ func renderContextWindow(messages []transcript.Message, total, center, before, a
 // to rawTimestamp, or -1 when rawTimestamp cannot be parsed.
 func findNearestMessage(messages []transcript.Message, rawTimestamp string) int {
 	var target time.Time
-
 	for _, layout := range []string{
 		"2006-01-02 15:04",
 		time.RFC3339,
@@ -227,25 +164,20 @@ func findNearestMessage(messages []transcript.Message, rawTimestamp string) int 
 			break
 		}
 	}
-
 	if target.IsZero() {
 		return -1
 	}
-
 	best := -1
 	bestDiff := time.Duration(1<<63 - 1)
-
 	for i, message := range messages {
 		diff := message.Timestamp.Sub(target)
 		if diff < 0 {
 			diff = -diff
 		}
-
 		if diff < bestDiff {
 			bestDiff = diff
 			best = i
 		}
 	}
-
 	return best
 }

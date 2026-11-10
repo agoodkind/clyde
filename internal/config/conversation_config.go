@@ -127,7 +127,6 @@ func (semantic ConversationSemanticConfig) SyncPassInterval() time.Duration {
 	if semantic.SyncInterval <= 0 {
 		return defaultConversationWorkerInterval
 	}
-
 	return time.Duration(semantic.SyncInterval)
 }
 
@@ -137,7 +136,6 @@ func (semantic ConversationSemanticConfig) IndexRefreshPeriod() time.Duration {
 	if semantic.IndexRefreshInterval <= 0 {
 		return defaultConversationWorkerInterval
 	}
-
 	return time.Duration(semantic.IndexRefreshInterval)
 }
 
@@ -186,64 +184,32 @@ func (semantic ConversationSemanticConfig) UsesEngine() bool {
 	return semantic.FeedsEngine() || semantic.AnswersSearch()
 }
 
-// DefaultBackend resolves the legacy Milvus aliases for the default search
-// store.
-//
-// Only the local value selects the local store. Empty, LMS, and other values
-// resolve to Milvus; this method does not validate the configuration.
-//
-//	semantic := ConversationSemanticConfig{
-//		Backend: ConversationSemanticBackendLMS,
-//	}
-//	semantic.DefaultBackend() // Returns ConversationSemanticBackendMilvus.
+// DefaultBackend resolves the legacy Milvus aliases for the default search store.
 func (semantic ConversationSemanticConfig) DefaultBackend() ConversationSemanticBackend {
 	if semantic.Backend == ConversationSemanticBackendLocal {
 		return ConversationSemanticBackendLocal
 	}
-
 	return ConversationSemanticBackendMilvus
 }
 
 // EnabledBackends returns the configured stores in ingestion startup order.
-//
-// An omitted or empty Backends list selects DefaultBackend alone. An explicit
-// list retains its order and shares its backing array with the configuration.
-//
-//	semantic := ConversationSemanticConfig{
-//		Backend: ConversationSemanticBackendLocal,
-//	}
-//	semantic.EnabledBackends() // Returns a list with only the local backend.
 func (semantic ConversationSemanticConfig) EnabledBackends() []ConversationSemanticBackend {
 	if len(semantic.Backends) == 0 {
 		return []ConversationSemanticBackend{semantic.DefaultBackend()}
 	}
-
 	return semantic.Backends
 }
 
-// ForSearchBackend copies the settings and applies defaults for one search
-// backend.
-//
-// The local backend fills an empty LocalRoot. Other backends fill missing
-// Milvus and embedding settings. The original configuration retains its values.
-//
-//	semantic := ConversationSemanticConfig{CollectionID: "project"}
-//	semantic.ForSearchBackend(ConversationSemanticBackendLocal)
-func (semantic ConversationSemanticConfig) ForSearchBackend(
-	backend ConversationSemanticBackend,
-) ConversationSemanticConfig {
+// ForSearchBackend copies the settings and applies defaults for one search backend.
+func (semantic ConversationSemanticConfig) ForSearchBackend(backend ConversationSemanticBackend) ConversationSemanticConfig {
 	semantic.Backend = backend
 	if backend == ConversationSemanticBackendLocal {
 		if strings.TrimSpace(semantic.LocalRoot) == "" {
-			semantic.LocalRoot = filepath.Join(
-				DefaultStateDir(),
-				defaultConversationLocalStoreDirName,
-			)
+			semantic.LocalRoot = filepath.Join(DefaultStateDir(), defaultConversationLocalStoreDirName)
 		}
 	} else {
 		applyConversationSemanticSearchDefaults(&semantic)
 	}
-
 	return semantic
 }
 
@@ -251,23 +217,18 @@ func applyConversationSemanticSearchDefaults(semantic *ConversationSemanticConfi
 	if strings.TrimSpace(semantic.MilvusAddress) == "" {
 		semantic.MilvusAddress = defaultConversationSemanticMilvusAddress
 	}
-
 	if strings.TrimSpace(semantic.MilvusDatabase) == "" {
 		semantic.MilvusDatabase = defaultConversationSemanticMilvusDatabase
 	}
-
 	if strings.TrimSpace(semantic.EmbeddingBaseURL) == "" {
 		semantic.EmbeddingBaseURL = defaultConversationSemanticEmbeddingBaseURL
 	}
-
 	if strings.TrimSpace(semantic.EmbeddingModel) == "" {
 		semantic.EmbeddingModel = defaultConversationSemanticEmbeddingModel
 	}
-
 	if semantic.EmbeddingDimension == 0 {
 		semantic.EmbeddingDimension = defaultConversationSemanticEmbeddingDimension
 	}
-
 	if semantic.SearchNProbe == nil {
 		nprobe := defaultConversationSearchNProbe
 		semantic.SearchNProbe = &nprobe
@@ -279,37 +240,20 @@ func applyConversationSemanticBackendDefaults(semantic *ConversationSemanticConf
 	if len(semantic.Backends) > 0 {
 		applyConversationSemanticSearchDefaults(semantic)
 		if strings.TrimSpace(semantic.LocalRoot) == "" {
-			semantic.LocalRoot = filepath.Join(
-				DefaultStateDir(),
-				defaultConversationLocalStoreDirName,
-			)
+			semantic.LocalRoot = filepath.Join(DefaultStateDir(), defaultConversationLocalStoreDirName)
 		}
-
 		return nil
 	}
-
-	if ConversationSemanticBackend(
-		strings.TrimSpace(string(semantic.Backend)),
-	) != ConversationSemanticBackendLocal {
+	if ConversationSemanticBackend(strings.TrimSpace(string(semantic.Backend))) != ConversationSemanticBackendLocal {
 		applyConversationSemanticSearchDefaults(semantic)
 		return nil
 	}
-
 	if strings.TrimSpace(semantic.MilvusAddress) != "" {
-		return invalidConversationSemanticSetting(
-			"milvus_address",
-			fmt.Sprintf(
-				"must be unset when %sbackend = %q",
-				conversationSemanticKey,
-				ConversationSemanticBackendLocal,
-			),
-		)
+		return invalidConversationSemanticSetting("milvus_address", fmt.Sprintf("must be unset when %sbackend = %q", conversationSemanticKey, ConversationSemanticBackendLocal))
 	}
-
 	if strings.TrimSpace(semantic.LocalRoot) == "" {
 		semantic.LocalRoot = filepath.Join(DefaultStateDir(), defaultConversationLocalStoreDirName)
 	}
-
 	return nil
 }
 
@@ -319,7 +263,6 @@ func (semantic ConversationSemanticConfig) DenseSearchParams() map[string]string
 	if semantic.SearchNProbe == nil || *semantic.SearchNProbe <= 0 {
 		return nil
 	}
-
 	return map[string]string{"nprobe": strconv.Itoa(*semantic.SearchNProbe)}
 }
 
@@ -327,24 +270,19 @@ func applyConversationDefaults(conversation *ConversationConfig) error {
 	if conversation == nil {
 		return nil
 	}
-
 	conversation.Semantic.CollectionID = strings.TrimSpace(conversation.Semantic.CollectionID)
 	if conversation.Semantic.CollectionID == "" {
 		conversation.Semantic.CollectionID = defaultConversationSemanticCollectionID
 	}
-
 	if err := applyConversationSemanticBackendDefaults(&conversation.Semantic); err != nil {
 		return err
 	}
-
 	trimmed := make([]string, 0, len(conversation.Semantic.IndexedContent))
 	for _, value := range conversation.Semantic.IndexedContent {
 		if selector := strings.TrimSpace(value); selector != "" {
 			trimmed = append(trimmed, selector)
 		}
 	}
-
 	conversation.Semantic.IndexedContent = trimmed
-
 	return normalizeAndValidateConversationSemantic(&conversation.Semantic)
 }

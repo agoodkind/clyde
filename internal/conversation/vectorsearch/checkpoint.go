@@ -38,11 +38,7 @@ type checkpointStore struct {
 }
 
 func newCheckpointStore(root string) *checkpointStore {
-	return &checkpointStore{
-		root:   root,
-		mu:     sync.Mutex{},
-		loaded: make(map[string]map[string]string),
-	}
+	return &checkpointStore{root: root, mu: sync.Mutex{}, loaded: make(map[string]map[string]string)}
 }
 
 // records returns the fingerprints of a collection and loads its record files
@@ -52,129 +48,86 @@ func (store *checkpointStore) records(collectionName string) map[string]string {
 	if fingerprints, found := store.loaded[collectionName]; found {
 		return fingerprints
 	}
-
 	fingerprints := make(map[string]string)
 	store.loaded[collectionName] = fingerprints
 	if store.root == "" {
 		return fingerprints
 	}
-
 	directory := filepath.Join(store.root, collectionName)
 	entries, err := os.ReadDir(directory)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			slog.Warn(
-				"conversation.vectorsearch.checkpoint_dir_read_failed",
-				"concern",
-				"conversation.semantic",
-				"component",
-				"conversation",
-				"path",
-				directory,
-				"err",
-				err,
+			slog.Warn("conversation.vectorsearch.checkpoint_dir_read_failed",
+				"concern", "conversation.semantic",
+				"component", "conversation",
+				"path", directory,
+				"err", err,
 			)
 		}
-
 		return fingerprints
 	}
-
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), checkpointFileSuffix) ||
-			strings.HasPrefix(entry.Name(), checkpointTempPrefix) {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), checkpointFileSuffix) || strings.HasPrefix(entry.Name(), checkpointTempPrefix) {
 			continue
 		}
-
 		path := filepath.Join(directory, entry.Name())
 		content, readErr := os.ReadFile(path)
 		if readErr != nil {
-			slog.Warn(
-				"conversation.vectorsearch.checkpoint_read_failed",
-				"concern",
-				"conversation.semantic",
-				"component",
-				"conversation",
-				"path",
-				path,
-				"err",
-				readErr,
+			slog.Warn("conversation.vectorsearch.checkpoint_read_failed",
+				"concern", "conversation.semantic",
+				"component", "conversation",
+				"path", path,
+				"err", readErr,
 			)
 			continue
 		}
-
 		var record checkpointRecord
-		if decodeErr := json.Unmarshal(content, &record); decodeErr != nil ||
-			record.ConversationID == "" {
-			slog.Warn(
-				"conversation.vectorsearch.checkpoint_decode_failed",
-				"concern",
-				"conversation.semantic",
-				"component",
-				"conversation",
-				"path",
-				path,
-				"err",
-				decodeErr,
+		if decodeErr := json.Unmarshal(content, &record); decodeErr != nil || record.ConversationID == "" {
+			slog.Warn("conversation.vectorsearch.checkpoint_decode_failed",
+				"concern", "conversation.semantic",
+				"component", "conversation",
+				"path", path,
+				"err", decodeErr,
 			)
 			continue
 		}
-
 		fingerprints[record.ConversationID] = record.Fingerprint
 	}
-
 	return fingerprints
 }
 
 // needed returns the sorted IDs of the manifest conversations with no record or
 // a record with a different fingerprint.
-func (store *checkpointStore) needed(
-	collectionName string,
-	ids []string,
-	fingerprints []string,
-) []string {
+func (store *checkpointStore) needed(collectionName string, ids []string, fingerprints []string) []string {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	recorded := store.records(collectionName)
 	needed := make([]string, 0)
-
 	for i, id := range ids {
 		if id == "" {
 			continue
 		}
-
 		if value, found := recorded[id]; found && value == fingerprints[i] {
 			continue
 		}
-
 		needed = append(needed, id)
 	}
-
 	slices.Sort(needed)
-
 	return slices.Compact(needed)
 }
 
 // record writes the file before it updates the memory copy. After a failed
 // write the memory copy is unchanged, and the conversation stays needed after a
 // restart.
-func (store *checkpointStore) record(
-	collectionName string,
-	conversationID string,
-	fingerprint string,
-) {
+func (store *checkpointStore) record(collectionName string, conversationID string, fingerprint string) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	recorded := store.records(collectionName)
 	if store.root != "" {
-		if err := writeCheckpointFile(
-			filepath.Join(store.root, collectionName),
-			conversationID,
-			fingerprint,
-		); err != nil {
+		if err := writeCheckpointFile(filepath.Join(store.root, collectionName), conversationID, fingerprint); err != nil {
 			return
 		}
 	}
-
 	recorded[conversationID] = fingerprint
 }
 
@@ -187,75 +140,49 @@ func checkpointFileName(conversationID string) string {
 
 // writeCheckpointFile writes one record atomically. The content is written to a
 // temporary file in the same directory, and a rename replaces the record file.
-func writeCheckpointFile(
-	directory string,
-	conversationID string,
-	fingerprint string,
-) (failure error) {
+func writeCheckpointFile(directory string, conversationID string, fingerprint string) (failure error) {
 	defer func() {
 		if failure != nil {
-			slog.Warn(
-				"conversation.vectorsearch.checkpoint_write_failed",
-				"concern",
-				"conversation.semantic",
-				"component",
-				"conversation",
-				"directory",
-				directory,
-				"conversation_id",
-				conversationID,
-				"err",
-				failure,
+			slog.Warn("conversation.vectorsearch.checkpoint_write_failed",
+				"concern", "conversation.semantic",
+				"component", "conversation",
+				"directory", directory,
+				"conversation_id", conversationID,
+				"err", failure,
 			)
-
 			return
 		}
-
-		slog.Debug(
-			"conversation.vectorsearch.checkpoint_file_written",
-			"concern",
-			"conversation.semantic",
-			"component",
-			"conversation",
-			"directory",
-			directory,
+		slog.Debug("conversation.vectorsearch.checkpoint_file_written",
+			"concern", "conversation.semantic",
+			"component", "conversation",
+			"directory", directory,
 		)
 	}()
 	if err := os.MkdirAll(directory, checkpointDirMode); err != nil {
 		return fmt.Errorf("create checkpoint directory %s: %w", directory, err)
 	}
-
-	content, err := json.Marshal(checkpointRecord{
-		ConversationID: conversationID,
-		Fingerprint:    fingerprint,
-	})
+	content, err := json.Marshal(checkpointRecord{ConversationID: conversationID, Fingerprint: fingerprint})
 	if err != nil {
 		return fmt.Errorf("encode checkpoint: %w", err)
 	}
-
 	name := checkpointFileName(conversationID)
 	temp, err := os.CreateTemp(directory, checkpointTempPrefix+"*")
 	if err != nil {
 		return fmt.Errorf("create checkpoint temp file: %w", err)
 	}
-
 	tempPath := temp.Name()
 	if _, writeErr := temp.Write(content); writeErr != nil {
 		_ = temp.Close()
 		_ = os.Remove(tempPath)
-
 		return fmt.Errorf("write checkpoint temp file: %w", writeErr)
 	}
-
 	if closeErr := temp.Close(); closeErr != nil {
 		_ = os.Remove(tempPath)
 		return fmt.Errorf("close checkpoint temp file: %w", closeErr)
 	}
-
 	if renameErr := os.Rename(tempPath, filepath.Join(directory, name)); renameErr != nil {
 		_ = os.Remove(tempPath)
 		return fmt.Errorf("replace checkpoint file: %w", renameErr)
 	}
-
 	return nil
 }

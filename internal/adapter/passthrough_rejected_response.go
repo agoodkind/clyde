@@ -21,44 +21,10 @@ func (s *Server) respondPassthroughRejectedResponse(
 ) {
 	respBody, readErr := io.ReadAll(resp.Body)
 	if readErr != nil {
-		s.recordPassthroughEgress(
-			ctx,
-			resp,
-			options.body,
-			passthroughCaptureResultFromRead(respBody, readErr),
-			started,
-		)
-		s.respondPassthroughOverrideTransportError(
-			w,
-			r,
-			ctx,
-			req,
-			options.requestID,
-			started,
-			options.streamRequested,
-			readErr,
-		)
-
+		s.recordPassthroughEgress(ctx, resp, options.body, passthroughCaptureResultFromRead(respBody, readErr), started)
+		s.respondPassthroughOverrideTransportError(w, r, ctx, req, options.requestID, started, options.streamRequested, readErr)
 		return
 	}
-
-	s.recordPassthroughEgress(
-		ctx,
-		resp,
-		options.body,
-		passthroughCaptureResultFromBody(respBody),
-		started,
-	)
-	s.respondPassthroughOverrideError(
-		w,
-		r,
-		ctx,
-		req,
-		options.requestID,
-		resp.StatusCode,
-		respBody,
-		options.streamRequested,
-		contentType,
-		started,
-	)
+	s.recordPassthroughEgress(ctx, resp, options.body, passthroughCaptureResultFromBody(respBody), started)
+	s.respondPassthroughOverrideError(w, r, ctx, req, options.requestID, resp.StatusCode, respBody, options.streamRequested, contentType, started)
 }

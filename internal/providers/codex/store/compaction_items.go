@@ -149,12 +149,10 @@ func normalizeCompactedContextItems(
 	if len(rawItems) == 0 {
 		return nil
 	}
-
 	items := make([]transcript.CompactedContextItem, 0, len(rawItems))
 	for _, rawItem := range rawItems {
 		items = append(items, normalizeCompactedContextItem(rawItem))
 	}
-
 	return items
 }
 
@@ -165,7 +163,6 @@ func normalizeCompactedContextItem(
 	if err := json.Unmarshal(rawItem, &itemType); err != nil {
 		return otherCompactedContextItem("", rawItem)
 	}
-
 	switch itemType.Type {
 	case compactedResponseItemTypeMessage:
 		return normalizeCompactedMessageItem(rawItem)
@@ -208,7 +205,6 @@ func normalizeCompactedMessageItem(
 	if err := json.Unmarshal(rawItem, &item); err != nil {
 		return otherCompactedContextItem("message", rawItem)
 	}
-
 	messageItem := transcript.CompactedMessageItem{
 		Role:         item.Role,
 		Phase:        item.Phase,
@@ -217,9 +213,10 @@ func normalizeCompactedMessageItem(
 		MessageClass: transcript.CompactedMessageClassOrdinary,
 		Raw:          cloneRawMessage(rawItem),
 	}
-	contextItem := emptyCompactedContextItem(transcript.CompactedContextItemKindMessage)
+	contextItem := emptyCompactedContextItem(
+		transcript.CompactedContextItemKindMessage,
+	)
 	contextItem.Message = &messageItem
-
 	return contextItem
 }
 
@@ -229,45 +226,35 @@ func normalizeCompactedMessageContentItems(
 	if len(rawContent) == 0 {
 		return nil
 	}
-
 	var rawItems []json.RawMessage
 	if err := json.Unmarshal(rawContent, &rawItems); err != nil {
 		return nil
 	}
-
 	items := make([]transcript.CompactedMessageContentItem, 0, len(rawItems))
 	for _, rawItem := range rawItems {
 		var item rawCompactedMessageContentItem
 		if err := json.Unmarshal(rawItem, &item); err != nil {
-			items = append(
-				items,
-				transcript.CompactedMessageContentItem{
-					Type:                 "",
-					Text:                 "",
-					ImageURL:             "",
-					Detail:               "",
-					Raw:                  cloneRawMessage(rawItem),
-					TranscriptSpans:      nil,
-					UnresolvedTranscript: false,
-				},
-			)
-			continue
-		}
-
-		items = append(
-			items,
-			transcript.CompactedMessageContentItem{
-				Type:                 item.Type,
-				Text:                 item.Text,
-				ImageURL:             item.ImageURL,
-				Detail:               item.Detail,
+			items = append(items, transcript.CompactedMessageContentItem{
+				Type:                 "",
+				Text:                 "",
+				ImageURL:             "",
+				Detail:               "",
 				Raw:                  cloneRawMessage(rawItem),
 				TranscriptSpans:      nil,
 				UnresolvedTranscript: false,
-			},
-		)
+			})
+			continue
+		}
+		items = append(items, transcript.CompactedMessageContentItem{
+			Type:                 item.Type,
+			Text:                 item.Text,
+			ImageURL:             item.ImageURL,
+			Detail:               item.Detail,
+			Raw:                  cloneRawMessage(rawItem),
+			TranscriptSpans:      nil,
+			UnresolvedTranscript: false,
+		})
 	}
-
 	return items
 }
 
@@ -278,7 +265,6 @@ func normalizeCompactedReasoningItem(
 	if err := json.Unmarshal(rawItem, &item); err != nil {
 		return otherCompactedContextItem("reasoning", rawItem)
 	}
-
 	reasoningItem := transcript.CompactedReasoningItem{
 		Summary:          normalizeCompactedReasoningSummaries(item.Summary),
 		SummaryRaw:       cloneRawMessage(item.Summary),
@@ -286,9 +272,10 @@ func normalizeCompactedReasoningItem(
 		EncryptedContent: item.EncryptedContent,
 		Raw:              cloneRawMessage(rawItem),
 	}
-	contextItem := emptyCompactedContextItem(transcript.CompactedContextItemKindReasoning)
+	contextItem := emptyCompactedContextItem(
+		transcript.CompactedContextItemKindReasoning,
+	)
 	contextItem.Reasoning = &reasoningItem
-
 	return contextItem
 }
 
@@ -298,37 +285,27 @@ func normalizeCompactedReasoningSummaries(
 	if len(rawSummary) == 0 {
 		return nil
 	}
-
 	var rawItems []json.RawMessage
 	if err := json.Unmarshal(rawSummary, &rawItems); err != nil {
 		return nil
 	}
-
 	items := make([]transcript.CompactedReasoningSummary, 0, len(rawItems))
 	for _, rawItem := range rawItems {
 		var item rawCompactedReasoningSummaryItem
 		if err := json.Unmarshal(rawItem, &item); err != nil {
-			items = append(
-				items,
-				transcript.CompactedReasoningSummary{
-					Type: "",
-					Text: "",
-					Raw:  cloneRawMessage(rawItem),
-				},
-			)
+			items = append(items, transcript.CompactedReasoningSummary{
+				Type: "",
+				Text: "",
+				Raw:  cloneRawMessage(rawItem),
+			})
 			continue
 		}
-
-		items = append(
-			items,
-			transcript.CompactedReasoningSummary{
-				Type: item.Type,
-				Text: item.Text,
-				Raw:  cloneRawMessage(rawItem),
-			},
-		)
+		items = append(items, transcript.CompactedReasoningSummary{
+			Type: item.Type,
+			Text: item.Text,
+			Raw:  cloneRawMessage(rawItem),
+		})
 	}
-
 	return items
 }
 
@@ -339,16 +316,16 @@ func normalizeCompactedLocalShellCallItem(
 	if err := json.Unmarshal(rawItem, &item); err != nil {
 		return otherCompactedContextItem("local_shell_call", rawItem)
 	}
-
 	shellItem := transcript.CompactedLocalShellCallItem{
 		CallID:    firstNonEmpty(item.CallID, item.ID),
 		Status:    item.Status,
 		ActionRaw: cloneRawMessage(item.Action),
 		Raw:       cloneRawMessage(rawItem),
 	}
-	contextItem := emptyCompactedContextItem(transcript.CompactedContextItemKindLocalShellCall)
+	contextItem := emptyCompactedContextItem(
+		transcript.CompactedContextItemKindLocalShellCall,
+	)
 	contextItem.LocalShellCall = &shellItem
-
 	return contextItem
 }
 
@@ -359,7 +336,6 @@ func normalizeCompactedFunctionCallItem(
 	if err := json.Unmarshal(rawItem, &item); err != nil {
 		return otherCompactedContextItem("function_call", rawItem)
 	}
-
 	functionItem := transcript.CompactedFunctionCallItem{
 		Name:      item.Name,
 		Namespace: item.Namespace,
@@ -367,9 +343,10 @@ func normalizeCompactedFunctionCallItem(
 		CallID:    item.CallID,
 		Raw:       cloneRawMessage(rawItem),
 	}
-	contextItem := emptyCompactedContextItem(transcript.CompactedContextItemKindFunctionCall)
+	contextItem := emptyCompactedContextItem(
+		transcript.CompactedContextItemKindFunctionCall,
+	)
 	contextItem.FunctionCall = &functionItem
-
 	return contextItem
 }
 
@@ -380,7 +357,6 @@ func normalizeCompactedToolSearchCallItem(
 	if err := json.Unmarshal(rawItem, &item); err != nil {
 		return otherCompactedContextItem("tool_search_call", rawItem)
 	}
-
 	toolSearchItem := transcript.CompactedToolSearchCallItem{
 		CallID:       firstNonEmpty(item.CallID, item.ID),
 		Status:       item.Status,
@@ -388,9 +364,10 @@ func normalizeCompactedToolSearchCallItem(
 		ArgumentsRaw: cloneRawMessage(item.Arguments),
 		Raw:          cloneRawMessage(rawItem),
 	}
-	contextItem := emptyCompactedContextItem(transcript.CompactedContextItemKindToolSearchCall)
+	contextItem := emptyCompactedContextItem(
+		transcript.CompactedContextItemKindToolSearchCall,
+	)
 	contextItem.ToolSearchCall = &toolSearchItem
-
 	return contextItem
 }
 
@@ -401,15 +378,15 @@ func normalizeCompactedFunctionCallOutputItem(
 	if err := json.Unmarshal(rawItem, &item); err != nil {
 		return otherCompactedContextItem("function_call_output", rawItem)
 	}
-
 	outputItem := transcript.CompactedFunctionCallOutputItem{
 		CallID:    item.CallID,
 		OutputRaw: cloneRawMessage(item.Output),
 		Raw:       cloneRawMessage(rawItem),
 	}
-	contextItem := emptyCompactedContextItem(transcript.CompactedContextItemKindFunctionCallOutput)
+	contextItem := emptyCompactedContextItem(
+		transcript.CompactedContextItemKindFunctionCallOutput,
+	)
 	contextItem.FunctionCallOutput = &outputItem
-
 	return contextItem
 }
 
@@ -420,7 +397,6 @@ func normalizeCompactedCustomToolCallItem(
 	if err := json.Unmarshal(rawItem, &item); err != nil {
 		return otherCompactedContextItem("custom_tool_call", rawItem)
 	}
-
 	customItem := transcript.CompactedCustomToolCallItem{
 		CallID: item.CallID,
 		Name:   item.Name,
@@ -428,9 +404,10 @@ func normalizeCompactedCustomToolCallItem(
 		Status: item.Status,
 		Raw:    cloneRawMessage(rawItem),
 	}
-	contextItem := emptyCompactedContextItem(transcript.CompactedContextItemKindCustomToolCall)
+	contextItem := emptyCompactedContextItem(
+		transcript.CompactedContextItemKindCustomToolCall,
+	)
 	contextItem.CustomToolCall = &customItem
-
 	return contextItem
 }
 
@@ -441,7 +418,6 @@ func normalizeCompactedCustomToolCallOutputItem(
 	if err := json.Unmarshal(rawItem, &item); err != nil {
 		return otherCompactedContextItem("custom_tool_call_output", rawItem)
 	}
-
 	customOutputItem := transcript.CompactedCustomToolCallOutputItem{
 		CallID:    item.CallID,
 		Name:      item.Name,
@@ -452,7 +428,6 @@ func normalizeCompactedCustomToolCallOutputItem(
 		transcript.CompactedContextItemKindCustomToolCallOutput,
 	)
 	contextItem.CustomToolCallOutput = &customOutputItem
-
 	return contextItem
 }
 
@@ -463,12 +438,10 @@ func normalizeCompactedToolSearchOutputItem(
 	if err := json.Unmarshal(rawItem, &item); err != nil {
 		return otherCompactedContextItem("tool_search_output", rawItem)
 	}
-
 	tools := make([]json.RawMessage, 0, len(item.Tools))
 	for _, tool := range item.Tools {
 		tools = append(tools, cloneRawMessage(tool))
 	}
-
 	outputItem := transcript.CompactedToolSearchOutputItem{
 		CallID:    item.CallID,
 		Status:    item.Status,
@@ -476,9 +449,10 @@ func normalizeCompactedToolSearchOutputItem(
 		ToolsRaw:  tools,
 		Raw:       cloneRawMessage(rawItem),
 	}
-	contextItem := emptyCompactedContextItem(transcript.CompactedContextItemKindToolSearchOutput)
+	contextItem := emptyCompactedContextItem(
+		transcript.CompactedContextItemKindToolSearchOutput,
+	)
 	contextItem.ToolSearchOutput = &outputItem
-
 	return contextItem
 }
 
@@ -489,16 +463,16 @@ func normalizeCompactedWebSearchCallItem(
 	if err := json.Unmarshal(rawItem, &item); err != nil {
 		return otherCompactedContextItem("web_search_call", rawItem)
 	}
-
 	webSearchItem := transcript.CompactedWebSearchCallItem{
 		ID:        item.ID,
 		Status:    item.Status,
 		ActionRaw: cloneRawMessage(item.Action),
 		Raw:       cloneRawMessage(rawItem),
 	}
-	contextItem := emptyCompactedContextItem(transcript.CompactedContextItemKindWebSearchCall)
+	contextItem := emptyCompactedContextItem(
+		transcript.CompactedContextItemKindWebSearchCall,
+	)
 	contextItem.WebSearchCall = &webSearchItem
-
 	return contextItem
 }
 
@@ -509,7 +483,6 @@ func normalizeCompactedImageGenerationCallItem(
 	if err := json.Unmarshal(rawItem, &item); err != nil {
 		return otherCompactedContextItem("image_generation_call", rawItem)
 	}
-
 	imageItem := transcript.CompactedImageGenerationCallItem{
 		ID:            item.ID,
 		Status:        item.Status,
@@ -517,9 +490,10 @@ func normalizeCompactedImageGenerationCallItem(
 		Result:        item.Result,
 		Raw:           cloneRawMessage(rawItem),
 	}
-	contextItem := emptyCompactedContextItem(transcript.CompactedContextItemKindImageGenerationCall)
+	contextItem := emptyCompactedContextItem(
+		transcript.CompactedContextItemKindImageGenerationCall,
+	)
 	contextItem.ImageGenerationCall = &imageItem
-
 	return contextItem
 }
 
@@ -530,14 +504,14 @@ func normalizeCompactedCompactionItem(
 	if err := json.Unmarshal(rawItem, &item); err != nil {
 		return otherCompactedContextItem("compaction", rawItem)
 	}
-
 	compactionItem := transcript.CompactedCompactionItem{
 		EncryptedContent: item.EncryptedContent,
 		Raw:              cloneRawMessage(rawItem),
 	}
-	contextItem := emptyCompactedContextItem(transcript.CompactedContextItemKindCompaction)
+	contextItem := emptyCompactedContextItem(
+		transcript.CompactedContextItemKindCompaction,
+	)
 	contextItem.Compaction = &compactionItem
-
 	return contextItem
 }
 
@@ -547,9 +521,10 @@ func normalizeCompactedCompactionTriggerItem(
 	triggerItem := transcript.CompactedCompactionTriggerItem{
 		Raw: cloneRawMessage(rawItem),
 	}
-	contextItem := emptyCompactedContextItem(transcript.CompactedContextItemKindCompactionTrigger)
+	contextItem := emptyCompactedContextItem(
+		transcript.CompactedContextItemKindCompactionTrigger,
+	)
 	contextItem.CompactionTrigger = &triggerItem
-
 	return contextItem
 }
 
@@ -560,14 +535,14 @@ func normalizeCompactedContextCompactionItem(
 	if err := json.Unmarshal(rawItem, &item); err != nil {
 		return otherCompactedContextItem("context_compaction", rawItem)
 	}
-
 	contextItem := transcript.CompactedContextCompactionItem{
 		EncryptedContent: item.EncryptedContent,
 		Raw:              cloneRawMessage(rawItem),
 	}
-	compactedItem := emptyCompactedContextItem(transcript.CompactedContextItemKindContextCompaction)
+	compactedItem := emptyCompactedContextItem(
+		transcript.CompactedContextItemKindContextCompaction,
+	)
 	compactedItem.ContextCompaction = &contextItem
-
 	return compactedItem
 }
 
@@ -579,9 +554,10 @@ func otherCompactedContextItem(
 		Type: itemType,
 		Raw:  cloneRawMessage(rawItem),
 	}
-	contextItem := emptyCompactedContextItem(transcript.CompactedContextItemKindOther)
+	contextItem := emptyCompactedContextItem(
+		transcript.CompactedContextItemKindOther,
+	)
 	contextItem.Other = &otherItem
-
 	return contextItem
 }
 
@@ -590,18 +566,17 @@ func legacyCompactedSummaryContextItem(
 ) transcript.CompactedContextItem {
 	contentRaw, messageRaw := legacyCompactedSummaryRaw(text)
 	messageItem := transcript.CompactedMessageItem{
-		Role:  "user",
-		Phase: "",
-		Content: []transcript.CompactedMessageContentItem{
-			legacyCompactedSummaryContentItem(text, contentRaw),
-		},
+		Role:         "user",
+		Phase:        "",
+		Content:      []transcript.CompactedMessageContentItem{legacyCompactedSummaryContentItem(text, contentRaw)},
 		ContentRaw:   cloneRawMessage(contentRaw),
 		MessageClass: transcript.CompactedMessageClassSummary,
 		Raw:          cloneRawMessage(messageRaw),
 	}
-	contextItem := emptyCompactedContextItem(transcript.CompactedContextItemKindMessage)
+	contextItem := emptyCompactedContextItem(
+		transcript.CompactedContextItemKindMessage,
+	)
 	contextItem.Message = &messageItem
-
 	return contextItem
 }
 
@@ -621,18 +596,15 @@ func legacyCompactedSummaryContentItem(
 }
 
 func legacyCompactedSummaryRaw(text string) (json.RawMessage, json.RawMessage) {
-	contentBytes, err := json.Marshal([]rawCompactedMessageContentItem{
-		{
-			Type:     "input_text",
-			Text:     text,
-			ImageURL: "",
-			Detail:   "",
-		},
-	})
+	contentBytes, err := json.Marshal([]rawCompactedMessageContentItem{{
+		Type:     "input_text",
+		Text:     text,
+		ImageURL: "",
+		Detail:   "",
+	}})
 	if err != nil {
 		return nil, nil
 	}
-
 	messageBytes, err := json.Marshal(rawCompactedMessageItem{
 		Type:    "message",
 		Role:    "user",
@@ -642,17 +614,13 @@ func legacyCompactedSummaryRaw(text string) (json.RawMessage, json.RawMessage) {
 	if err != nil {
 		return cloneRawMessage(json.RawMessage(contentBytes)), nil
 	}
-
-	return cloneRawMessage(json.RawMessage(contentBytes)), cloneRawMessage(
-		json.RawMessage(messageBytes),
-	)
+	return cloneRawMessage(json.RawMessage(contentBytes)), cloneRawMessage(json.RawMessage(messageBytes))
 }
 
 func cloneRawMessage(raw json.RawMessage) json.RawMessage {
 	if len(raw) == 0 {
 		return nil
 	}
-
 	return append(json.RawMessage(nil), raw...)
 }
 
@@ -660,7 +628,6 @@ func firstNonEmpty(a string, b string) string {
 	if a != "" {
 		return a
 	}
-
 	return b
 }
 

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -33,7 +32,6 @@ func NewCmd(f *cli.Factory) *cobra.Command {
 		},
 	}
 	cmd.AddCommand(newSandboxCmd(f))
-
 	return cmd
 }
 
@@ -55,60 +53,42 @@ func NewConversationIndexCmd(f *cli.Factory) *cobra.Command {
 	index.AddCommand(newBackfillConversationDocumentsCmd(f))
 	index.AddCommand(newCopySharedIndexCmd(f))
 	index.AddCommand(newRepairConversationTimestampsCmd(f))
-
 	return index
 }
 
-// ReloadCommandError adds recovery instructions to daemon reload timeouts.
-//
-// Deadline errors retain their original cause and produce a warning log.
-// Other errors return unchanged.
-//
-// Example:
-//
-//	err := ReloadCommandError(context.DeadlineExceeded)
+// ReloadCommandError normalizes reload command errors into user-facing wording.
 func ReloadCommandError(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
-		slog.Warn("cli.daemon.reload_timed_out", "concern", "process.daemon.lifecycle", "err", err)
-
-		return fmt.Errorf(
-			"daemon reload did not complete within %s and no reload confirmation was received; "+
-				"check `clyde daemon status` and the daemon log, then rerun `clyde daemon reload`: %w",
-			ReloadCommandTimeout.String(),
-			err,
-		)
+		return errors.New("daemon reload did not complete within " + ReloadCommandTimeout.String() + " and no reload confirmation was received; check `clyde daemon status` and the daemon log, then rerun `clyde daemon reload`: " + err.Error())
 	}
-
 	return err
 }
 
 // WriteStatusReport writes the human-readable daemon status report.
 func WriteStatusReport(out io.Writer, report daemonsvc.StatusReport) {
 	_, _ = fmt.Fprintln(out, "daemon status")
-	writeLaunchdStatus(out, report)
+	switch {
+	case report.LaunchdTarget == "":
+		_, _ = fmt.Fprintln(out, "launchd: unavailable")
+	case report.LaunchdError != "":
+		_, _ = fmt.Fprintf(out, "launchd: unavailable target=%s error=%s\n", report.LaunchdTarget, report.LaunchdError)
+	case report.SupervisorPID > 0:
+		_, _ = fmt.Fprintf(out, "launchd: running target=%s supervisor_pid=%d\n", report.LaunchdTarget, report.SupervisorPID)
+	default:
+		_, _ = fmt.Fprintf(out, "launchd: loaded target=%s supervisor_pid=none\n", report.LaunchdTarget)
+	}
 
 	daemonSocketState := "missing"
 	if report.DaemonSocketExists {
 		daemonSocketState = "present"
 	}
-
-	_, _ = fmt.Fprintf(
-		out,
-		"daemon_socket: %s path=%s\n",
-		daemonSocketState,
-		report.DaemonSocketPath,
-	)
+	_, _ = fmt.Fprintf(out, "daemon_socket: %s path=%s\n", daemonSocketState, report.DaemonSocketPath)
 
 	switch {
 	case report.DaemonResponding:
 		_, _ = fmt.Fprintf(out, "daemon_rpc: responding socket=%s\n", report.DaemonSocketPath)
 	case report.DaemonError != "":
-		_, _ = fmt.Fprintf(
-			out,
-			"daemon_rpc: unavailable socket=%s error=%s\n",
-			report.DaemonSocketPath,
-			report.DaemonError,
-		)
+		_, _ = fmt.Fprintf(out, "daemon_rpc: unavailable socket=%s error=%s\n", report.DaemonSocketPath, report.DaemonError)
 	default:
 		_, _ = fmt.Fprintf(out, "daemon_rpc: unavailable socket=%s\n", report.DaemonSocketPath)
 	}
@@ -117,80 +97,27 @@ func WriteStatusReport(out io.Writer, report daemonsvc.StatusReport) {
 	if report.SupervisorSocketExists {
 		supervisorSocketState = "present"
 	}
-
-	_, _ = fmt.Fprintf(
-		out,
-		"supervisor_socket: %s path=%s\n",
-		supervisorSocketState,
-		report.SupervisorSocketPath,
-	)
+	_, _ = fmt.Fprintf(out, "supervisor_socket: %s path=%s\n", supervisorSocketState, report.SupervisorSocketPath)
 	switch {
 	case report.SupervisorResponding && report.SupervisorFingerprint != "":
-		_, _ = fmt.Fprintf(
-			out,
-			"supervisor_rpc: responding socket=%s fingerprint=%s\n",
-			report.SupervisorSocketPath,
-			report.SupervisorFingerprint,
-		)
+		_, _ = fmt.Fprintf(out, "supervisor_rpc: responding socket=%s fingerprint=%s\n", report.SupervisorSocketPath, report.SupervisorFingerprint)
 	case report.SupervisorResponding:
-		_, _ = fmt.Fprintf(
-			out,
-			"supervisor_rpc: responding socket=%s fingerprint=unknown\n",
-			report.SupervisorSocketPath,
-		)
+		_, _ = fmt.Fprintf(out, "supervisor_rpc: responding socket=%s fingerprint=unknown\n", report.SupervisorSocketPath)
 	case report.SupervisorError != "":
-		_, _ = fmt.Fprintf(
-			out,
-			"supervisor_rpc: unavailable socket=%s error=%s\n",
-			report.SupervisorSocketPath,
-			report.SupervisorError,
-		)
+		_, _ = fmt.Fprintf(out, "supervisor_rpc: unavailable socket=%s error=%s\n", report.SupervisorSocketPath, report.SupervisorError)
 	default:
-		_, _ = fmt.Fprintf(
-			out,
-			"supervisor_rpc: unavailable socket=%s\n",
-			report.SupervisorSocketPath,
-		)
+		_, _ = fmt.Fprintf(out, "supervisor_rpc: unavailable socket=%s\n", report.SupervisorSocketPath)
 	}
 
 	if len(report.WorkerPIDs) > 0 {
 		_, _ = fmt.Fprintf(out, "worker: pids=%s\n", joinPIDs(report.WorkerPIDs))
 		return
 	}
-
 	if report.WorkerError != "" {
 		_, _ = fmt.Fprintf(out, "worker: unknown error=%s\n", report.WorkerError)
 		return
 	}
-
 	_, _ = fmt.Fprintln(out, "worker: none")
-}
-
-func writeLaunchdStatus(out io.Writer, report daemonsvc.StatusReport) {
-	switch {
-	case report.LaunchdTarget == "":
-		_, _ = fmt.Fprintln(out, "launchd: unavailable")
-	case report.LaunchdError != "":
-		_, _ = fmt.Fprintf(
-			out,
-			"launchd: unavailable target=%s error=%s\n",
-			report.LaunchdTarget,
-			report.LaunchdError,
-		)
-	case report.SupervisorPID > 0:
-		_, _ = fmt.Fprintf(
-			out,
-			"launchd: running target=%s supervisor_pid=%d\n",
-			report.LaunchdTarget,
-			report.SupervisorPID,
-		)
-	default:
-		_, _ = fmt.Fprintf(
-			out,
-			"launchd: loaded target=%s supervisor_pid=none\n",
-			report.LaunchdTarget,
-		)
-	}
 }
 
 // WriteRuntimeStatusReport writes the passive semantic and listener snapshot.
@@ -199,43 +126,20 @@ func WriteRuntimeStatusReport(out io.Writer, snapshot *daemonsvc.RuntimeStatus) 
 		_, _ = fmt.Fprintln(out, "runtime: unavailable")
 		return
 	}
-
 	semantic := snapshot.Semantic
 	nextRetry := "none"
 	if semantic.NextRetryUnix != nil {
 		nextRetry = time.Unix(*semantic.NextRetryUnix, 0).Format(time.RFC3339)
 	}
-
-	_, _ = fmt.Fprintf(
-		out,
-		"semantic: ingestion_enabled=%t search_enabled=%t backend=%s connection=%s attempts=%d next_retry=%s\n",
-		semantic.IngestionEnabled,
-		semantic.SearchEnabled,
-		semantic.Backend,
-		semantic.Connection,
-		semantic.Attempts,
-		nextRetry,
-	)
+	_, _ = fmt.Fprintf(out, "semantic: ingestion_enabled=%t search_enabled=%t backend=%s connection=%s attempts=%d next_retry=%s\n", semantic.IngestionEnabled, semantic.SearchEnabled, semantic.Backend, semantic.Connection, semantic.Attempts, nextRetry)
 	if snapshot.CursorRawIndexingEnabled == nil {
 		_, _ = fmt.Fprintln(out, "cursor_raw_indexing: unknown")
 	} else {
-		_, _ = fmt.Fprintf(
-			out,
-			"cursor_raw_indexing: enabled=%t\n",
-			*snapshot.CursorRawIndexingEnabled,
-		)
+		_, _ = fmt.Fprintf(out, "cursor_raw_indexing: enabled=%t\n", *snapshot.CursorRawIndexingEnabled)
 	}
-
 	for _, listener := range snapshot.Listeners {
-		_, _ = fmt.Fprintf(
-			out,
-			"listener: name=%s network=%s address=%s\n",
-			listener.Name,
-			listener.Network,
-			listener.Address,
-		)
+		_, _ = fmt.Fprintf(out, "listener: name=%s network=%s address=%s\n", listener.Name, listener.Network, listener.Address)
 	}
-
 	if snapshot.Profiling == nil {
 		_, _ = fmt.Fprintln(out, "profiling: disabled")
 	} else {
@@ -245,12 +149,7 @@ func WriteRuntimeStatusReport(out io.Writer, snapshot *daemonsvc.RuntimeStatus) 
 
 // WriteMetricsHistoryReport appends a concise retained-log metrics report.
 func WriteMetricsHistoryReport(out io.Writer, report daemonsvc.MetricsHistoryReport) {
-	_, _ = fmt.Fprintf(
-		out,
-		"metrics_window: since=%s until=%s\n",
-		report.Window.Since.Format(time.RFC3339),
-		report.Window.Until.Format(time.RFC3339),
-	)
+	_, _ = fmt.Fprintf(out, "metrics_window: since=%s until=%s\n", report.Window.Since.Format(time.RFC3339), report.Window.Until.Format(time.RFC3339))
 	_, _ = fmt.Fprintf(out, "metrics_coverage: complete=%t\n", report.Coverage.Complete)
 	writeMetricCounter(out, "requests", report.Metrics.Requests)
 	writeMetricCounter(out, "completed", report.Metrics.Completed)
@@ -265,16 +164,10 @@ func WriteMetricsHistoryReport(out io.Writer, report daemonsvc.MetricsHistoryRep
 	writeMetricGauge(out, "inflight", report.Metrics.Inflight)
 	writeMetricGauge(out, "streaming", report.Metrics.Streaming)
 	writeMetricDuration(out, "time_total", "", report.TimeBreakdown.Total)
-
 	for _, stage := range report.TimeBreakdown.Stages {
 		writeMetricDuration(out, "time_stage", stage.Name, stage.MetricsDuration)
 	}
-
-	_, _ = fmt.Fprintf(
-		out,
-		"unattributed_duration_ms: %s\n",
-		formatMetricInt(report.UnattributedDurationMS),
-	)
+	_, _ = fmt.Fprintf(out, "unattributed_duration_ms: %s\n", formatMetricInt(report.UnattributedDurationMS))
 	for _, warning := range report.Warnings {
 		_, _ = fmt.Fprintf(out, "warning: %s\n", warning)
 	}
@@ -290,12 +183,10 @@ func WriteMetricsWindowsReport(out io.Writer, windows []daemonsvc.MetricsWindowR
 	if len(windows) == 0 {
 		return
 	}
-
 	labels := make([]string, 0, len(windows))
 	for _, window := range windows {
 		labels = append(labels, window.Label)
 	}
-
 	writer := tabwriter.NewWriter(out, 0, 0, 2, ' ', tabwriter.AlignRight)
 	_, _ = fmt.Fprintf(writer, "metric\t%s\t\n", strings.Join(labels, "\t"))
 
@@ -304,7 +195,6 @@ func WriteMetricsWindowsReport(out io.Writer, windows []daemonsvc.MetricsWindowR
 		for _, window := range windows {
 			values = append(values, formatMetricInt(row.read(window.Report.Metrics).Delta))
 		}
-
 		_, _ = fmt.Fprintf(writer, "%s\t%s\t\n", row.name, strings.Join(values, "\t"))
 	}
 
@@ -313,18 +203,15 @@ func WriteMetricsWindowsReport(out io.Writer, windows []daemonsvc.MetricsWindowR
 		for _, window := range windows {
 			values = append(values, formatMetricInt(row.read(window.Report.TimeBreakdown.Total)))
 		}
-
 		_, _ = fmt.Fprintf(writer, "%s\t%s\t\n", row.name, strings.Join(values, "\t"))
 	}
 
 	restarts := make([]string, 0, len(windows))
-
 	coverage := make([]string, 0, len(windows))
 	for _, window := range windows {
 		restarts = append(restarts, strconv.Itoa(window.Report.Restarts))
 		coverage = append(coverage, strconv.FormatBool(window.Report.Coverage.Complete))
 	}
-
 	_, _ = fmt.Fprintf(writer, "restarts\t%s\t\n", strings.Join(restarts, "\t"))
 	_, _ = fmt.Fprintf(writer, "coverage_complete\t%s\t\n", strings.Join(coverage, "\t"))
 	_ = writer.Flush()
@@ -347,46 +234,16 @@ type metricsWindowCounterRow struct {
 // position between releases.
 func metricsWindowCounterRows() []metricsWindowCounterRow {
 	return []metricsWindowCounterRow{
-		{
-			name: "requests",
-			read: func(m daemonsvc.MetricsValues) daemonsvc.MetricsCounter { return m.Requests },
-		},
-		{
-			name: "completed",
-			read: func(m daemonsvc.MetricsValues) daemonsvc.MetricsCounter { return m.Completed },
-		},
-		{
-			name: "failed",
-			read: func(m daemonsvc.MetricsValues) daemonsvc.MetricsCounter { return m.Failed },
-		},
-		{
-			name: "cancelled",
-			read: func(m daemonsvc.MetricsValues) daemonsvc.MetricsCounter { return m.Cancelled },
-		},
-		{
-			name: "bytes_in",
-			read: func(m daemonsvc.MetricsValues) daemonsvc.MetricsCounter { return m.BytesIn },
-		},
-		{
-			name: "bytes_out",
-			read: func(m daemonsvc.MetricsValues) daemonsvc.MetricsCounter { return m.BytesOut },
-		},
-		{
-			name: "input_tokens",
-			read: func(m daemonsvc.MetricsValues) daemonsvc.MetricsCounter { return m.InputTokens },
-		},
-		{
-			name: "output_tokens",
-			read: func(m daemonsvc.MetricsValues) daemonsvc.MetricsCounter { return m.OutputTokens },
-		},
-		{
-			name: "cache_tokens",
-			read: func(m daemonsvc.MetricsValues) daemonsvc.MetricsCounter { return m.CacheTokens },
-		},
-		{
-			name: "cost_microcents",
-			read: func(m daemonsvc.MetricsValues) daemonsvc.MetricsCounter { return m.CostMicrocents },
-		},
+		{name: "requests", read: func(m daemonsvc.MetricsValues) daemonsvc.MetricsCounter { return m.Requests }},
+		{name: "completed", read: func(m daemonsvc.MetricsValues) daemonsvc.MetricsCounter { return m.Completed }},
+		{name: "failed", read: func(m daemonsvc.MetricsValues) daemonsvc.MetricsCounter { return m.Failed }},
+		{name: "cancelled", read: func(m daemonsvc.MetricsValues) daemonsvc.MetricsCounter { return m.Cancelled }},
+		{name: "bytes_in", read: func(m daemonsvc.MetricsValues) daemonsvc.MetricsCounter { return m.BytesIn }},
+		{name: "bytes_out", read: func(m daemonsvc.MetricsValues) daemonsvc.MetricsCounter { return m.BytesOut }},
+		{name: "input_tokens", read: func(m daemonsvc.MetricsValues) daemonsvc.MetricsCounter { return m.InputTokens }},
+		{name: "output_tokens", read: func(m daemonsvc.MetricsValues) daemonsvc.MetricsCounter { return m.OutputTokens }},
+		{name: "cache_tokens", read: func(m daemonsvc.MetricsValues) daemonsvc.MetricsCounter { return m.CacheTokens }},
+		{name: "cost_microcents", read: func(m daemonsvc.MetricsValues) daemonsvc.MetricsCounter { return m.CostMicrocents }},
 	}
 }
 
@@ -408,58 +265,29 @@ func metricsWindowDurationRows() []metricsWindowDurationRow {
 }
 
 func writeMetricCounter(out io.Writer, name string, counter daemonsvc.MetricsCounter) {
-	_, _ = fmt.Fprintf(
-		out,
-		"%s: current=%s delta=%s rate_per_second=%s\n",
-		name,
-		formatMetricInt(counter.Current),
-		formatMetricInt(counter.Delta),
-		formatMetricFloat(counter.RatePerSecond),
-	)
+	_, _ = fmt.Fprintf(out, "%s: current=%s delta=%s rate_per_second=%s\n", name,
+		formatMetricInt(counter.Current), formatMetricInt(counter.Delta), formatMetricFloat(counter.RatePerSecond))
 }
 
 func writeMetricGauge(out io.Writer, name string, gauge daemonsvc.MetricsGauge) {
-	_, _ = fmt.Fprintf(
-		out,
-		"%s: current=%s min=%s mean=%s max=%s\n",
-		name,
-		formatMetricInt(gauge.Current),
-		formatMetricInt(gauge.Min),
-		formatMetricFloat(gauge.Mean),
-		formatMetricInt(gauge.Max),
-	)
+	_, _ = fmt.Fprintf(out, "%s: current=%s min=%s mean=%s max=%s\n", name,
+		formatMetricInt(gauge.Current), formatMetricInt(gauge.Min), formatMetricFloat(gauge.Mean), formatMetricInt(gauge.Max))
 }
 
-func writeMetricDuration(
-	out io.Writer,
-	label string,
-	name string,
-	duration daemonsvc.MetricsDuration,
-) {
+func writeMetricDuration(out io.Writer, label string, name string, duration daemonsvc.MetricsDuration) {
 	nameField := ""
 	if name != "" {
 		nameField = " name=" + name
 	}
-
-	_, _ = fmt.Fprintf(
-		out,
-		"%s:%s total_ms=%s calls=%s mean_ms=%s p50_ms=%s p95_ms=%s max_ms=%s\n",
-		label,
-		nameField,
-		formatMetricInt(duration.TotalMS),
-		formatMetricInt(duration.Calls),
-		formatMetricFloat(duration.MeanMS),
-		formatMetricInt(duration.P50MS),
-		formatMetricInt(duration.P95MS),
-		formatMetricInt(duration.MaxMS),
-	)
+	_, _ = fmt.Fprintf(out, "%s:%s total_ms=%s calls=%s mean_ms=%s p50_ms=%s p95_ms=%s max_ms=%s\n",
+		label, nameField, formatMetricInt(duration.TotalMS), formatMetricInt(duration.Calls),
+		formatMetricFloat(duration.MeanMS), formatMetricInt(duration.P50MS), formatMetricInt(duration.P95MS), formatMetricInt(duration.MaxMS))
 }
 
 func formatMetricInt(value *int64) string {
 	if value == nil {
 		return "n/a"
 	}
-
 	return strconv.FormatInt(*value, 10)
 }
 
@@ -467,7 +295,6 @@ func formatMetricFloat(value *float64) string {
 	if value == nil {
 		return "n/a"
 	}
-
 	return strconv.FormatFloat(*value, 'f', 2, 64)
 }
 
@@ -476,6 +303,5 @@ func joinPIDs(pids []int) string {
 	for _, pid := range pids {
 		parts = append(parts, strconv.Itoa(pid))
 	}
-
 	return strings.Join(parts, ",")
 }

@@ -23,7 +23,6 @@ func composerUpdatedAt(header cursorstore.ComposerHeader) time.Time {
 	if header.LastUpdatedAt > header.CreatedAt {
 		return msToTime(header.LastUpdatedAt)
 	}
-
 	return msToTime(header.CreatedAt)
 }
 
@@ -59,72 +58,29 @@ func composerScanStamp(
 	err error,
 ) (conversation.FileStamp, bool) {
 	if err != nil {
-		slog.WarnContext(
-			ctx,
-			"providers.cursor.parser.composer_bubble_stock_failed",
-			"concern",
-			concern,
-			"path",
-			globalDBPath,
-			"composer_id",
-			composerID,
-			"err",
-			err,
-		)
-
+		slog.WarnContext(ctx, "providers.cursor.parser.composer_bubble_stock_failed", "concern", concern, "path", globalDBPath, "composer_id", composerID, "err", err)
 		return keepPriorComposer(ctx, globalDBPath, composerID, priorStamp)
 	}
-
 	if !stock.Conclusive {
 		if priorStamp.Size == 0 && priorStamp.Mtime.IsZero() {
-			slog.WarnContext(
-				ctx,
-				"providers.cursor.parser.composer_admitted_unread",
-				"concern",
-				concern,
-				"path",
-				globalDBPath,
-				"composer_id",
-				composerID,
-				"stored_rows",
-				stock.StoredRows,
-			)
-
+			slog.WarnContext(ctx, "providers.cursor.parser.composer_admitted_unread", "concern", concern, "path", globalDBPath, "composer_id", composerID, "stored_rows", stock.StoredRows)
 			return composerStamp(header, stock), true
 		}
-
 		return keepPriorComposer(ctx, globalDBPath, composerID, priorStamp)
 	}
-
 	if len(header.FullConversationHeadersOnly) == 0 {
 		if !stock.HasContent {
 			return conversation.FileStamp{Size: 0, Mtime: time.Time{}}, false
 		}
-
-		slog.DebugContext(
-			ctx,
-			"providers.cursor.parser.composer_admitted_by_stored_bubbles",
-			"concern",
-			concern,
-			"path",
-			globalDBPath,
-			"composer_id",
-			composerID,
-			"stored_rows",
-			stock.StoredRows,
-		)
+		slog.DebugContext(ctx, "providers.cursor.parser.composer_admitted_by_stored_bubbles", "concern", concern, "path", globalDBPath, "composer_id", composerID, "stored_rows", stock.StoredRows)
 	}
-
 	return composerStamp(header, stock), true
 }
 
-func preserveComposerAfterGlobalFailure(
-	priorStamp conversation.FileStamp,
-) (conversation.FileStamp, bool) {
+func preserveComposerAfterGlobalFailure(priorStamp conversation.FileStamp) (conversation.FileStamp, bool) {
 	if priorStamp.Size == 0 && priorStamp.Mtime.IsZero() {
 		return conversation.FileStamp{Size: 0, Mtime: time.Time{}}, false
 	}
-
 	return priorStamp, true
 }
 
@@ -135,19 +91,12 @@ func warnGlobalComposerDiscoveryFailure(
 	preserved int,
 	omitted int,
 ) {
-	slog.WarnContext(
-		ctx,
-		"providers.cursor.parser.composer_global_discovery_failed",
-		"concern",
-		concern,
-		"path",
-		globalDBPath,
-		"preserved",
-		preserved,
-		"omitted",
-		omitted,
-		"err",
-		err,
+	slog.WarnContext(ctx, "providers.cursor.parser.composer_global_discovery_failed",
+		"concern", concern,
+		"path", globalDBPath,
+		"preserved", preserved,
+		"omitted", omitted,
+		"err", err,
 	)
 }
 
@@ -179,31 +128,10 @@ func keepPriorComposer(
 	priorStamp conversation.FileStamp,
 ) (conversation.FileStamp, bool) {
 	if priorStamp.Size == 0 && priorStamp.Mtime.IsZero() {
-		slog.WarnContext(
-			ctx,
-			"providers.cursor.parser.composer_dropped_unread",
-			"concern",
-			concern,
-			"path",
-			globalDBPath,
-			"composer_id",
-			composerID,
-		)
-
+		slog.WarnContext(ctx, "providers.cursor.parser.composer_dropped_unread", "concern", concern, "path", globalDBPath, "composer_id", composerID)
 		return conversation.FileStamp{Size: 0, Mtime: time.Time{}}, false
 	}
-
-	slog.WarnContext(
-		ctx,
-		"providers.cursor.parser.composer_kept_on_prior_stamp",
-		"concern",
-		concern,
-		"path",
-		globalDBPath,
-		"composer_id",
-		composerID,
-	)
-
+	slog.WarnContext(ctx, "providers.cursor.parser.composer_kept_on_prior_stamp", "concern", concern, "path", globalDBPath, "composer_id", composerID)
 	return priorStamp, true
 }
 
@@ -227,6 +155,5 @@ func composerChangeKey(revision int64, header cursorstore.ComposerHeader) int64 
 	// missed refresh for one chat at odds of about one in four billion per change.
 	hasher := fnv.New32a()
 	_, _ = fmt.Fprintf(hasher, "%d\x00%+v", revision, header)
-
 	return int64(hasher.Sum32())
 }

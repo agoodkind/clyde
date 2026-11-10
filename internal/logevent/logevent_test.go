@@ -14,29 +14,18 @@ import (
 func TestRecorderReportsMissingRequiredLegs(t *testing.T) {
 	var output bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{}))
-	emitter := NewEmitter(
-		logger,
-		RequiredLegs{SurfaceAdapterChat: {LegAdapterIngress, LegAdapterPayload}},
-	)
-	recorder := emitter.Begin(
-		Identity{RequestID: "req-1"},
-		Path{Surface: SurfaceAdapterChat, RouteFamily: RouteFamilyChatCompatible},
-	)
+	emitter := NewEmitter(logger, RequiredLegs{SurfaceAdapterChat: {LegAdapterIngress, LegAdapterPayload}})
+	recorder := emitter.Begin(Identity{RequestID: "req-1"}, Path{Surface: SurfaceAdapterChat, RouteFamily: RouteFamilyChatCompatible})
 
-	recorder.Emit(
-		context.Background(),
-		Event{Path: Path{Leg: LegAdapterIngress, Phase: PhaseStarted}},
-	)
+	recorder.Emit(context.Background(), Event{Path: Path{Leg: LegAdapterIngress, Phase: PhaseStarted}})
 	complete := recorder.Complete(context.Background())
 
 	if complete {
 		t.Fatal("Complete returned true, want false")
 	}
-
 	if !strings.Contains(output.String(), "logging.request.incomplete") {
 		t.Fatalf("log output does not include incomplete event: %s", output.String())
 	}
-
 	if !strings.Contains(output.String(), "adapter_payload") {
 		t.Fatalf("log output does not include missing leg: %s", output.String())
 	}
@@ -46,19 +35,13 @@ func TestRecorderEmitsAdapterComponent(t *testing.T) {
 	var output bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	emitter := NewEmitter(logger, RequiredLegs{SurfaceAdapterChat: {LegAdapterIngress}})
-	recorder := emitter.Begin(
-		Identity{RequestID: "req-2"},
-		Path{Surface: SurfaceAdapterChat, RouteFamily: RouteFamilyChatCompatible},
-	)
+	recorder := emitter.Begin(Identity{RequestID: "req-2"}, Path{Surface: SurfaceAdapterChat, RouteFamily: RouteFamilyChatCompatible})
 
-	recorder.Emit(
-		context.Background(),
-		Event{
-			Time: time.Unix(1, 0),
-			Name: "logging.request.leg",
-			Path: Path{Leg: LegAdapterIngress, Phase: PhaseStarted},
-		},
-	)
+	recorder.Emit(context.Background(), Event{
+		Time: time.Unix(1, 0),
+		Name: "logging.request.leg",
+		Path: Path{Leg: LegAdapterIngress, Phase: PhaseStarted},
+	})
 
 	if !strings.Contains(output.String(), `"component":"adapter"`) {
 		t.Fatalf("log output does not include adapter component: %s", output.String())
@@ -87,7 +70,6 @@ func (f testFacet) FacetAttrs() []slog.Attr {
 	for _, attr := range f.Attrs {
 		attrs = append(attrs, slog.String(attr.Key, attr.Value))
 	}
-
 	return attrs
 }
 
@@ -97,10 +79,7 @@ func TestFacetsBundleEmitsAttrsAndJSON(t *testing.T) {
 	var output bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	emitter := NewEmitter(logger, RequiredLegs{SurfaceAdapterChat: {LegAdapterIngress}})
-	recorder := emitter.Begin(
-		Identity{RequestID: "req-facet"},
-		Path{Surface: SurfaceAdapterChat, RouteFamily: RouteFamilyChatCompatible},
-	)
+	recorder := emitter.Begin(Identity{RequestID: "req-facet"}, Path{Surface: SurfaceAdapterChat, RouteFamily: RouteFamilyChatCompatible})
 
 	facet := testFacet{
 		Key: "demo",
@@ -117,7 +96,6 @@ func TestFacetsBundleEmitsAttrsAndJSON(t *testing.T) {
 	recorder.Emit(context.Background(), event)
 
 	logged := output.String()
-
 	for _, want := range []string{`"demo":{"model":"gpt-5","effort":"high"}`} {
 		if !strings.Contains(logged, want) {
 			t.Fatalf("log output missing %q: %s", want, logged)
@@ -171,13 +149,8 @@ func TestSinkWireValuesAreStable(t *testing.T) {
 			t.Fatalf("sink %v wire value = %q, want %q", tc.sink, string(tc.sink), tc.want)
 		}
 	}
-
 	if string(SinkInventory) != config.LoggingSinkInventory {
-		t.Fatalf(
-			"SinkInventory = %q, want config.LoggingSinkInventory %q",
-			string(SinkInventory),
-			config.LoggingSinkInventory,
-		)
+		t.Fatalf("SinkInventory = %q, want config.LoggingSinkInventory %q", string(SinkInventory), config.LoggingSinkInventory)
 	}
 }
 
@@ -186,7 +159,6 @@ func sinkNames(sinks []SinkName) []string {
 	for _, sink := range sinks {
 		names = append(names, string(sink))
 	}
-
 	return names
 }
 
@@ -199,29 +171,20 @@ func TestParseIncompletePolicy(t *testing.T) {
 	}{
 		{name: "warn", input: "warn", want: IncompletePolicyWarn, ok: true},
 		{name: "fail_test", input: "fail_test", want: IncompletePolicyFailTest, ok: true},
-		{
-			name:  "trims_and_lowercases",
-			input: "  FAIL_TEST  ",
-			want:  IncompletePolicyFailTest,
-			ok:    true,
-		},
+		{name: "trims_and_lowercases", input: "  FAIL_TEST  ", want: IncompletePolicyFailTest, ok: true},
 		{name: "rejects_unknown", input: "abort", want: "", ok: false},
 		{name: "rejects_empty", input: "", want: "", ok: false},
 	}
 	for _, tc := range tests {
-		t.Run(
-			tc.name,
-			func(t *testing.T) {
-				got, ok := ParseIncompletePolicy(tc.input)
-				if ok != tc.ok {
-					t.Fatalf("ok = %v, want %v", ok, tc.ok)
-				}
-
-				if got != tc.want {
-					t.Fatalf("policy = %q, want %q", got, tc.want)
-				}
-			},
-		)
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := ParseIncompletePolicy(tc.input)
+			if ok != tc.ok {
+				t.Fatalf("ok = %v, want %v", ok, tc.ok)
+			}
+			if got != tc.want {
+				t.Fatalf("policy = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -234,41 +197,27 @@ func TestRecorderIncompletePolicyWarnEmitsWithoutCallingHandler(t *testing.T) {
 		handlerCalls++
 		handlerReport = report
 	}
-	emitter := NewEmitter(
-		logger,
+	emitter := NewEmitter(logger,
 		RequiredLegs{SurfaceAdapterChat: {LegAdapterIngress, LegAdapterPayload}},
 		WithIncompletePolicy(IncompletePolicyWarn),
 		WithTestingTB(handler),
 	)
-	recorder := emitter.Begin(
-		Identity{RequestID: "warn-1"},
-		Path{Surface: SurfaceAdapterChat, RouteFamily: RouteFamilyChatCompatible},
-	)
+	recorder := emitter.Begin(Identity{RequestID: "warn-1"}, Path{Surface: SurfaceAdapterChat, RouteFamily: RouteFamilyChatCompatible})
 
-	recorder.Emit(
-		context.Background(),
-		Event{Path: Path{Leg: LegAdapterIngress, Phase: PhaseStarted}},
-	)
+	recorder.Emit(context.Background(), Event{Path: Path{Leg: LegAdapterIngress, Phase: PhaseStarted}})
 	complete := recorder.Complete(context.Background())
 
 	if complete {
 		t.Fatal("Complete returned true, want false")
 	}
-
 	if !strings.Contains(output.String(), "logging.request.incomplete") {
 		t.Fatalf("log output does not include incomplete event: %s", output.String())
 	}
-
 	if !strings.Contains(output.String(), `"incomplete_policy":"warn"`) {
 		t.Fatalf("log output does not include incomplete_policy=warn: %s", output.String())
 	}
-
 	if handlerCalls != 0 {
-		t.Fatalf(
-			"handler called %d times under warn, want 0; report=%+v",
-			handlerCalls,
-			handlerReport,
-		)
+		t.Fatalf("handler called %d times under warn, want 0; report=%+v", handlerCalls, handlerReport)
 	}
 }
 
@@ -281,47 +230,34 @@ func TestRecorderIncompletePolicyFailTestCallsHandler(t *testing.T) {
 		handlerCalls++
 		handlerReport = report
 	}
-	emitter := NewEmitter(
-		logger,
+	emitter := NewEmitter(logger,
 		RequiredLegs{SurfaceAdapterChat: {LegAdapterIngress, LegAdapterPayload}},
 		WithIncompletePolicy(IncompletePolicyFailTest),
 		WithTestingTB(handler),
 	)
-	recorder := emitter.Begin(
-		Identity{RequestID: "fail-1"},
-		Path{Surface: SurfaceAdapterChat, RouteFamily: RouteFamilyChatCompatible},
-	)
+	recorder := emitter.Begin(Identity{RequestID: "fail-1"}, Path{Surface: SurfaceAdapterChat, RouteFamily: RouteFamilyChatCompatible})
 
-	recorder.Emit(
-		context.Background(),
-		Event{Path: Path{Leg: LegAdapterIngress, Phase: PhaseStarted}},
-	)
+	recorder.Emit(context.Background(), Event{Path: Path{Leg: LegAdapterIngress, Phase: PhaseStarted}})
 	complete := recorder.Complete(context.Background())
 
 	if complete {
 		t.Fatal("Complete returned true, want false")
 	}
-
 	if !strings.Contains(output.String(), "logging.request.incomplete") {
 		t.Fatalf("log output does not include incomplete event: %s", output.String())
 	}
-
 	if !strings.Contains(output.String(), `"incomplete_policy":"fail_test"`) {
 		t.Fatalf("log output does not include incomplete_policy=fail_test: %s", output.String())
 	}
-
 	if handlerCalls != 1 {
 		t.Fatalf("handler called %d times under fail_test, want 1", handlerCalls)
 	}
-
 	if handlerReport.Surface != SurfaceAdapterChat {
 		t.Fatalf("handler surface=%q, want %q", handlerReport.Surface, SurfaceAdapterChat)
 	}
-
 	if len(handlerReport.Missing) != 1 || handlerReport.Missing[0] != LegAdapterPayload {
 		t.Fatalf("handler missing=%v, want [%s]", handlerReport.Missing, LegAdapterPayload)
 	}
-
 	if handlerReport.Identity.RequestID != "fail-1" {
 		t.Fatalf("handler identity.RequestID=%q, want fail-1", handlerReport.Identity.RequestID)
 	}
@@ -330,26 +266,18 @@ func TestRecorderIncompletePolicyFailTestCallsHandler(t *testing.T) {
 func TestRecorderIncompletePolicyFailTestWithoutHandlerOnlyEmits(t *testing.T) {
 	var output bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{}))
-	emitter := NewEmitter(
-		logger,
+	emitter := NewEmitter(logger,
 		RequiredLegs{SurfaceAdapterChat: {LegAdapterIngress, LegAdapterPayload}},
 		WithIncompletePolicy(IncompletePolicyFailTest),
 	)
-	recorder := emitter.Begin(
-		Identity{RequestID: "fail-2"},
-		Path{Surface: SurfaceAdapterChat, RouteFamily: RouteFamilyChatCompatible},
-	)
+	recorder := emitter.Begin(Identity{RequestID: "fail-2"}, Path{Surface: SurfaceAdapterChat, RouteFamily: RouteFamilyChatCompatible})
 
-	recorder.Emit(
-		context.Background(),
-		Event{Path: Path{Leg: LegAdapterIngress, Phase: PhaseStarted}},
-	)
+	recorder.Emit(context.Background(), Event{Path: Path{Leg: LegAdapterIngress, Phase: PhaseStarted}})
 	complete := recorder.Complete(context.Background())
 
 	if complete {
 		t.Fatal("Complete returned true, want false")
 	}
-
 	if !strings.Contains(output.String(), `"incomplete_policy":"fail_test"`) {
 		t.Fatalf("log output does not include incomplete_policy=fail_test: %s", output.String())
 	}

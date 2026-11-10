@@ -26,34 +26,19 @@ func runCloserBounded(grace time.Duration, sess sessionEntry, reason string) err
 	if sess.closer == nil {
 		return nil
 	}
-
 	resultCh := make(chan error, 1)
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				stack := make([]byte, 4096)
 				stack = stack[:runtime.Stack(stack, false)]
-				slog.Error(
-					"livetrack.closer.panic",
-					"concern",
-					"livetrack",
-					"component",
-					"livetrack",
-					"session_id",
-					sess.id,
-					"reason",
-					reason,
-					"panic",
-					recovered,
-					"err",
-					fmt.Errorf("closer panic: %v", recovered),
+				slog.Error("livetrack.closer.panic", "concern", "livetrack", "component", "livetrack",
+					"session_id", sess.id,
+					"reason", reason,
+					"panic", recovered,
+					"err", fmt.Errorf("closer panic: %v", recovered),
 				)
-				resultCh <- fmt.Errorf(
-					"livetrack: closer panic for session %s: %v\n%s",
-					sess.id,
-					recovered,
-					stack,
-				)
+				resultCh <- fmt.Errorf("livetrack: closer panic for session %s: %v\n%s", sess.id, recovered, stack)
 			}
 		}()
 		resultCh <- sess.closer.Close(reason)
@@ -61,7 +46,6 @@ func runCloserBounded(grace time.Duration, sess sessionEntry, reason string) err
 	if grace <= 0 {
 		return <-resultCh
 	}
-
 	timer := time.NewTimer(grace)
 	defer timer.Stop()
 	select {
@@ -80,113 +64,69 @@ func runCloserBounded(grace time.Duration, sess sessionEntry, reason string) err
 // ctx is honored: once it expires, the fan-out stops scheduling new
 // closers but already-running ones continue until their grace
 // deadline.
-func closerFanOut(
-	ctx context.Context,
-	parallel bool,
-	grace time.Duration,
-	entries []sessionEntry,
-	reason string,
-) []error {
+func closerFanOut(ctx context.Context, parallel bool, grace time.Duration, entries []sessionEntry, reason string) []error {
 	if len(entries) == 0 {
 		return nil
 	}
-
 	if !parallel {
 		return runCloserSequential(ctx, grace, entries, reason)
 	}
-
 	return runCloserParallel(ctx, grace, entries, reason)
 }
 
-func runCloserSequential(
-	ctx context.Context,
-	grace time.Duration,
-	entries []sessionEntry,
-	reason string,
-) []error {
+func runCloserSequential(ctx context.Context, grace time.Duration, entries []sessionEntry, reason string) []error {
 	errs := make([]error, 0, len(entries))
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
-			errs = append(
-				errs,
-				fmt.Errorf("livetrack: aborted before closing session %s: %w", entry.id, err),
-			)
+			errs = append(errs, fmt.Errorf("livetrack: aborted before closing session %s: %w", entry.id, err))
 			continue
 		}
-
 		if err := runCloserBounded(grace, entry, reason); err != nil {
 			errs = append(errs, err)
 		}
 	}
-
 	return errs
 }
 
-func runCloserParallel(
-	ctx context.Context,
-	grace time.Duration,
-	entries []sessionEntry,
-	reason string,
-) []error {
+func runCloserParallel(ctx context.Context, grace time.Duration, entries []sessionEntry, reason string) []error {
 	workerCount := max(1, min(runtime.NumCPU(), len(entries)))
-
 	jobs := make(chan sessionEntry, len(entries))
 	for _, entry := range entries {
 		jobs <- entry
 	}
-
 	close(jobs)
 	errCh := make(chan error, len(entries))
 	var wg sync.WaitGroup
 	wg.Add(workerCount)
-
 	for range workerCount {
 		go func() {
 			defer wg.Done()
 			defer func() {
 				if recovered := recover(); recovered != nil {
-					slog.ErrorContext(
-						ctx,
-						"livetrack.closer.worker_panic",
-						"concern",
-						"livetrack",
-						"component",
-						"livetrack",
-						"reason",
-						reason,
-						"panic",
-						recovered,
-						"err",
-						fmt.Errorf("worker panic: %v", recovered),
+					slog.ErrorContext(ctx, "livetrack.closer.worker_panic", "concern", "livetrack", "component", "livetrack",
+						"reason", reason,
+						"panic", recovered,
+						"err", fmt.Errorf("worker panic: %v", recovered),
 					)
 					errCh <- fmt.Errorf("livetrack: closer worker panic: %v", recovered)
 				}
 			}()
-
 			for entry := range jobs {
 				if err := ctx.Err(); err != nil {
-					errCh <- fmt.Errorf(
-						"livetrack: aborted before closing session %s: %w",
-						entry.id,
-						err,
-					)
+					errCh <- fmt.Errorf("livetrack: aborted before closing session %s: %w", entry.id, err)
 					continue
 				}
-
 				if err := runCloserBounded(grace, entry, reason); err != nil {
 					errCh <- err
 				}
 			}
 		}()
 	}
-
 	wg.Wait()
 	close(errCh)
 	errs := make([]error, 0, len(entries))
-
 	for err := range errCh {
 		errs = append(errs, err)
 	}
-
 	return errs
 }

@@ -54,47 +54,26 @@ const (
 
 // ComputeWarningsFromResponsesPresence keeps value-sensitive controls beside
 // the presence callback so partial dispositions can warn when behavior changes.
-func ComputeWarningsFromResponsesPresence(
-	presenceFor func(string) int,
-	values ResponsesWarningValues,
-	provider adaptermodel.BackendID,
-	endpoint Endpoint,
-	unsupportedTools []string,
-) WarningSet {
+func ComputeWarningsFromResponsesPresence(presenceFor func(string) int, values ResponsesWarningValues, provider adaptermodel.BackendID, endpoint Endpoint, unsupportedTools []string) WarningSet {
 	if endpoint != EndpointResponses {
 		return WarningSet{warnings: nil}
 	}
-
 	column, known := providerColumnFor(provider)
 	if !known {
 		return WarningSet{warnings: nil}
 	}
-
 	raw := make([]CompatibilityWarning, 0, len(responsesCatalog)+len(unsupportedTools))
 	for _, entry := range responsesCatalog {
 		if entry.param == "n" {
 			if values.N != nil && *values.N > 1 {
-				raw = append(
-					raw,
-					CompatibilityWarning{
-						Code:        warningCodeOmitted,
-						Param:       "n",
-						Disposition: dispositionLabelOmitted,
-						Message: "n is not supported by the " + backendLabel(
-							column,
-						) + " backend and one result was returned",
-					},
-				)
+				raw = append(raw, CompatibilityWarning{Code: warningCodeOmitted, Param: "n", Disposition: dispositionLabelOmitted, Message: "n is not supported by the " + backendLabel(column) + " backend and one result was returned"})
 			}
-
 			continue
 		}
-
 		presence := presenceFor(entry.param)
 		if presence == 0 || presence == 1 {
 			continue
 		}
-
 		switch entry.dispositionFor(column) {
 		case dispositionOmitWarn, dispositionOverrideWarn:
 			raw = append(raw, warningFor(entry, column))
@@ -106,28 +85,20 @@ func ComputeWarningsFromResponsesPresence(
 			continue
 		}
 	}
-
 	for _, toolType := range unsupportedTools {
 		raw = append(raw, toolUnsupportedWarning(toolType))
 	}
-
 	return newWarningSet(raw)
 }
 
-func partialWarningFor(
-	entry catalogEntry,
-	column providerColumn,
-	values ResponsesWarningValues,
-) (CompatibilityWarning, bool) {
+func partialWarningFor(entry catalogEntry, column providerColumn, values ResponsesWarningValues) (CompatibilityWarning, bool) {
 	if column != columnCodex || entry.param != "tool_choice" {
 		return CompatibilityWarning{Code: "", Param: "", Disposition: "", Message: ""}, false
 	}
-
 	var choice string
 	if err := json.Unmarshal(values.ToolChoice, &choice); err == nil && choice == "auto" {
 		return CompatibilityWarning{Code: "", Param: "", Disposition: "", Message: ""}, false
 	}
-
 	return CompatibilityWarning{
 		Code:        warningCodeOverridden,
 		Param:       "tool_choice",
@@ -143,13 +114,11 @@ func RejectedParam(presenceFor func(string) int) string {
 		if entry.codex != dispositionReject {
 			continue
 		}
-
 		presence := presenceFor(entry.param)
 		if presence != 0 && presence != 1 {
 			return entry.param
 		}
 	}
-
 	return ""
 }
 
@@ -171,12 +140,10 @@ func (s WarningSet) Headers() []string {
 	if len(s.warnings) == 0 {
 		return nil
 	}
-
 	out := make([]string, 0, len(s.warnings))
 	for _, warning := range s.warnings {
 		out = append(out, warningHeader(warning))
 	}
-
 	return out
 }
 
@@ -205,7 +172,6 @@ func dedupKey(warning CompatibilityWarning) warningKey {
 	if warning.Code == warningCodeToolUnsupported {
 		disc = warning.Message
 	}
-
 	return warningKey{code: warning.Code, param: warning.Param, disc: disc}
 }
 
@@ -214,20 +180,16 @@ func dedupWarnings(in []CompatibilityWarning) []CompatibilityWarning {
 	if len(in) == 0 {
 		return nil
 	}
-
 	seen := make(map[warningKey]bool, len(in))
-
 	out := make([]CompatibilityWarning, 0, len(in))
 	for _, warning := range in {
 		key := dedupKey(warning)
 		if seen[key] {
 			continue
 		}
-
 		seen[key] = true
 		out = append(out, warning)
 	}
-
 	return out
 }
 
@@ -238,24 +200,19 @@ func capWarnings(in []CompatibilityWarning) []CompatibilityWarning {
 	if len(in) == 0 {
 		return nil
 	}
-
 	out := make([]CompatibilityWarning, 0, len(in))
 	total := 0
-
 	for _, warning := range in {
 		if len(out) >= maxWarnings {
 			break
 		}
-
 		header := warningHeader(warning)
 		if total+len(header) > maxHeaderBytes {
 			break
 		}
-
 		total += len(header)
 		out = append(out, warning)
 	}
-
 	return out
 }
 
@@ -265,6 +222,5 @@ func warningHeader(warning CompatibilityWarning) string {
 	if err != nil {
 		return ""
 	}
-
 	return string(encoded)
 }

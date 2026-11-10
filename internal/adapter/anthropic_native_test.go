@@ -19,55 +19,31 @@ func TestApplyAnthropicNativeResolutionSetsResolvedEffort(t *testing.T) {
 		want         string
 	}{
 		{name: "omitted output config", resolved: "medium", want: "medium"},
-		{
-			name:         "empty output config",
-			outputConfig: &anthropic.OutputConfig{},
-			resolved:     "medium",
-			want:         "medium",
-		},
-		{
-			name:         "populated exact effort",
-			outputConfig: &anthropic.OutputConfig{Effort: "high"},
-			resolved:     "high",
-			want:         "high",
-		},
-		{
-			name:         "mapped exact effort",
-			outputConfig: &anthropic.OutputConfig{Effort: "ultra"},
-			resolved:     "ultra",
-			wire:         "max",
-			want:         "max",
-		},
-		{
-			name:         "populated wildcard effort",
-			outputConfig: &anthropic.OutputConfig{Effort: "future-tier"},
-			resolved:     "future-tier",
-			want:         "future-tier",
-		},
+		{name: "empty output config", outputConfig: &anthropic.OutputConfig{}, resolved: "medium", want: "medium"},
+		{name: "populated exact effort", outputConfig: &anthropic.OutputConfig{Effort: "high"}, resolved: "high", want: "high"},
+		{name: "mapped exact effort", outputConfig: &anthropic.OutputConfig{Effort: "ultra"}, resolved: "ultra", wire: "max", want: "max"},
+		{name: "populated wildcard effort", outputConfig: &anthropic.OutputConfig{Effort: "future-tier"}, resolved: "future-tier", want: "future-tier"},
 	}
 	for _, test := range tests {
-		t.Run(
-			test.name,
-			func(t *testing.T) {
-				req := anthropic.Request{
-					Model:        "claude-test",
-					MaxTokens:    8000,
-					OutputConfig: test.outputConfig,
-				}
-				resolved := adapterresolver.ResolvedRequest{
-					Provider:   adaptermodel.BackendAnthropic,
-					Model:      "claude-test",
-					Effort:     test.resolved,
-					WireEffort: test.wire,
-				}
+		t.Run(test.name, func(t *testing.T) {
+			req := anthropic.Request{
+				Model:        "claude-test",
+				MaxTokens:    8000,
+				OutputConfig: test.outputConfig,
+			}
+			resolved := adapterresolver.ResolvedRequest{
+				Provider:   adaptermodel.BackendAnthropic,
+				Model:      "claude-test",
+				Effort:     test.resolved,
+				WireEffort: test.wire,
+			}
 
-				applyAnthropicNativeResolution(&req, &resolved)
+			applyAnthropicNativeResolution(&req, &resolved)
 
-				if req.OutputConfig == nil || req.OutputConfig.Effort != test.want {
-					t.Fatalf("OutputConfig = %+v, want effort %q", req.OutputConfig, test.want)
-				}
-			},
-		)
+			if req.OutputConfig == nil || req.OutputConfig.Effort != test.want {
+				t.Fatalf("OutputConfig = %+v, want effort %q", req.OutputConfig, test.want)
+			}
+		})
 	}
 }
 
@@ -90,11 +66,9 @@ func TestApplyAnthropicNativeResolutionUsesConfiguredThinkingBudget(t *testing.T
 	if req.Thinking == nil {
 		t.Fatal("Thinking is nil")
 	}
-
 	if req.Thinking.Type != "enabled" || req.Thinking.BudgetTokens != 7000 {
 		t.Fatalf("Thinking = %+v, want enabled with budget 7000", req.Thinking)
 	}
-
 	if req.MaxTokens != 9000 {
 		t.Fatalf("MaxTokens = %d, want caller value 9000", req.MaxTokens)
 	}
@@ -119,11 +93,9 @@ func TestApplyAnthropicNativeResolutionCapsTokensAfterThinkingBudget(t *testing.
 	if req.Thinking == nil {
 		t.Fatal("Thinking is nil")
 	}
-
 	if req.Thinking.Type != "enabled" || req.Thinking.BudgetTokens != 16000 {
 		t.Fatalf("Thinking = %+v, want enabled with budget 16000", req.Thinking)
 	}
-
 	if req.MaxTokens != 16000 {
 		t.Fatalf("MaxTokens = %d, want profile cap 16000", req.MaxTokens)
 	}
@@ -170,53 +142,40 @@ func TestApplyAnthropicNativeResolutionPrependsInstructions(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		t.Run(
-			test.name,
-			func(t *testing.T) {
-				req := anthropic.Request{
-					Model:        "claude-test",
-					System:       test.system,
-					SystemBlocks: test.blocks,
-					MaxTokens:    8000,
-				}
-				resolved := adapterresolver.ResolvedRequest{
-					Provider:     adaptermodel.BackendAnthropic,
-					Model:        "claude-test",
-					Instructions: "model instructions",
-				}
+		t.Run(test.name, func(t *testing.T) {
+			req := anthropic.Request{
+				Model:        "claude-test",
+				System:       test.system,
+				SystemBlocks: test.blocks,
+				MaxTokens:    8000,
+			}
+			resolved := adapterresolver.ResolvedRequest{
+				Provider:     adaptermodel.BackendAnthropic,
+				Model:        "claude-test",
+				Instructions: "model instructions",
+			}
 
-				applyAnthropicNativeResolution(&req, &resolved)
+			applyAnthropicNativeResolution(&req, &resolved)
 
-				if req.System != test.wantSystem {
-					t.Fatalf("System = %q, want %q", req.System, test.wantSystem)
+			if req.System != test.wantSystem {
+				t.Fatalf("System = %q, want %q", req.System, test.wantSystem)
+			}
+			if len(req.SystemBlocks) != len(test.wantBlocks) {
+				t.Fatalf("SystemBlocks = %+v, want text %v", req.SystemBlocks, test.wantBlocks)
+			}
+			for index, want := range test.wantBlocks {
+				if req.SystemBlocks[index].Text != want {
+					t.Fatalf("SystemBlocks[%d].Text = %q, want %q", index, req.SystemBlocks[index].Text, want)
 				}
-
-				if len(req.SystemBlocks) != len(test.wantBlocks) {
-					t.Fatalf("SystemBlocks = %+v, want text %v", req.SystemBlocks, test.wantBlocks)
-				}
-
-				for index, want := range test.wantBlocks {
-					if req.SystemBlocks[index].Text != want {
-						t.Fatalf(
-							"SystemBlocks[%d].Text = %q, want %q",
-							index,
-							req.SystemBlocks[index].Text,
-							want,
-						)
-					}
-				}
-			},
-		)
+			}
+		})
 	}
 }
 
 func TestNativeAnthropicJSONWriterCaptureUsesStatusOK(t *testing.T) {
 	writer := newNativeAnthropicJSONWriter()
 	writer.status = http.StatusTeapot
-	if err := writer.capture(
-		http.Header{"Content-Type": {"application/json"}},
-		[]byte(`{"ok":true}`),
-	); err != nil {
+	if err := writer.capture(http.Header{"Content-Type": {"application/json"}}, []byte(`{"ok":true}`)); err != nil {
 		t.Fatalf("capture: %v", err)
 	}
 

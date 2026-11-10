@@ -25,7 +25,6 @@ func (r *RawResponsesCompactionV2Recovery) CompleteRecovery() bool {
 	if r == nil || r.complete == nil {
 		return false
 	}
-
 	return r.complete()
 }
 
@@ -34,9 +33,7 @@ func (r *RawResponsesCompactionV2Recovery) ReleaseRecovery() bool {
 	if r == nil || r.release == nil {
 		return false
 	}
-
 	r.release()
-
 	return true
 }
 
@@ -48,65 +45,80 @@ func InjectRawResponsesCompactionV2Recovery(
 ) (RawResponsesRequest, *RawResponsesCompactionV2Recovery, bool) {
 	var trace rawResponsesCompactionV2InjectionTrace
 	defer func() { trace.log() }()
-	sessionID, inputStart, inputEnd, input, ok := prepareRawRecoveryInput(request, registry, &trace)
+	protocol := DetectRawResponsesCompactionProtocol(request.Header)
+	trace.detectedProtocol = string(protocol)
+	trace.protocolRegular = protocol == RawResponsesCompactionNone
+	if !trace.protocolRegular {
+		return request, nil, false
+	}
+	trace.metadataRequestKindTurn, trace.metadataImplementationEmpty, trace.metadataStrategyEmpty, trace.metadataPhaseFinalAnswer = rawResponsesCompactionV2RegularFinalAnswerFields(request.Header)
+	trace.metadataRegular = rawResponsesCompactionV2RegularTurn(request.Header)
+	if !trace.metadataRegular {
+		return request, nil, false
+	}
+	trace.registryPresent = registry != nil
+	if !trace.registryPresent {
+		return request, nil, false
+	}
+	sessionID, ok := rawResponsesCompactionV2SessionID(request)
+	trace.sessionPresent = ok
 	if !ok {
 		return request, nil, false
 	}
-
-	compactionIndex,
-		encryptedContent,
-		normalizerValid,
-		compactionItemCount,
-		ok := rawResponsesCompactionV2InjectedCompactionTrace(input)
+	inputStart, inputEnd, ok := jsonObjectFieldValueRange(request.Body, "input")
+	trace.inputRangeValid = ok
+	if !ok {
+		return request, nil, false
+	}
+	if !rawCompactionJSONHasUniqueObjectKeys(request.Body) {
+		return request, nil, false
+	}
+	var input []json.RawMessage
+	trace.inputJSONValid = json.Unmarshal(request.Body[inputStart:inputEnd], &input) == nil
+	if !trace.inputJSONValid {
+		return request, nil, false
+	}
+	compactionIndex, encryptedContent, normalizerValid, compactionItemCount, ok := rawResponsesCompactionV2InjectedCompactionTrace(input)
 	trace.normalizerValid = normalizerValid
 	trace.compactionItemCount = compactionItemCount
 	trace.singleCompactionItem = ok
 	if !ok {
 		return request, nil, false
 	}
-
 	injection, generation, ok := registry.Reserve(sessionID, encryptedContent)
 	trace.registryReserved = ok
 	if !ok {
 		return request, nil, false
 	}
-
 	trace.transcriptTagAbsent = !rawResponsesCompactionV2InputHasMarkedTranscript(input, injection)
 	if !trace.transcriptTagAbsent {
 		registry.Release(sessionID, encryptedContent, generation)
 		return request, nil, false
 	}
-
-	item, err := json.Marshal(
-		struct {
-			Type    string `json:"type"`
-			Role    string `json:"role"`
-			Content []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-		}{
-			Type: "message",
-			Role: "assistant",
-			Content: []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			}{
-				{Type: "output_text", Text: injection},
-			},
-		},
-	)
+	item, err := json.Marshal(struct {
+		Type    string `json:"type"`
+		Role    string `json:"role"`
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}{
+		Type: "message",
+		Role: "assistant",
+		Content: []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}{{Type: "output_text", Text: injection}},
+	})
 	if err != nil {
 		registry.Release(sessionID, encryptedContent, generation)
 		return request, nil, false
 	}
-
 	inputRanges, rangesOK := jsonArrayValueRanges(request.Body[inputStart:inputEnd])
 	if !rangesOK || compactionIndex >= len(inputRanges) {
 		registry.Release(sessionID, encryptedContent, generation)
 		return request, nil, false
 	}
-
 	insertOffset := inputStart + inputRanges[compactionIndex].end
 	encodedInput := append([]byte(nil), request.Body[:insertOffset]...)
 	encodedInput = append(encodedInput, ',')
@@ -115,50 +127,31 @@ func InjectRawResponsesCompactionV2Recovery(
 	transformed := request
 	transformed.Body = encodedInput
 	trace.rawInsertionSucceeded = true
-
 	return transformed, &RawResponsesCompactionV2Recovery{
 		injection: injection,
-		complete: rawResponsesCompactionV2Completion(
-			registry,
-			sessionID,
-			encryptedContent,
-			generation,
-		),
-		release: rawResponsesCompactionV2Release(
-			registry,
-			sessionID,
-			encryptedContent,
-			generation,
-		),
+		complete:  rawResponsesCompactionV2Completion(registry, sessionID, encryptedContent, generation),
+		release:   rawResponsesCompactionV2Release(registry, sessionID, encryptedContent, generation),
 	}, true
 }
 
 // rawResponsesCompactionV2InputHasMarkedTranscript reports whether an input
 // item marks a content part with exactly the pending injection. Text without
 // the marker and marked text with a different value do not count.
-func rawResponsesCompactionV2InputHasMarkedTranscript(
-	input []json.RawMessage,
-	injection string,
-) bool {
-	return slices.ContainsFunc(
-		input,
-		func(item json.RawMessage) bool {
-			var message struct {
-				Content []rawCompactionSSEContentPart `json:"content"`
-			}
-			if json.Unmarshal(item, &message) != nil {
-				return false
-			}
-
-			for _, index := range codexstore.InjectedTranscriptIndexes(item) {
-				if index < len(message.Content) && message.Content[index].Text == injection {
-					return true
-				}
-			}
-
+func rawResponsesCompactionV2InputHasMarkedTranscript(input []json.RawMessage, injection string) bool {
+	return slices.ContainsFunc(input, func(item json.RawMessage) bool {
+		var message struct {
+			Content []rawCompactionSSEContentPart `json:"content"`
+		}
+		if json.Unmarshal(item, &message) != nil {
 			return false
-		},
-	)
+		}
+		for _, index := range codexstore.InjectedTranscriptIndexes(item) {
+			if index < len(message.Content) && message.Content[index].Text == injection {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 type rawResponsesCompactionV2InjectionTrace struct {
@@ -182,43 +175,7 @@ type rawResponsesCompactionV2InjectionTrace struct {
 }
 
 func (trace rawResponsesCompactionV2InjectionTrace) log() {
-	slog.Debug(
-		"adapter.codex.raw_compaction_v2_recovery_injection",
-		"detected_protocol",
-		trace.detectedProtocol,
-		"protocol_regular",
-		trace.protocolRegular,
-		"metadata_regular",
-		trace.metadataRegular,
-		"metadata_request_kind_turn",
-		trace.metadataRequestKindTurn,
-		"metadata_implementation_empty",
-		trace.metadataImplementationEmpty,
-		"metadata_strategy_empty",
-		trace.metadataStrategyEmpty,
-		"metadata_phase_final_answer",
-		trace.metadataPhaseFinalAnswer,
-		"registry_present",
-		trace.registryPresent,
-		"transcript_tag_absent",
-		trace.transcriptTagAbsent,
-		"session_present",
-		trace.sessionPresent,
-		"input_range_valid",
-		trace.inputRangeValid,
-		"input_json_valid",
-		trace.inputJSONValid,
-		"normalizer_valid",
-		trace.normalizerValid,
-		"compaction_item_count",
-		trace.compactionItemCount,
-		"single_compaction_item",
-		trace.singleCompactionItem,
-		"registry_reserved",
-		trace.registryReserved,
-		"raw_insertion_succeeded",
-		trace.rawInsertionSucceeded,
-	)
+	slog.Debug("adapter.codex.raw_compaction_v2_recovery_injection", "detected_protocol", trace.detectedProtocol, "protocol_regular", trace.protocolRegular, "metadata_regular", trace.metadataRegular, "metadata_request_kind_turn", trace.metadataRequestKindTurn, "metadata_implementation_empty", trace.metadataImplementationEmpty, "metadata_strategy_empty", trace.metadataStrategyEmpty, "metadata_phase_final_answer", trace.metadataPhaseFinalAnswer, "registry_present", trace.registryPresent, "transcript_tag_absent", trace.transcriptTagAbsent, "session_present", trace.sessionPresent, "input_range_valid", trace.inputRangeValid, "input_json_valid", trace.inputJSONValid, "normalizer_valid", trace.normalizerValid, "compaction_item_count", trace.compactionItemCount, "single_compaction_item", trace.singleCompactionItem, "registry_reserved", trace.registryReserved, "raw_insertion_succeeded", trace.rawInsertionSucceeded)
 }
 
 func rawResponsesCompactionV2RegularFinalAnswerFields(header http.Header) (bool, bool, bool, bool) {
@@ -226,7 +183,6 @@ func rawResponsesCompactionV2RegularFinalAnswerFields(header http.Header) (bool,
 	if json.Unmarshal([]byte(header.Get(CodexTurnMetadataHeader)), &metadata) != nil {
 		return false, false, false, false
 	}
-
 	return metadata.RequestKind == "turn", metadata.Compaction.Implementation == "", metadata.Compaction.Strategy == "", metadata.Compaction.Phase == "final_answer"
 }
 
@@ -235,15 +191,12 @@ func rawResponsesCompactionV2RegularTurn(header http.Header) bool {
 	if json.Unmarshal([]byte(header.Get(CodexTurnMetadataHeader)), &metadata) != nil {
 		return false
 	}
-
 	if metadata.Compaction.Implementation != "" || metadata.Compaction.Strategy != "" {
 		return false
 	}
-
 	if metadata.RequestKind == "turn" {
 		return rawResponsesCompactionV2FinalAnswerPhase(metadata.Compaction.Phase)
 	}
-
 	return metadata.RequestKind == "" && metadata.Compaction.Phase == ""
 }
 
@@ -254,111 +207,39 @@ func rawResponsesCompactionV2FinalAnswerPhase(phase string) bool {
 	return phase == "" || phase == "final_answer"
 }
 
-func rawResponsesCompactionV2Release(
-	registry *RawResponsesCompactionV2Registry,
-	sessionID string,
-	encryptedContent string,
-	generation uint64,
-) func() {
+func rawResponsesCompactionV2Release(registry *RawResponsesCompactionV2Registry, sessionID, encryptedContent string, generation uint64) func() {
 	var once sync.Once
 	return func() { once.Do(func() { registry.Release(sessionID, encryptedContent, generation) }) }
 }
 
-func rawResponsesCompactionV2Completion(
-	registry *RawResponsesCompactionV2Registry,
-	sessionID string,
-	encryptedContent string,
-	generation uint64,
-) func() bool {
+func rawResponsesCompactionV2Completion(registry *RawResponsesCompactionV2Registry, sessionID, encryptedContent string, generation uint64) func() bool {
 	var once sync.Once
-
 	return func() bool {
 		completed := false
 		once.Do(func() { completed = registry.Complete(sessionID, encryptedContent, generation) })
-
 		return completed
 	}
 }
 
-func rawResponsesCompactionV2InjectedCompactionTrace(
-	input []json.RawMessage,
-) (int, string, bool, int, bool) {
+func rawResponsesCompactionV2InjectedCompactionTrace(input []json.RawMessage) (int, string, bool, int, bool) {
 	normalized := codexstore.NormalizeResponseInputItems(input)
 	if len(normalized) != len(input) {
 		return 0, "", false, 0, false
 	}
-
 	index := -1
 	encryptedContent := ""
 	compactionItemCount := 0
-
 	for itemIndex, item := range normalized {
 		if item.Kind != transcript.CompactedContextItemKindCompaction || item.Compaction == nil {
 			continue
 		}
-
 		compactionItemCount++
 		candidate := strings.TrimSpace(item.Compaction.EncryptedContent)
 		if index >= 0 || candidate == "" {
 			return 0, "", true, compactionItemCount, false
 		}
-
 		index = itemIndex
 		encryptedContent = candidate
 	}
-
 	return index, encryptedContent, true, compactionItemCount, index >= 0
-}
-
-func prepareRawRecoveryInput(
-	request RawResponsesRequest,
-	registry *RawResponsesCompactionV2Registry,
-	trace *rawResponsesCompactionV2InjectionTrace,
-) (string, int, int, []json.RawMessage, bool) {
-	protocol := DetectRawResponsesCompactionProtocol(request.Header)
-	trace.detectedProtocol = string(protocol)
-	trace.protocolRegular = protocol == RawResponsesCompactionNone
-	if !trace.protocolRegular {
-		return "", 0, 0, nil, false
-	}
-
-	trace.metadataRequestKindTurn,
-		trace.metadataImplementationEmpty,
-		trace.metadataStrategyEmpty,
-		trace.metadataPhaseFinalAnswer = rawResponsesCompactionV2RegularFinalAnswerFields(
-		request.Header,
-	)
-	trace.metadataRegular = rawResponsesCompactionV2RegularTurn(request.Header)
-	if !trace.metadataRegular {
-		return "", 0, 0, nil, false
-	}
-
-	trace.registryPresent = registry != nil
-	if !trace.registryPresent {
-		return "", 0, 0, nil, false
-	}
-
-	sessionID, sessionPresent := rawResponsesCompactionV2SessionID(request)
-	trace.sessionPresent = sessionPresent
-	if !sessionPresent {
-		return "", 0, 0, nil, false
-	}
-
-	inputStart, inputEnd, inputValid := jsonObjectFieldValueRange(request.Body, "input")
-	trace.inputRangeValid = inputValid
-	if !inputValid {
-		return "", 0, 0, nil, false
-	}
-
-	if !rawCompactionJSONHasUniqueObjectKeys(request.Body) {
-		return "", 0, 0, nil, false
-	}
-
-	var input []json.RawMessage
-	trace.inputJSONValid = json.Unmarshal(request.Body[inputStart:inputEnd], &input) == nil
-	if !trace.inputJSONValid {
-		return "", 0, 0, nil, false
-	}
-
-	return sessionID, inputStart, inputEnd, input, true
 }

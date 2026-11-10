@@ -14,7 +14,6 @@ func TestCompactionSegmentsBuildNewestFirstStack(t *testing.T) {
 	if len(segments) != 4 {
 		t.Fatalf("segments len = %d, want 4", len(segments))
 	}
-
 	assertSegment(t, segments[0], 0, 6, 8, true, "summary-3", 1)
 	assertSegment(t, segments[1], 1, 3, 6, true, "micro-2", 1)
 	assertSegment(t, segments[2], 2, 1, 3, true, "summary-1", 1)
@@ -33,7 +32,6 @@ func TestCompactionSegmentsNoCompactionReturnsSingleSegment(t *testing.T) {
 	if len(segments) != 1 {
 		t.Fatalf("segments len = %d, want 1", len(segments))
 	}
-
 	assertSegment(t, segments[0], 0, 0, 2, false, "", 2)
 }
 
@@ -53,18 +51,14 @@ func TestSelectCompactionSegmentsAcceptsSupportedSelectors(t *testing.T) {
 		{name: "all", selector: "all", want: []int{3, 2, 1, 0}},
 	}
 	for _, tc := range cases {
-		t.Run(
-			tc.name,
-			func(t *testing.T) {
-				t.Parallel()
-				selection, err := SelectCompactionSegments(segments, tc.selector)
-				if err != nil {
-					t.Fatalf("SelectCompactionSegments: %v", err)
-				}
-
-				assertSelectedIndexes(t, selection.Segments, tc.want)
-			},
-		)
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			selection, err := SelectCompactionSegments(segments, tc.selector)
+			if err != nil {
+				t.Fatalf("SelectCompactionSegments: %v", err)
+			}
+			assertSelectedIndexes(t, selection.Segments, tc.want)
+		})
 	}
 }
 
@@ -73,10 +67,10 @@ func TestSelectCompactionSegmentsRejectsOutOfRangeSegment(t *testing.T) {
 	segments := CompactionSegments(compactionExportMessages())
 
 	_, err := SelectCompactionSegments(segments, "4")
+
 	if err == nil {
 		t.Fatal("expected out-of-range selector error")
 	}
-
 	if !strings.Contains(err.Error(), "conversation has compaction segments 0..3") {
 		t.Fatalf("error = %q, want segment range", err.Error())
 	}
@@ -96,23 +90,18 @@ func assertSegment(
 	if segment.Index != wantIndex {
 		t.Errorf("Index = %d, want %d", segment.Index, wantIndex)
 	}
-
 	if segment.StartMessageIndex != wantStart {
 		t.Errorf("StartMessageIndex = %d, want %d", segment.StartMessageIndex, wantStart)
 	}
-
 	if segment.EndMessageIndex != wantEnd {
 		t.Errorf("EndMessageIndex = %d, want %d", segment.EndMessageIndex, wantEnd)
 	}
-
 	if segment.HasStartingSummary != wantSummary {
 		t.Errorf("HasStartingSummary = %t, want %t", segment.HasStartingSummary, wantSummary)
 	}
-
 	if segment.SummaryUUID != wantSummaryUUID {
 		t.Errorf("SummaryUUID = %q, want %q", segment.SummaryUUID, wantSummaryUUID)
 	}
-
 	if segment.VisibleMessageCount != wantVisible {
 		t.Errorf("VisibleMessageCount = %d, want %d", segment.VisibleMessageCount, wantVisible)
 	}
@@ -127,7 +116,6 @@ func assertSelectedIndexes(
 	if len(segments) != len(want) {
 		t.Fatalf("selected len = %d, want %d", len(segments), len(want))
 	}
-
 	for i, segment := range segments {
 		if segment.Index != want[i] {
 			t.Errorf("selected[%d] = %d, want %d", i, segment.Index, want[i])

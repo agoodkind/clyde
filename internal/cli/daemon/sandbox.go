@@ -82,55 +82,16 @@ func newSandboxCmd(f *cli.Factory) *cobra.Command {
 		Example: "clyde daemon sandbox",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSandbox(
-				cmd.Context(),
-				f,
-				sandboxRootOptions{keep: keep, root: root},
-				ingestionEnabled,
-				searchEnabled,
-				local,
-				semanticSettings,
-			)
+			return runSandbox(cmd.Context(), f, sandboxRootOptions{keep: keep, root: root}, ingestionEnabled, searchEnabled, local, semanticSettings)
 		},
 	}
-	cmd.Flags().BoolVar(
-		&keep,
-		"keep",
-		false,
-		"keep the sandbox directories after exit instead of removing them",
-	)
-	cmd.Flags().StringVar(
-		&root,
-		"root",
-		"",
-		"Reuse a sandbox root directory kept by an earlier run with --keep and keep it on exit.",
-	)
-	cmd.Flags().BoolVar(
-		&ingestionEnabled,
-		"ingestion-enabled",
-		false,
-		"offer conversations to the semantic search engine",
-	)
-	cmd.Flags().BoolVar(
-		&searchEnabled,
-		"search-enabled",
-		false,
-		"answer conversation searches from the semantic search engine",
-	)
+	cmd.Flags().BoolVar(&keep, "keep", false, "keep the sandbox directories after exit instead of removing them")
+	cmd.Flags().StringVar(&root, "root", "", "Reuse a sandbox root directory kept by an earlier run with --keep and keep it on exit.")
+	cmd.Flags().BoolVar(&ingestionEnabled, "ingestion-enabled", false, "offer conversations to the semantic search engine")
+	cmd.Flags().BoolVar(&searchEnabled, "search-enabled", false, "answer conversation searches from the semantic search engine")
 	cmd.Flags().BoolVar(&local.enabled, "local", false, "use the local backend instead of Milvus")
-	cmd.Flags().StringVar(
-		&local.root,
-		"local-root",
-		"",
-		"store the local index in this temp directory, which a later sandbox run can reuse",
-	)
-	cmd.Flags().StringVar(
-		&semanticSettings,
-		"semantic-settings",
-		"",
-		"append TOML keys from a file to the conversation semantic settings",
-	)
-
+	cmd.Flags().StringVar(&local.root, "local-root", "", "store the local index in this temp directory, which a later sandbox run can reuse")
+	cmd.Flags().StringVar(&semanticSettings, "semantic-settings", "", "append TOML keys from a file to the conversation semantic settings")
 	return cmd
 }
 
@@ -139,29 +100,15 @@ func sandboxSemanticSettings(path string) (string, error) {
 	if path == "" {
 		return "", nil
 	}
-
 	content, err := os.ReadFile(path)
 	if err != nil {
-		slog.Error(
-			"cli.daemon.sandbox.semantic_settings_failed",
-			"concern",
-			"cmd.dispatch",
-			"component",
-			"cli",
-			"path",
-			path,
-			"err",
-			err,
-		)
-
+		slog.Error("cli.daemon.sandbox.semantic_settings_failed", "concern", "cmd.dispatch", "component", "cli", "path", path, "err", err)
 		return "", fmt.Errorf("read semantic settings file %s: %w", path, err)
 	}
-
 	settings := string(content)
 	if settings != "" && !strings.HasSuffix(settings, "\n") {
 		settings += "\n"
 	}
-
 	return settings, nil
 }
 
@@ -176,36 +123,20 @@ func (local sandboxLocalOptions) configLines() (string, error) {
 		if local.root != "" {
 			return "", errors.New("--local-root needs --local")
 		}
-
 		return "", nil
 	}
-
 	lines := "backend = \"local\"\n"
 	if local.root == "" {
 		return lines, nil
 	}
-
 	root, err := filepath.Abs(local.root)
 	if err != nil {
-		slog.Error(
-			"cli.daemon.sandbox.local_root_failed",
-			"concern",
-			"cmd.dispatch",
-			"component",
-			"cli",
-			"path",
-			local.root,
-			"err",
-			err,
-		)
-
+		slog.Error("cli.daemon.sandbox.local_root_failed", "concern", "cmd.dispatch", "component", "cli", "path", local.root, "err", err)
 		return "", fmt.Errorf("resolve --local-root %s: %w", local.root, err)
 	}
-
 	if !sandbox.UnderTempRoot(root) {
 		return "", fmt.Errorf("--local-root %s is not a temp directory", root)
 	}
-
 	return lines + fmt.Sprintf("local_root = %q\n", root), nil
 }
 
@@ -222,36 +153,16 @@ type sandboxRootOptions struct {
 // here: a sandbox never reloads or rebinds, and a supervisor's replacement
 // worker escapes the process group, so a wrapper killed without a signal leaves
 // a daemon serving with nothing left to stop it. One process cannot.
-func runSandbox(
-	ctx context.Context,
-	f *cli.Factory,
-	rootOptions sandboxRootOptions,
-	ingestionEnabled bool,
-	searchEnabled bool,
-	local sandboxLocalOptions,
-	semanticSettingsPath string,
-) error {
+func runSandbox(ctx context.Context, f *cli.Factory, rootOptions sandboxRootOptions, ingestionEnabled bool, searchEnabled bool, local sandboxLocalOptions, semanticSettingsPath string) error {
 	backendLines, err := local.configLines()
 	if err != nil {
-		slog.ErrorContext(
-			ctx,
-			"cli.daemon.sandbox.local_options_failed",
-			"concern",
-			"cmd.dispatch",
-			"component",
-			"cli",
-			"err",
-			err,
-		)
-
+		slog.ErrorContext(ctx, "cli.daemon.sandbox.local_options_failed", "concern", "cmd.dispatch", "component", "cli", "err", err)
 		return err
 	}
-
 	semanticSettings, err := sandboxSemanticSettings(semanticSettingsPath)
 	if err != nil {
 		return err
 	}
-
 	backendLines += semanticSettings
 	var roots sandbox.Roots
 	keep := rootOptions.keep
@@ -261,86 +172,28 @@ func runSandbox(
 		roots, err = sandbox.ExistingRoots(rootOptions.root)
 		keep = true
 	}
-
 	if err != nil {
-		slog.ErrorContext(
-			ctx,
-			"cli.daemon.sandbox.root_failed",
-			"concern",
-			"cmd.dispatch",
-			"component",
-			"cli",
-			"err",
-			err,
-		)
-
+		slog.ErrorContext(ctx, "cli.daemon.sandbox.root_failed", "concern", "cmd.dispatch", "component", "cli", "err", err)
 		return fmt.Errorf("prepare the sandbox directories: %w", err)
 	}
-
 	if !keep {
 		defer func() { _ = os.RemoveAll(roots.Base) }()
 	}
-
 	// The roots are removed on exit, so verify they are throwaway paths before
 	// anything is written into them.
 	if err := sandbox.PreflightRoots(roots); err != nil {
-		slog.ErrorContext(
-			ctx,
-			"cli.daemon.sandbox.preflight_failed",
-			"concern",
-			"cmd.dispatch",
-			"component",
-			"cli",
-			"err",
-			err,
-		)
-
+		slog.ErrorContext(ctx, "cli.daemon.sandbox.preflight_failed", "concern", "cmd.dispatch", "component", "cli", "err", err)
 		return fmt.Errorf("check the sandbox directories: %w", err)
 	}
 
 	configPath := filepath.Join(roots.Config, "clyde", "config.toml")
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
-		slog.ErrorContext(
-			ctx,
-			"cli.daemon.sandbox.config_dir_failed",
-			"concern",
-			"cmd.dispatch",
-			"component",
-			"cli",
-			"path",
-			configPath,
-			"err",
-			err,
-		)
-
-		return fmt.Errorf(
-			"create the sandbox config directory %s: %w",
-			filepath.Dir(configPath),
-			err,
-		)
+		slog.ErrorContext(ctx, "cli.daemon.sandbox.config_dir_failed", "concern", "cmd.dispatch", "component", "cli", "path", configPath, "err", err)
+		return fmt.Errorf("create the sandbox config directory %s: %w", filepath.Dir(configPath), err)
 	}
-
-	sandboxConfig := fmt.Sprintf(
-		sandboxConfigTemplate,
-		ingestionEnabled,
-		searchEnabled,
-		sandboxCollectionID,
-		backendLines,
-	)
+	sandboxConfig := fmt.Sprintf(sandboxConfigTemplate, ingestionEnabled, searchEnabled, sandboxCollectionID, backendLines)
 	if err := os.WriteFile(configPath, []byte(sandboxConfig), 0o600); err != nil {
-		slog.ErrorContext(
-			ctx,
-			"cli.daemon.sandbox.config_write_failed",
-			"concern",
-			"cmd.dispatch",
-			"component",
-			"cli",
-			"path",
-			configPath,
-			"err",
-			err,
-		)
-
+		slog.ErrorContext(ctx, "cli.daemon.sandbox.config_write_failed", "concern", "cmd.dispatch", "component", "cli", "path", configPath, "err", err)
 		return fmt.Errorf("write the sandbox config %s: %w", configPath, err)
 	}
 
@@ -349,17 +202,7 @@ func runSandbox(
 	// The daemon reads these when it loads its config below, so they have to be
 	// set on this process rather than handed to a child.
 	if err := sandbox.Apply(roots); err != nil {
-		slog.ErrorContext(
-			ctx,
-			"cli.daemon.sandbox.env_failed",
-			"concern",
-			"cmd.dispatch",
-			"component",
-			"cli",
-			"err",
-			err,
-		)
-
+		slog.ErrorContext(ctx, "cli.daemon.sandbox.env_failed", "concern", "cmd.dispatch", "component", "cli", "err", err)
 		return fmt.Errorf("point this process at the sandbox directories: %w", err)
 	}
 
@@ -370,16 +213,7 @@ func runSandbox(
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				slog.ErrorContext(
-					ctx,
-					"cli.daemon.sandbox.parent_watch_panic",
-					"concern",
-					"cmd.dispatch",
-					"component",
-					"cli",
-					"err",
-					fmt.Errorf("watching for the parent's exit panicked: %v", recovered),
-				)
+				slog.ErrorContext(ctx, "cli.daemon.sandbox.parent_watch_panic", "concern", "cmd.dispatch", "component", "cli", "err", fmt.Errorf("watching for the parent's exit panicked: %v", recovered))
 			}
 		}()
 		sandbox.WatchParent(runCtx, stop)
@@ -388,32 +222,15 @@ func runSandbox(
 	// RunContext installs its own SIGINT and SIGTERM handling and returns when
 	// one arrives, so Ctrl-C stops the daemon and unwinds to the cleanup above.
 	if err := daemonsvc.RunContext(runCtx, slog.Default().With("component", "daemon")); err != nil {
-		slog.ErrorContext(
-			ctx,
-			"cli.daemon.sandbox.daemon_failed",
-			"concern",
-			"cmd.dispatch",
-			"component",
-			"cli",
-			"err",
-			err,
-		)
-
+		slog.ErrorContext(ctx, "cli.daemon.sandbox.daemon_failed", "concern", "cmd.dispatch", "component", "cli", "err", err)
 		return fmt.Errorf("run the sandbox daemon: %w", err)
 	}
-
 	return nil
 }
 
 // writeSandboxBanner prints what the sandbox is and how to drive it, so the
 // operator does not have to derive the environment from the source.
-func writeSandboxBanner(
-	f *cli.Factory,
-	roots sandbox.Roots,
-	configPath string,
-	ingestionEnabled bool,
-	searchEnabled bool,
-) {
+func writeSandboxBanner(f *cli.Factory, roots sandbox.Roots, configPath string, ingestionEnabled bool, searchEnabled bool) {
 	out := f.IOStreams.Out
 	_, _ = fmt.Fprintln(out, "sandbox daemon")
 	_, _ = fmt.Fprintf(out, "  root:   %s\n", roots.Base)
@@ -422,18 +239,10 @@ func writeSandboxBanner(
 	_, _ = fmt.Fprintf(out, "  ingestion enabled: %t\n", ingestionEnabled)
 	_, _ = fmt.Fprintf(out, "  search enabled:    %t\n", searchEnabled)
 	_, _ = fmt.Fprintln(out, "  binds:  nothing, every listener is disabled")
-	_, _ = fmt.Fprintln(
-		out,
-		"  runs:   in this process, with no supervisor and no worker to outlive it",
-	)
+	_, _ = fmt.Fprintln(out, "  runs:   in this process, with no supervisor and no worker to outlive it")
 	_, _ = fmt.Fprintln(out, "")
 	_, _ = fmt.Fprintln(out, "drive it from another terminal with this prefix:")
-	_, _ = fmt.Fprintf(
-		out,
-		"  %s %s --limit 20\n",
-		sandbox.ExportLine(roots),
-		cli.ConversationBrowseCommand(),
-	)
+	_, _ = fmt.Fprintf(out, "  %s %s --limit 20\n", sandbox.ExportLine(roots), cli.ConversationBrowseCommand())
 	_, _ = fmt.Fprintln(out, "")
 	_, _ = fmt.Fprintln(out, "Ctrl-C stops it.")
 	_, _ = fmt.Fprintln(out, "")

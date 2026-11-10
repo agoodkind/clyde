@@ -43,71 +43,48 @@ func TestLocalBackendIngestsAndSearchesWithoutMilvus(t *testing.T) {
 	}
 
 	var result conversation.SearchConversationsResult
-
 	deadline := time.Now().Add(localBackendSearchTimeout)
 	for time.Now().Before(deadline) {
 		found, err := daemon.SearchConversations(context.Background(), options)
 		if err != nil && status.Code(err) != codes.Unavailable {
 			t.Fatalf("SearchConversations: %v", err)
 		}
-
-		if err == nil && found.Source != conversation.SearchSourceRawText &&
-			len(found.Matches) > 0 {
+		if err == nil && found.Source != conversation.SearchSourceRawText && len(found.Matches) > 0 {
 			result = found
 			break
 		}
-
 		time.Sleep(localtest.RawTextPollInterval)
 	}
-
 	if len(result.Matches) == 0 {
-		t.Fatalf(
-			"SearchConversations did not return a local backend match within %s",
-			localBackendSearchTimeout,
-		)
+		t.Fatalf("SearchConversations did not return a local backend match within %s", localBackendSearchTimeout)
 	}
-
 	if result.Source != conversation.SearchSourceLocal {
 		t.Fatalf("search source = %s, want %s", result.Source, conversation.SearchSourceLocal)
 	}
-
 	report := daemon.InspectStatus(context.Background())
 	if report.Runtime == nil {
 		t.Fatalf("daemon status has no runtime snapshot: %s", report.DaemonError)
 	}
-
 	if report.Runtime.Semantic.Backend != "local" {
 		t.Fatalf("semantic status backend = %q, want %q", report.Runtime.Semantic.Backend, "local")
 	}
-
 	var statusText bytes.Buffer
 	clidaemon.WriteRuntimeStatusReport(&statusText, report.Runtime)
 	if !strings.Contains(statusText.String(), "backend=local") {
 		t.Fatalf("status text missing backend=local:\n%s", statusText.String())
 	}
-
 	registry := clispec.NewConversationRegistry()
 	cliOutput := localtest.LocalBackendSearchCLIOutput(t, registry, options.Query)
 	if !strings.Contains(cliOutput, localtest.LocalBackendSourceJSON) {
-		t.Fatalf(
-			"conversation search output missing %s:\n%s",
-			localtest.LocalBackendSourceJSON,
-			cliOutput,
-		)
+		t.Fatalf("conversation search output missing %s:\n%s", localtest.LocalBackendSourceJSON, cliOutput)
 	}
-
 	mcpOutput := localtest.LocalBackendSearchMCPOutput(t, registry, options.Query)
 	if !strings.Contains(mcpOutput, localtest.LocalBackendSourceJSON) {
 		t.Fatalf("clyde_search output missing %s:\n%s", localtest.LocalBackendSourceJSON, mcpOutput)
 	}
-
 	if !strings.Contains(strings.ToLower(result.Matches[0].Snippet), "rebind") {
-		t.Fatalf(
-			"top match snippet = %q, want a fixture message about the listener rebind",
-			result.Matches[0].Snippet,
-		)
+		t.Fatalf("top match snippet = %q, want a fixture message about the listener rebind", result.Matches[0].Snippet)
 	}
-
 	localRoot := filepath.Join(os.Getenv("XDG_STATE_HOME"), "clyde", "conversation-local")
 	if _, err := os.Stat(localRoot); err != nil {
 		t.Fatalf("local store directory %s: %v", localRoot, err)

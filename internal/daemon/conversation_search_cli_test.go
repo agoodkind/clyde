@@ -27,29 +27,22 @@ func TestConversationSearchCommandSurfacesEmbeddingRefusal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen on daemon socket: %v", err)
 	}
-
 	grpcServer := grpc.NewServer()
 	searchIndex := &fakeSearchIndex{records: nil, matchingErr: nil}
 	semantic := &fakeSemanticSearch{
 		hits: nil,
 		err:  status.Error(codes.InvalidArgument, embeddingRefusalCause),
 	}
-	clydev1.RegisterClydeServiceServer(
-		grpcServer,
-		&controlServer{
-			index: conversation.NewIndex(
-				newConversationRegistry(),
-				config.ConversationConfig{},
-			),
-			searchSource: &semanticConversationSearchSource{
-				index: searchIndex,
-				searchClient: func() conversationSemanticSearchClient {
-					return semantic
-				},
-				collectionID: "conversations",
+	clydev1.RegisterClydeServiceServer(grpcServer, &controlServer{
+		index: conversation.NewIndex(newConversationRegistry(), config.ConversationConfig{}),
+		searchSource: &semanticConversationSearchSource{
+			index: searchIndex,
+			searchClient: func() conversationSemanticSearchClient {
+				return semantic
 			},
+			collectionID: "conversations",
 		},
-	)
+	})
 	serveErr := make(chan error, 1)
 	go func() {
 		serveErr <- grpcServer.Serve(listener)
@@ -72,13 +65,8 @@ func TestConversationSearchCommandSurfacesEmbeddingRefusal(t *testing.T) {
 	if err := os.MkdirAll(configDir, 0o700); err != nil {
 		t.Fatalf("create CLI config directory: %v", err)
 	}
-
 	configText := fmt.Sprintf("[daemon]\ngrpc_address = %q\n", "unix://"+socketPath)
-	if err := os.WriteFile(
-		filepath.Join(configDir, "config.toml"),
-		[]byte(configText),
-		0o600,
-	); err != nil {
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(configText), 0o600); err != nil {
 		t.Fatalf("write CLI config: %v", err)
 	}
 
@@ -102,12 +90,10 @@ func TestConversationSearchCommandSurfacesEmbeddingRefusal(t *testing.T) {
 	if err == nil {
 		t.Fatalf("conversation search exited zero; output:\n%s", output)
 	}
-
 	var exitError *exec.ExitError
 	if !errors.As(err, &exitError) || exitError.ExitCode() == 0 {
 		t.Fatalf("conversation search error = %v, want a non-zero exit; output:\n%s", err, output)
 	}
-
 	for _, expected := range []string{
 		string(conversationSearchSourceRefused),
 		"conversation search source refused the query",
@@ -117,7 +103,6 @@ func TestConversationSearchCommandSurfacesEmbeddingRefusal(t *testing.T) {
 			t.Fatalf("conversation search output missing %q:\n%s", expected, output)
 		}
 	}
-
 	for _, unsafeText := range []string{
 		"/private/run/search.sock",
 		"lm-semantic-search",
@@ -128,7 +113,6 @@ func TestConversationSearchCommandSurfacesEmbeddingRefusal(t *testing.T) {
 			t.Fatalf("conversation search output exposed %q:\n%s", unsafeText, output)
 		}
 	}
-
 	if strings.Contains(output, "No results found") {
 		t.Fatalf("conversation search rendered a false empty result:\n%s", output)
 	}
@@ -140,22 +124,18 @@ func conversationSearchSocketPath(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("create daemon socket path: %v", err)
 	}
-
 	socketPath := socketFile.Name()
 	if err := socketFile.Close(); err != nil {
 		t.Fatalf("close daemon socket placeholder: %v", err)
 	}
-
 	if err := os.Remove(socketPath); err != nil {
 		t.Fatalf("remove daemon socket placeholder: %v", err)
 	}
-
 	t.Cleanup(func() {
 		if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
 			t.Errorf("remove daemon socket: %v", err)
 		}
 	})
-
 	return socketPath
 }
 
@@ -165,7 +145,6 @@ func buildConversationSearchCLI(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("locate repository root: %v", err)
 	}
-
 	binaryPath := filepath.Join(t.TempDir(), "clyde")
 	command := exec.CommandContext(t.Context(), "go", "build", "-o", binaryPath, "./cmd/clyde")
 	command.Dir = repositoryRoot
@@ -173,7 +152,6 @@ func buildConversationSearchCLI(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("build clyde CLI: %v\n%s", err, output)
 	}
-
 	return binaryPath
 }
 
@@ -182,17 +160,14 @@ func daemonTestRepositoryRoot() (string, error) {
 	if err != nil {
 		return "", err
 	}
-
 	for {
 		if _, err := os.Stat(filepath.Join(directory, "go.mod")); err == nil {
 			return directory, nil
 		}
-
 		parent := filepath.Dir(directory)
 		if parent == directory {
 			return "", os.ErrNotExist
 		}
-
 		directory = parent
 	}
 }
@@ -205,16 +180,13 @@ func environmentWithOverrides(overrides ...string) []string {
 			overrideKeys[key] = true
 		}
 	}
-
 	environment := make([]string, 0, len(os.Environ())+len(overrides))
 	for _, entry := range os.Environ() {
 		key, _, found := strings.Cut(entry, "=")
 		if found && overrideKeys[key] {
 			continue
 		}
-
 		environment = append(environment, entry)
 	}
-
 	return append(environment, overrides...)
 }

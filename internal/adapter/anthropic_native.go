@@ -32,14 +32,9 @@ func (s *Server) handleAnthropicMessages(ctx context.Context, hctx *handlerCtx) 
 	if r.Method != http.MethodPost {
 		return newAdapterError(adapterErrorMethodNotAllowed, "POST required")
 	}
-
 	if s.anthropicProvider == nil {
-		err := newAdapterError(
-			adapterErrorUpstreamUnavailable,
-			"anthropic backend is not enabled in [adapter]",
-		)
+		err := newAdapterError(adapterErrorUpstreamUnavailable, "anthropic backend is not enabled in [adapter]")
 		err.Provider = "anthropic"
-
 		return err
 	}
 
@@ -55,7 +50,6 @@ func (s *Server) handleAnthropicMessages(ctx context.Context, hctx *handlerCtx) 
 	if err := json.Unmarshal(body, &req); err != nil {
 		return adapterErrInvalidJSON("invalid JSON: "+err.Error(), err)
 	}
-
 	if len(req.Messages) == 0 {
 		return adapterErrInvalidRequest("messages is required", nil)
 	}
@@ -65,7 +59,6 @@ func (s *Server) handleAnthropicMessages(ctx context.Context, hctx *handlerCtx) 
 	if req.OutputConfig != nil {
 		requestedEffort = req.OutputConfig.Effort
 	}
-
 	resolved, resolveErr := s.anthropicNativeResolvedRequest(ctx, requestedModel, requestedEffort)
 	switch {
 	case resolveErr != nil:
@@ -73,14 +66,10 @@ func (s *Server) handleAnthropicMessages(ctx context.Context, hctx *handlerCtx) 
 		if errors.As(resolveErr, &invalidRequestErr) {
 			return adapterErrInvalidRequest(invalidRequestErr.Error(), resolveErr)
 		}
-
-		return adapterErrModelNotFound(
-			"model " + requestedModel + " does not resolve to a known backend",
-		)
+		return adapterErrModelNotFound("model " + requestedModel + " does not resolve to a known backend")
 	case resolved.Provider != BackendAnthropic:
 		return adapterErrInvalidRequest("model does not resolve to the anthropic backend", nil)
 	}
-
 	applyAnthropicNativeResolution(&req, &resolved)
 
 	s.logAnthropicNativeIngress(ctx, corr, reqID, r.URL.Path, req, len(body))
@@ -90,17 +79,11 @@ func (s *Server) handleAnthropicMessages(ctx context.Context, hctx *handlerCtx) 
 		Resolved:      &resolved,
 		RequestID:     reqID,
 		Stream:        req.Stream,
-		NativeIngress: true,
-		TrackerKey:    "",
-		JSONCoercion: anthropic.
-			JSONCoercion{
-			Coerce:   nil,
-			Validate: nil,
-		},
+		NativeIngress: true, TrackerKey: "", JSONCoercion: anthropic.
+				JSONCoercion{Coerce: nil, Validate: nil},
 
 		IncludeUsage: false,
 	}
-
 	return s.executeAnthropicNativePrepared(ctx, w, r, reqID, resolved, prepared)
 }
 
@@ -119,80 +102,50 @@ func (s *Server) executeAnthropicNativePrepared(
 		if streamErr != nil {
 			return adapterErrInternal(streamErr.Error(), streamErr)
 		}
-
-		execCtx, lifecycle := s.beginProviderRequestLifecycle(
-			execCtx,
-			&resolved,
-			"oauth",
-			reqID,
-			req.Model,
-			true,
-		)
+		execCtx, lifecycle := s.beginProviderRequestLifecycle(execCtx, &resolved, "oauth", reqID, req.Model, true)
 		streamWriter.onStreamOpened = func() { lifecycle.streamOpened(execCtx) }
 		result, executeErr := s.anthropicProvider.ExecutePrepared(execCtx, prepared, streamWriter)
 		lifecycle.terminal(execCtx, result, executeErr)
 		if executeErr != nil {
 			s.writeAnthropicIngressProviderError(w, r, executeErr)
 		}
-
 		return nil
 	}
 
 	collector := newNativeAnthropicJSONWriter()
-	execCtx, lifecycle := s.beginProviderRequestLifecycle(
-		execCtx,
-		&resolved,
-		"oauth",
-		reqID,
-		req.Model,
-		false,
-	)
+	execCtx, lifecycle := s.beginProviderRequestLifecycle(execCtx, &resolved, "oauth", reqID, req.Model, false)
 	result, executeErr := s.anthropicProvider.ExecutePrepared(execCtx, prepared, collector)
 	lifecycle.terminal(execCtx, result, executeErr)
 	if executeErr != nil {
 		s.writeAnthropicIngressProviderError(w, r, executeErr)
 		return nil
 	}
-
 	if collector.empty() {
-		aerr := newAdapterError(
-			adapterErrorUpstreamUnavailable,
-			"anthropic native collect path produced no response",
-		)
+		aerr := newAdapterError(adapterErrorUpstreamUnavailable, "anthropic native collect path produced no response")
 		aerr.Provider = "anthropic"
 		s.writeShapedError(w, r, aerr)
-
 		return nil
 	}
-
 	collector.writeTo(w)
-
 	return nil
 }
 
-func applyAnthropicNativeResolution(
-	req *anthropic.Request,
-	resolved *adapterresolver.ResolvedRequest,
-) {
+func applyAnthropicNativeResolution(req *anthropic.Request, resolved *adapterresolver.ResolvedRequest) {
 	if req == nil || resolved == nil {
 		return
 	}
-
 	req.Model = anthropicbackend.StripContextSuffix(resolved.Model)
 	if effort := resolved.ProviderEffort(); effort != "" {
 		if req.OutputConfig == nil {
 			req.OutputConfig = &anthropic.OutputConfig{Effort: ""}
 		}
-
 		req.OutputConfig.Effort = effort.String()
 	}
-
 	prependAnthropicNativeInstructions(req, resolved.Instructions)
 	anthropicbackend.ApplyThinkingConfig(req, resolved, req.Model)
 	if resolved.MaxOutputTokens > 0 && req.MaxTokens > resolved.MaxOutputTokens {
 		req.MaxTokens = resolved.MaxOutputTokens
 	}
-
 	req.FeatureVector = anthropic.WireFlavorFeatureVector{
 		ModelID:     req.Model,
 		WireProfile: resolved.WireProfile,
@@ -203,28 +156,20 @@ func prependAnthropicNativeInstructions(req *anthropic.Request, instructions str
 	if req == nil {
 		return
 	}
-
 	instructions = strings.TrimSpace(instructions)
 	if instructions == "" {
 		return
 	}
-
 	if len(req.SystemBlocks) > 0 {
 		blocks := make([]anthropic.SystemBlock, 0, len(req.SystemBlocks)+1)
-		blocks = append(
-			blocks,
-			anthropic.SystemBlock{Type: "text", Text: instructions, CacheControl: nil},
-		)
+		blocks = append(blocks, anthropic.SystemBlock{Type: "text", Text: instructions, CacheControl: nil})
 		req.SystemBlocks = append(blocks, req.SystemBlocks...)
-
 		return
 	}
-
 	if req.System == "" {
 		req.System = instructions
 		return
 	}
-
 	req.System = instructions + "\n\n" + req.System
 }
 
@@ -244,17 +189,9 @@ func (s *Server) logAnthropicNativeIngress(
 		slog.Int("body_bytes", bodyBytes),
 	}
 	attrs = append(attrs, corr.Attrs()...)
-	s.log.LogAttrs(
-		ctx,
-		slog.LevelInfo,
-		"adapter.anthropic.ingress",
-		append(
-			[]slog.Attr{
-				slog.String("concern", "adapter.providers.anthropic.request"),
-			},
-			attrs...,
-		)...,
-	)
+	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.anthropic.ingress", append([]slog.Attr{
+		slog.String("concern", "adapter.providers.anthropic.request"),
+	}, attrs...)...)
 }
 
 // anthropicCountEnvVar names the environment variable holding the dedicated
@@ -278,90 +215,44 @@ func (s *Server) handleAnthropicCountTokens(ctx context.Context, hctx *handlerCt
 	if r.Method != http.MethodPost {
 		return newAdapterError(adapterErrorMethodNotAllowed, "POST required")
 	}
-
 	apiKey := strings.TrimSpace(os.Getenv(anthropicCountEnvVar))
 	if apiKey == "" {
-		aerr := newAdapterError(
-			adapterErrorUpstreamUnavailable,
-			"count_tokens requires an Anthropic API key in "+anthropicCountEnvVar,
-		)
+		aerr := newAdapterError(adapterErrorUpstreamUnavailable, "count_tokens requires an Anthropic API key in "+anthropicCountEnvVar)
 		aerr.Provider = "anthropic"
-
 		return aerr
 	}
-
 	messagesURL := s.cfg.Anthropic.OAuth.MessagesURL
 	if messagesURL == "" {
-		aerr := newAdapterError(
-			adapterErrorUpstreamUnavailable,
-			"anthropic messages endpoint is not configured",
-		)
+		aerr := newAdapterError(adapterErrorUpstreamUnavailable, "anthropic messages endpoint is not configured")
 		aerr.Provider = "anthropic"
-
 		return aerr
 	}
-
 	body, readErr := io.ReadAll(http.MaxBytesReader(w, r.Body, maxAnthropicMessagesBodyBytes))
 	if readErr != nil {
 		return adapterErrInvalidRequest("failed to read body", readErr)
 	}
-
 	var req anthropic.Request
 	if unmarshalErr := json.Unmarshal(body, &req); unmarshalErr != nil {
 		return adapterErrInvalidJSON("invalid JSON: "+unmarshalErr.Error(), unmarshalErr)
 	}
-
 	if len(req.Messages) == 0 {
 		return adapterErrInvalidRequest("messages is required", nil)
 	}
 
-	inputTokens, status, countErr := s.forwardAnthropicCount(
-		ctx,
-		messagesURL+countTokensPathSuffix,
-		apiKey,
-		body,
-	)
+	inputTokens, status, countErr := s.forwardAnthropicCount(ctx, messagesURL+countTokensPathSuffix, apiKey, body)
 	if countErr != nil {
-		s.log.WarnContext(
-			ctx,
-			"adapter.anthropic.count_tokens_failed",
-			"concern",
-			"adapter.providers.anthropic.request",
-			"status",
-			status,
-			"err",
-			countErr,
-		)
+		s.log.WarnContext(ctx, "adapter.anthropic.count_tokens_failed", "concern", "adapter.providers.anthropic.request", "status", status, "err", countErr)
 		codeClass := anthropicCodeClassForStatus(status)
-		aerr := mapUpstreamForFamily(
-			adapterRouteAnthropic,
-			"anthropic",
-			status,
-			codeClass,
-			"",
-			"count_tokens upstream failed",
-		)
+		aerr := mapUpstreamForFamily(adapterRouteAnthropic, "anthropic", status, codeClass, "", "count_tokens upstream failed")
 		s.respondAdapterError(w, r, aerr)
-
 		return nil
 	}
-
 	clydeingress.SetHTTPHeaders(hctx.Correlation, w.Header())
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	if encodeErr := json.NewEncoder(w).Encode(anthropic.CountTokensResponse{
-		InputTokens: inputTokens,
-	}); encodeErr != nil {
-		s.log.WarnContext(
-			ctx,
-			"adapter.anthropic.count_tokens_encode_failed",
-			"concern",
-			"adapter.providers.anthropic.request",
-			"err",
-			encodeErr,
-		)
+	if encodeErr := json.NewEncoder(w).Encode(anthropic.CountTokensResponse{InputTokens: inputTokens}); encodeErr != nil {
+		s.log.WarnContext(ctx, "adapter.anthropic.count_tokens_encode_failed", "concern", "adapter.providers.anthropic.request", "err", encodeErr)
 	}
-
 	return nil
 }
 
@@ -369,22 +260,15 @@ func (s *Server) handleAnthropicCountTokens(ctx context.Context, hctx *handlerCt
 // x-api-key auth and returns the decoded input_tokens, the upstream status, and
 // an error. The status is returned separately so the caller can map it through
 // the error boundary.
-func (s *Server) forwardAnthropicCount(
-	ctx context.Context,
-	url string,
-	apiKey string,
-	body []byte,
-) (int, int, error) {
+func (s *Server) forwardAnthropicCount(ctx context.Context, url, apiKey string, body []byte) (int, int, error) {
 	client := s.httpClient
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
-
 	httpReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if reqErr != nil {
 		return 0, 0, errors.New("count_tokens: build request failed")
 	}
-
 	httpReq.Header.Set("X-Api-Key", apiKey)
 	httpReq.Header.Set("Anthropic-Version", s.cfg.Anthropic.OAuth.AnthropicVersion)
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -392,17 +276,14 @@ func (s *Server) forwardAnthropicCount(
 	if doErr != nil {
 		return 0, http.StatusBadGateway, errors.New("count_tokens: request failed")
 	}
-
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return 0, resp.StatusCode, fmt.Errorf("count_tokens: status %d", resp.StatusCode)
 	}
-
 	var decoded anthropic.CountTokensResponse
 	if decodeErr := json.NewDecoder(resp.Body).Decode(&decoded); decodeErr != nil {
 		return 0, resp.StatusCode, errors.New("count_tokens: decode response failed")
 	}
-
 	return decoded.InputTokens, resp.StatusCode, nil
 }
 
@@ -424,34 +305,18 @@ func (s *Server) anthropicNativeResolvedRequest(
 		adapterresolver.NewModelRegistryAdapter(s.modelRegistry()),
 	)
 	if err != nil {
-		s.log.WarnContext(
-			ctx,
-			"adapter.anthropic.native_resolve_failed",
-			"concern",
-			"adapter.providers.anthropic.request",
-			"model",
-			requestedModel,
-			"err",
-			err,
-		)
+		s.log.WarnContext(ctx, "adapter.anthropic.native_resolve_failed", "concern", "adapter.providers.anthropic.request", "model", requestedModel, "err", err)
 		var empty adapterresolver.ResolvedRequest
-
 		return empty, err
 	}
-
 	return resolved, nil
 }
 
-func (s *Server) writeAnthropicIngressProviderError(
-	w http.ResponseWriter,
-	r *http.Request,
-	err error,
-) {
+func (s *Server) writeAnthropicIngressProviderError(w http.ResponseWriter, r *http.Request, err error) {
 	if aerr := anthropicWireBaselineAdapterError(err); aerr != nil {
 		s.respondAdapterError(w, r, aerr)
 		return
 	}
-
 	var execErr *anthropic.ExecuteError
 	if errors.As(err, &execErr) {
 		// Native Anthropic ingress preserves the spec-correct
@@ -461,46 +326,26 @@ func (s *Server) writeAnthropicIngressProviderError(
 		// neutral Code/Class; the Anthropic renderer derives the
 		// spec-correct envelope type from those neutral fields, so the
 		// generic adapter never assigns a provider wire type here.
-		aerr := mapUpstreamForFamily(
-			adapterRouteAnthropic,
-			"anthropic",
-			execErr.Status,
-			codeClass,
-			execErr.Code,
-			execErr.Message,
-		)
+		aerr := mapUpstreamForFamily(adapterRouteAnthropic, "anthropic", execErr.Status, codeClass, execErr.Code, execErr.Message)
 		aerr.Cause = err
 		s.respondAdapterError(w, r, aerr)
-
 		return
 	}
-
 	if upstreamErr, ok := anthropic.AsUpstreamError(err); ok {
 		status := upstreamErr.Status
 		if status == 0 {
 			status = http.StatusBadGateway
 		}
-
 		message := upstreamErr.Message
 		if message == "" {
 			message = upstreamErr.Error()
 		}
-
 		codeClass := anthropicCodeClassForStatus(status)
-		aerr := mapUpstreamForFamily(
-			adapterRouteAnthropic,
-			"anthropic",
-			status,
-			codeClass,
-			"",
-			message,
-		)
+		aerr := mapUpstreamForFamily(adapterRouteAnthropic, "anthropic", status, codeClass, "", message)
 		aerr.Cause = err
 		s.respondAdapterError(w, r, aerr)
-
 		return
 	}
-
 	s.respondAdapterError(w, r, adapterErrUpstreamFailed("anthropic", err.Error(), err))
 }
 
@@ -531,8 +376,7 @@ type nativeAnthropicJSONWriter struct {
 func newNativeAnthropicJSONWriter() *nativeAnthropicJSONWriter {
 	return &nativeAnthropicJSONWriter{
 		status: http.StatusOK,
-		header: make(http.Header),
-		body:   nil,
+		header: make(http.Header), body: nil,
 	}
 }
 
@@ -548,16 +392,13 @@ func (w *nativeAnthropicJSONWriter) capture(header http.Header, body []byte) err
 	if w == nil {
 		return fmt.Errorf("native anthropic writer missing")
 	}
-
 	w.status = http.StatusOK
 	w.body = append(w.body[:0], body...)
-
 	w.header = make(http.Header, len(header))
 	for key, values := range header {
 		cloned := append([]string(nil), values...)
 		w.header[key] = cloned
 	}
-
 	return nil
 }
 
@@ -573,17 +414,14 @@ func (w *nativeAnthropicJSONWriter) writeTo(dst http.ResponseWriter) {
 	if w == nil {
 		return
 	}
-
 	for key, values := range w.header {
 		for _, value := range values {
 			dst.Header().Add(key, value)
 		}
 	}
-
 	if dst.Header().Get("Content-Type") == "" {
 		dst.Header().Set("Content-Type", "application/json")
 	}
-
 	dst.WriteHeader(w.status)
 	_, _ = dst.Write(w.body)
 }
@@ -600,12 +438,9 @@ func newNativeAnthropicStreamWriter(w http.ResponseWriter) (*nativeAnthropicStre
 	if !ok {
 		return nil, fmt.Errorf("response writer does not support streaming")
 	}
-
 	return &nativeAnthropicStreamWriter{
-		w:              w,
-		flusher:        flusher,
-		committed:      false,
-		onStreamOpened: nil,
+		w:       w,
+		flusher: flusher, committed: false, onStreamOpened: nil,
 	}, nil
 }
 
@@ -617,7 +452,6 @@ func (w *nativeAnthropicStreamWriter) Flush() error {
 	if w != nil && w.flusher != nil {
 		w.flusher.Flush()
 	}
-
 	return nil
 }
 
@@ -625,23 +459,19 @@ func (w *nativeAnthropicStreamWriter) commit(header http.Header) {
 	if w == nil || w.committed {
 		return
 	}
-
 	for key, values := range header {
 		for _, value := range values {
 			w.w.Header().Add(key, value)
 		}
 	}
-
 	if w.w.Header().Get("Content-Type") == "" {
 		w.w.Header().Set("Content-Type", "text/event-stream")
 	}
-
 	w.w.WriteHeader(http.StatusOK)
 	w.committed = true
 	if w.onStreamOpened != nil {
 		w.onStreamOpened()
 	}
-
 	if w.flusher != nil {
 		w.flusher.Flush()
 	}
@@ -651,23 +481,13 @@ func (w *nativeAnthropicStreamWriter) write(chunk []byte) error {
 	if w == nil {
 		return fmt.Errorf("native anthropic stream writer missing")
 	}
-
 	if !w.committed {
 		w.commit(http.Header{"Content-Type": {"text/event-stream"}})
 	}
-
 	if _, err := w.w.Write(chunk); err != nil {
-		slog.Warn(
-			"adapter.anthropic_native.write_chunk_failed",
-			"concern",
-			"adapter.providers.anthropic.request",
-			"err",
-			err,
-		)
-
+		slog.Warn("adapter.anthropic_native.write_chunk_failed", "concern", "adapter.providers.anthropic.request", "err", err)
 		return fmt.Errorf("write native anthropic stream chunk: %w", err)
 	}
-
 	return w.Flush()
 }
 
@@ -675,10 +495,8 @@ func (w *nativeAnthropicStreamWriter) relay(resp *http.Response) error {
 	if w == nil {
 		return fmt.Errorf("native anthropic stream writer missing")
 	}
-
 	w.commit(resp.Header.Clone())
 	buf := make([]byte, 4096)
-
 	for {
 		n, err := resp.Body.Read(buf)
 		if n > 0 {
@@ -686,23 +504,13 @@ func (w *nativeAnthropicStreamWriter) relay(resp *http.Response) error {
 				return writeErr
 			}
 		}
-
 		if err == nil {
 			continue
 		}
-
 		if errors.Is(err, io.EOF) {
 			return nil
 		}
-
-		slog.Warn(
-			"adapter.anthropic_native.relay_read_failed",
-			"concern",
-			"adapter.providers.anthropic.request",
-			"err",
-			err,
-		)
-
+		slog.Warn("adapter.anthropic_native.relay_read_failed", "concern", "adapter.providers.anthropic.request", "err", err)
 		return fmt.Errorf("read native anthropic stream response: %w", err)
 	}
 }

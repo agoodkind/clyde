@@ -58,7 +58,6 @@ func anthropicTypeForClass(class string) string {
 	if t, ok := anthropicTypeByClass[strings.TrimSpace(class)]; ok {
 		return t
 	}
-
 	return "api_error"
 }
 
@@ -75,7 +74,6 @@ func anthropicTypeForInfo(info errcontract.ErrorInfo) string {
 	if strings.TrimSpace(info.Code) == "not_supported_error" {
 		return "not_supported_error"
 	}
-
 	switch info.UpstreamStatus {
 	case http.StatusBadRequest, http.StatusMethodNotAllowed:
 		return "invalid_request_error"
@@ -84,7 +82,6 @@ func anthropicTypeForInfo(info errcontract.ErrorInfo) string {
 	case http.StatusTooManyRequests:
 		return "rate_limit_error"
 	}
-
 	return anthropicTypeForClass(info.Class)
 }
 
@@ -98,7 +95,6 @@ func (ErrorRenderer) Render(w http.ResponseWriter, code int, info errcontract.Er
 	if envelopeType == "" {
 		envelopeType = anthropicTypeForInfo(info)
 	}
-
 	env := ErrorEnvelope{
 		Type: "error",
 		Error: ErrorDetail{
@@ -111,36 +107,20 @@ func (ErrorRenderer) Render(w http.ResponseWriter, code int, info errcontract.Er
 	if err != nil {
 		const fallback = `{"type":"error","error":{"type":"api_error","message":"failed to encode error envelope"}}`
 		writeErr := erroring.WriteJSONStatus(w, http.StatusInternalServerError, []byte(fallback))
-		log.Warn(
-			"adapter.anthropic_error_envelope.render_failed",
-			"concern",
-			"adapter.providers.anthropic.errors",
-			"event",
-			"marshal_failed",
-			"err",
-			err.Error(),
+		log.Warn("adapter.anthropic_error_envelope.render_failed", "concern", "adapter.providers.anthropic.errors", "event", "marshal_failed",
+			"err", err.Error(),
 		)
 		if writeErr != nil {
 			return fmt.Errorf("write anthropic error fallback: %w", writeErr)
 		}
-
 		return fmt.Errorf("marshal anthropic error envelope: %w", err)
 	}
-
 	if writeErr := erroring.WriteJSONStatus(w, code, payload); writeErr != nil {
-		log.Warn(
-			"adapter.anthropic_error_envelope.render_failed",
-			"concern",
-			"adapter.providers.anthropic.errors",
-			"event",
-			"write_failed",
-			"err",
-			writeErr.Error(),
+		log.Warn("adapter.anthropic_error_envelope.render_failed", "concern", "adapter.providers.anthropic.errors", "event", "write_failed",
+			"err", writeErr.Error(),
 		)
-
 		return fmt.Errorf("write anthropic error envelope: %w", writeErr)
 	}
-
 	return nil
 }
 
@@ -170,8 +150,7 @@ func (UpstreamErrorMapper) Map(
 	provider string,
 	status int,
 	class errcontract.UpstreamCodeClass,
-	code string,
-	message string,
+	code, message string,
 ) errcontract.UpstreamMapping {
 	_ = provider // anthropic envelope folds upstream context into message via Type/Code
 	trimmedMsg := strings.TrimSpace(message)
@@ -180,14 +159,11 @@ func (UpstreamErrorMapper) Map(
 	if resolvedMessage == "" {
 		resolvedMessage = anthropicFallbackMessage(status, trimmedCode, trimmedMsg)
 	}
-
 	httpStatus := status
 	if httpStatus <= 0 {
 		httpStatus = mapClassToStatus(class)
 	}
-
 	envelopeType := anthropicErrorTypeForClass(httpStatus, trimmedCode, class)
-
 	return errcontract.UpstreamMapping{
 		HTTPStatus: httpStatus,
 		Info: errcontract.ErrorInfo{
@@ -228,15 +204,10 @@ func mapClassToStatus(class errcontract.UpstreamCodeClass) int {
 // envelope type for an upstream status, code, and class. Code wins
 // when it is a known Anthropic envelope type so passthrough preserves
 // the upstream classification verbatim.
-func anthropicErrorTypeForClass(
-	status int,
-	code string,
-	class errcontract.UpstreamCodeClass,
-) string {
+func anthropicErrorTypeForClass(status int, code string, class errcontract.UpstreamCodeClass) string {
 	if strings.TrimSpace(code) == "not_supported_error" {
 		return "not_supported_error"
 	}
-
 	switch status {
 	case http.StatusBadRequest, http.StatusMethodNotAllowed:
 		return "invalid_request_error"
@@ -245,7 +216,6 @@ func anthropicErrorTypeForClass(
 	case http.StatusTooManyRequests:
 		return "rate_limit_error"
 	}
-
 	switch class {
 	case errcontract.UpstreamClassRateLimit:
 		return "rate_limit_error"
@@ -253,12 +223,9 @@ func anthropicErrorTypeForClass(
 		return "authentication_error"
 	case errcontract.UpstreamClassInvalidRequest, errcontract.UpstreamClassSchemaViolation:
 		return "invalid_request_error"
-	case errcontract.UpstreamClassServerError,
-		errcontract.UpstreamClassNetworkError,
-		errcontract.UpstreamClassUnknown:
+	case errcontract.UpstreamClassServerError, errcontract.UpstreamClassNetworkError, errcontract.UpstreamClassUnknown:
 		return "api_error"
 	}
-
 	return "api_error"
 }
 
@@ -267,18 +234,14 @@ func anthropicFallbackMessage(status int, code, message string) string {
 	if status > 0 {
 		parts = append(parts, fmt.Sprintf("upstream_status=%d", status))
 	}
-
 	if code != "" {
 		parts = append(parts, "upstream_code="+code)
 	}
-
 	if message != "" {
 		parts = append(parts, "upstream_message="+message)
 	}
-
 	if len(parts) == 0 {
 		return "upstream call failed without diagnostic detail"
 	}
-
 	return "upstream call failed: " + strings.Join(parts, " ")
 }

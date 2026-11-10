@@ -54,7 +54,6 @@ func LogTransportPrepared(ctx context.Context, log *slog.Logger, telemetry Trans
 	if log == nil {
 		log = slog.Default()
 	}
-
 	attrs := []slog.Attr{
 		slog.String("component", "adapter"),
 		slog.String("subcomponent", "codex"),
@@ -81,28 +80,14 @@ func LogTransportPrepared(ctx context.Context, log *slog.Logger, telemetry Trans
 		slog.Bool("context_window_error", telemetry.ContextWindowError),
 	}
 	attrs = append(attrs, telemetry.Correlation.Attrs()...)
-	log.LogAttrs(
-		ctx,
-		slog.LevelInfo,
-		"adapter.codex.transport.prepared",
-		append(
-			[]slog.Attr{slog.String("concern", "adapter.providers.codex.websocket")},
-			attrs...,
-		)...,
-	)
+	log.LogAttrs(ctx, slog.LevelInfo, "adapter.codex.transport.prepared", append([]slog.Attr{slog.String("concern", "adapter.providers.codex.websocket")}, attrs...)...)
 }
 
 // LogUsageTelemetry is part of Clyde's typed adapter surface.
-func LogUsageTelemetry(
-	ctx context.Context,
-	log *slog.Logger,
-	usage UsageTelemetry,
-	meta UsageLogContext,
-) {
+func LogUsageTelemetry(ctx context.Context, log *slog.Logger, usage UsageTelemetry, meta UsageLogContext) {
 	if log == nil {
 		log = slog.Default()
 	}
-
 	attrs := []slog.Attr{
 		slog.String("component", "adapter"),
 		slog.String("subcomponent", "codex"),
@@ -124,18 +109,10 @@ func LogUsageTelemetry(
 		slog.Int("total_tokens", usage.TotalTokens),
 		slog.Bool("input_tokens_details_present", usage.InputTokensDetailsPresent),
 		slog.Int("cached_tokens", usage.CachedTokens),
-		slog.Bool(
-			"explicit_zero_cached_tokens",
-			usage.InputTokensDetailsPresent && usage.CachedTokens == 0,
-		),
+		slog.Bool("explicit_zero_cached_tokens", usage.InputTokensDetailsPresent && usage.CachedTokens == 0),
 		slog.Bool("output_tokens_details_present", usage.OutputTokensDetailsPresent),
 		slog.Int("reasoning_output_tokens", usage.ReasoningOutputTokens),
 	}
 	attrs = append(attrs, meta.Correlation.Attrs()...)
-	log.LogAttrs(
-		ctx,
-		slog.LevelInfo,
-		"adapter.codex.usage.completed",
-		append([]slog.Attr{slog.String("concern", "adapter.providers.codex.request")}, attrs...)...,
-	)
+	log.LogAttrs(ctx, slog.LevelInfo, "adapter.codex.usage.completed", append([]slog.Attr{slog.String("concern", "adapter.providers.codex.request")}, attrs...)...)
 }

@@ -53,22 +53,16 @@ func marshalUpstreamBody(t *testing.T, out HTTPTransportRequest) upstreamRequest
 	if err != nil {
 		t.Fatalf("marshal upstream request: %v", err)
 	}
-
 	var body upstreamRequestBody
 	if err := json.Unmarshal(raw, &body); err != nil {
 		t.Fatalf("decode upstream request: %v", err)
 	}
-
 	return body
 }
 
 func cursorNativeGPTResolved() *adapterresolver.ResolvedRequest {
-	resolved := codexResolvedForTest(ResolvedAlias{
-		Alias:     cursorNativeGPTRoute,
-		WireModel: cursorNativeGPTRoute,
-	})
+	resolved := codexResolvedForTest(ResolvedAlias{Alias: cursorNativeGPTRoute, WireModel: cursorNativeGPTRoute})
 	resolved.Cursor.NormalizedModel = cursorNativeGPTRoute
-
 	return resolved
 }
 
@@ -78,21 +72,17 @@ func decodeCursorChatRequest(t *testing.T) adapteropenai.ChatRequest {
 	if err := json.Unmarshal([]byte(cursorChatRequestJSON), &req); err != nil {
 		t.Fatalf("decode Cursor chat request: %v", err)
 	}
-
 	return req
 }
 
 func findToolSpec(t *testing.T, tools []codexwire.ToolSpec, name string) codexwire.ToolSpec {
 	t.Helper()
-
 	for _, tool := range tools {
 		if tool.Name == name {
 			return tool
 		}
 	}
-
 	t.Fatalf("tool %q missing from upstream tools: %+v", name, tools)
-
 	return codexwire.ToolSpec{}
 }
 
@@ -104,45 +94,32 @@ func findToolSpec(t *testing.T, tools []codexwire.ToolSpec, name string) codexwi
 func TestCursorCustomToolReachesUpstreamAsFreeformTool(t *testing.T) {
 	req := decodeCursorChatRequest(t)
 
-	body := marshalUpstreamBody(
-		t,
-		BuildRequestWithConfig(req, cursorNativeGPTResolved(), "", RequestBuilderConfig{}),
-	)
+	body := marshalUpstreamBody(t, BuildRequestWithConfig(req, cursorNativeGPTResolved(), "", RequestBuilderConfig{}))
 
 	patchTool := findToolSpec(t, body.Tools, "ApplyPatch")
 	if patchTool.Type != codexwire.ToolSpecTypeCustom {
 		t.Fatalf("ApplyPatch type = %q, want %q", patchTool.Type, codexwire.ToolSpecTypeCustom)
 	}
-
 	if patchTool.Format == nil {
 		t.Fatalf("ApplyPatch reached the upstream with no format: %+v", patchTool)
 	}
-
-	if patchTool.Format.Type != codexwire.ToolFormatTypeGrammar ||
-		patchTool.Format.Syntax != "lark" {
+	if patchTool.Format.Type != codexwire.ToolFormatTypeGrammar || patchTool.Format.Syntax != "lark" {
 		t.Fatalf("ApplyPatch format = %+v, want a lark grammar", patchTool.Format)
 	}
-
 	if !strings.Contains(patchTool.Format.Definition, "*** Begin Patch") {
 		t.Fatalf("ApplyPatch grammar lost its patch envelope: %q", patchTool.Format.Definition)
 	}
-
 	if len(patchTool.Parameters) != 0 {
-		t.Fatalf(
-			"ApplyPatch carried parameters %q, want none on a freeform tool",
-			patchTool.Parameters,
-		)
+		t.Fatalf("ApplyPatch carried parameters %q, want none on a freeform tool", patchTool.Parameters)
 	}
 
 	readTool := findToolSpec(t, body.Tools, "ReadFile")
 	if readTool.Type != codexwire.ToolSpecTypeFunction {
 		t.Fatalf("ReadFile type = %q, want %q", readTool.Type, codexwire.ToolSpecTypeFunction)
 	}
-
 	if !strings.Contains(string(readTool.Parameters), `"path"`) {
 		t.Fatalf("ReadFile lost its parameter schema: %q", readTool.Parameters)
 	}
-
 	if readTool.Format != nil {
 		t.Fatalf("ReadFile gained a format: %+v", readTool.Format)
 	}
@@ -156,31 +133,23 @@ func customToolCallStream(toolName, patch string) *strings.Reader {
 	// boundary does not matter, only that it is reassembled.
 	split := len(patch) / 2
 	head, tail := patch[:split], patch[split:]
-
-	return strings.NewReader(
-		strings.Join(
-			[]string{
-				"event: response.output_item.added",
-				`data: {"item":{"id":"ct_1","type":"custom_tool_call","call_id":"call_patch","name":"` + toolName + `","input":""}}`,
-				"",
-				"event: response.custom_tool_call_input.delta",
-				`data: {"item_id":"ct_1","call_id":"call_patch","delta":` + jsonString(head) + `}`,
-				"",
-				"event: response.custom_tool_call_input.delta",
-				`data: {"item_id":"ct_1","call_id":"call_patch","delta":` + jsonString(tail) + `}`,
-				"",
-				"event: response.output_item.done",
-				`data: {"item":{"id":"ct_1","type":"custom_tool_call","call_id":"call_patch","name":"` + toolName + `","input":` + jsonString(
-					patch,
-				) + `}}`,
-				"",
-				"event: response.completed",
-				`data: {"response":{"usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}`,
-				"",
-			},
-			"\n",
-		) + "\n",
-	)
+	return strings.NewReader(strings.Join([]string{
+		"event: response.output_item.added",
+		`data: {"item":{"id":"ct_1","type":"custom_tool_call","call_id":"call_patch","name":"` + toolName + `","input":""}}`,
+		"",
+		"event: response.custom_tool_call_input.delta",
+		`data: {"item_id":"ct_1","call_id":"call_patch","delta":` + jsonString(head) + `}`,
+		"",
+		"event: response.custom_tool_call_input.delta",
+		`data: {"item_id":"ct_1","call_id":"call_patch","delta":` + jsonString(tail) + `}`,
+		"",
+		"event: response.output_item.done",
+		`data: {"item":{"id":"ct_1","type":"custom_tool_call","call_id":"call_patch","name":"` + toolName + `","input":` + jsonString(patch) + `}}`,
+		"",
+		"event: response.completed",
+		`data: {"response":{"usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}`,
+		"",
+	}, "\n") + "\n")
 }
 
 func jsonString(value string) string {
@@ -188,18 +157,13 @@ func jsonString(value string) string {
 	if err != nil {
 		return `""`
 	}
-
 	return string(raw)
 }
 
 // renderCursorToolCalls runs the real codex SSE parser and the real
 // event renderer for the native-GPT Cursor route, returning the tool
 // calls Cursor would receive on the wire.
-func renderCursorToolCalls(
-	t *testing.T,
-	stream *strings.Reader,
-	declared []codexwire.ToolSpec,
-) []adapteropenai.ToolCall {
+func renderCursorToolCalls(t *testing.T, stream *strings.Reader, declared []codexwire.ToolSpec) []adapteropenai.ToolCall {
 	t.Helper()
 	representation := nativePatchRepresentationForCursorRoute(cursorNativeGPTResolved())
 	renderer := adapterrender.NewEventRendererWithOptions(
@@ -210,23 +174,16 @@ func renderCursorToolCalls(
 		adapterrender.EventRendererOptions{NativePatchRepresentation: representation},
 	)
 	var chunks []adapteropenai.StreamChunk
-	_, err := ParseSSEEventsWithOptions(
-		context.Background(),
-		stream,
-		func(ev adapterrender.Event) error {
-			chunks = append(chunks, renderer.HandleEvent(ev)...)
-			return nil
-		},
-		sseInstrumentationContext{},
-		SSEParseOptions{
-			DeclaredTools:             declared,
-			NativePatchRepresentation: representation,
-		},
-	)
+	_, err := ParseSSEEventsWithOptions(context.Background(), stream, func(ev adapterrender.Event) error {
+		chunks = append(chunks, renderer.HandleEvent(ev)...)
+		return nil
+	}, sseInstrumentationContext{}, SSEParseOptions{
+		DeclaredTools:             declared,
+		NativePatchRepresentation: representation,
+	})
 	if err != nil {
 		t.Fatalf("parse codex SSE: %v", err)
 	}
-
 	return collectToolCallsLocal(chunks)
 }
 
@@ -236,39 +193,22 @@ func renderCursorToolCalls(
 // payload straight into its patch parser.
 func TestCursorCustomToolCallReachesCursorAsRawPatch(t *testing.T) {
 	req := decodeCursorChatRequest(t)
-	declared := BuildRequestWithConfig(
-		req,
-		cursorNativeGPTResolved(),
-		"",
-		RequestBuilderConfig{},
-	).Tools
+	declared := BuildRequestWithConfig(req, cursorNativeGPTResolved(), "", RequestBuilderConfig{}).Tools
 
-	calls := renderCursorToolCalls(
-		t,
-		customToolCallStream("ApplyPatch", cursorApplyPatchPatch),
-		declared,
-	)
+	calls := renderCursorToolCalls(t, customToolCallStream("ApplyPatch", cursorApplyPatchPatch), declared)
 
 	if len(calls) == 0 {
 		t.Fatalf("no tool calls reached the client")
 	}
-
 	if calls[0].Function.Name != "ApplyPatch" {
 		t.Fatalf("tool name = %q, want ApplyPatch", calls[0].Function.Name)
 	}
-
 	var payload strings.Builder
-
 	for _, call := range calls {
 		payload.WriteString(call.Function.Arguments)
 	}
-
 	if payload.String() != cursorApplyPatchPatch {
-		t.Fatalf(
-			"client payload = %q, want the raw patch %q",
-			payload.String(),
-			cursorApplyPatchPatch,
-		)
+		t.Fatalf("client payload = %q, want the raw patch %q", payload.String(), cursorApplyPatchPatch)
 	}
 }
 
@@ -279,23 +219,13 @@ func TestCursorCustomToolCallReachesCursorAsRawPatch(t *testing.T) {
 // the freeform declaration itself is the signal.
 func TestBackendInjectedApplyPatchMapsToDeclaredCustomTool(t *testing.T) {
 	req := decodeCursorChatRequest(t)
-	declared := BuildRequestWithConfig(
-		req,
-		cursorNativeGPTResolved(),
-		"",
-		RequestBuilderConfig{},
-	).Tools
+	declared := BuildRequestWithConfig(req, cursorNativeGPTResolved(), "", RequestBuilderConfig{}).Tools
 
-	calls := renderCursorToolCalls(
-		t,
-		customToolCallStream("apply_patch", cursorApplyPatchPatch),
-		declared,
-	)
+	calls := renderCursorToolCalls(t, customToolCallStream("apply_patch", cursorApplyPatchPatch), declared)
 
 	if len(calls) == 0 {
 		t.Fatalf("no tool calls reached the client")
 	}
-
 	if calls[0].Function.Name != "ApplyPatch" {
 		t.Fatalf("tool name = %q, want the client-declared ApplyPatch", calls[0].Function.Name)
 	}
@@ -322,7 +252,6 @@ func decodeChatRequest(t *testing.T, body string) adapteropenai.ChatRequest {
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatalf("decode chat request: %v", err)
 	}
-
 	return req
 }
 
@@ -331,28 +260,15 @@ func decodeChatRequest(t *testing.T, body string) adapteropenai.ChatRequest {
 // tool would deliver an ApplyPatch call to the client as RunSQL.
 func TestSecondCustomToolKeepsItsOwnName(t *testing.T) {
 	req := decodeChatRequest(t, twoCustomToolRequestJSON)
-	declared := BuildRequestWithConfig(
-		req,
-		cursorNativeGPTResolved(),
-		"",
-		RequestBuilderConfig{},
-	).Tools
+	declared := BuildRequestWithConfig(req, cursorNativeGPTResolved(), "", RequestBuilderConfig{}).Tools
 
-	calls := renderCursorToolCalls(
-		t,
-		customToolCallStream("ApplyPatch", cursorApplyPatchPatch),
-		declared,
-	)
+	calls := renderCursorToolCalls(t, customToolCallStream("ApplyPatch", cursorApplyPatchPatch), declared)
 
 	if len(calls) == 0 {
 		t.Fatalf("no tool calls reached the client")
 	}
-
 	if calls[0].Function.Name != "ApplyPatch" {
-		t.Fatalf(
-			"tool name = %q, want ApplyPatch, not the first declared custom tool",
-			calls[0].Function.Name,
-		)
+		t.Fatalf("tool name = %q, want ApplyPatch, not the first declared custom tool", calls[0].Function.Name)
 	}
 }
 
@@ -361,12 +277,7 @@ func TestSecondCustomToolKeepsItsOwnName(t *testing.T) {
 // apply_patch validation would fail the whole stream instead.
 func TestNonPatchCustomToolPayloadSurvives(t *testing.T) {
 	req := decodeChatRequest(t, twoCustomToolRequestJSON)
-	declared := BuildRequestWithConfig(
-		req,
-		cursorNativeGPTResolved(),
-		"",
-		RequestBuilderConfig{},
-	).Tools
+	declared := BuildRequestWithConfig(req, cursorNativeGPTResolved(), "", RequestBuilderConfig{}).Tools
 	payload := "SELECT 1;\n"
 
 	calls := renderCursorToolCalls(t, customToolCallStream("RunSQL", payload), declared)
@@ -374,17 +285,13 @@ func TestNonPatchCustomToolPayloadSurvives(t *testing.T) {
 	if len(calls) == 0 {
 		t.Fatalf("no tool calls reached the client")
 	}
-
 	if calls[0].Function.Name != "RunSQL" {
 		t.Fatalf("tool name = %q, want RunSQL", calls[0].Function.Name)
 	}
-
 	var got strings.Builder
-
 	for _, call := range calls {
 		got.WriteString(call.Function.Arguments)
 	}
-
 	if got.String() != payload {
 		t.Fatalf("client payload = %q, want the verbatim tool output %q", got.String(), payload)
 	}
@@ -395,19 +302,14 @@ func TestNonPatchCustomToolPayloadSurvives(t *testing.T) {
 // this when a stream is cut short, so the buffered payload has to survive
 // on the end-of-stream path rather than only on the completed item.
 func truncatedCustomToolCallStream(toolName, payload string) *strings.Reader {
-	return strings.NewReader(
-		strings.Join(
-			[]string{
-				"event: response.output_item.added",
-				`data: {"item":{"id":"ct_1","type":"custom_tool_call","call_id":"call_x","name":"` + toolName + `","input":""}}`,
-				"",
-				"event: response.custom_tool_call_input.delta",
-				`data: {"item_id":"ct_1","call_id":"call_x","delta":` + jsonString(payload) + `}`,
-				"",
-			},
-			"\n",
-		) + "\n",
-	)
+	return strings.NewReader(strings.Join([]string{
+		"event: response.output_item.added",
+		`data: {"item":{"id":"ct_1","type":"custom_tool_call","call_id":"call_x","name":"` + toolName + `","input":""}}`,
+		"",
+		"event: response.custom_tool_call_input.delta",
+		`data: {"item_id":"ct_1","call_id":"call_x","delta":` + jsonString(payload) + `}`,
+		"",
+	}, "\n") + "\n")
 }
 
 // TestTruncatedNonPatchCustomToolStillReachesClient covers a stream that
@@ -416,12 +318,7 @@ func truncatedCustomToolCallStream(toolName, payload string) *strings.Reader {
 // tool that is not a patch tool.
 func TestTruncatedNonPatchCustomToolStillReachesClient(t *testing.T) {
 	req := decodeChatRequest(t, twoCustomToolRequestJSON)
-	declared := BuildRequestWithConfig(
-		req,
-		cursorNativeGPTResolved(),
-		"",
-		RequestBuilderConfig{},
-	).Tools
+	declared := BuildRequestWithConfig(req, cursorNativeGPTResolved(), "", RequestBuilderConfig{}).Tools
 	payload := "SELECT 1;\n"
 
 	calls := renderCursorToolCalls(t, truncatedCustomToolCallStream("RunSQL", payload), declared)
@@ -429,17 +326,13 @@ func TestTruncatedNonPatchCustomToolStillReachesClient(t *testing.T) {
 	if len(calls) == 0 {
 		t.Fatalf("no tool calls reached the client")
 	}
-
 	if calls[0].Function.Name != "RunSQL" {
 		t.Fatalf("tool name = %q, want RunSQL", calls[0].Function.Name)
 	}
-
 	var got strings.Builder
-
 	for _, call := range calls {
 		got.WriteString(call.Function.Arguments)
 	}
-
 	if got.String() != payload {
 		t.Fatalf("client payload = %q, want the buffered payload %q", got.String(), payload)
 	}
@@ -450,29 +343,17 @@ func TestTruncatedNonPatchCustomToolStillReachesClient(t *testing.T) {
 // also survive the end-of-stream path.
 func TestTruncatedCustomPatchToolStillReachesClient(t *testing.T) {
 	req := decodeCursorChatRequest(t)
-	declared := BuildRequestWithConfig(
-		req,
-		cursorNativeGPTResolved(),
-		"",
-		RequestBuilderConfig{},
-	).Tools
+	declared := BuildRequestWithConfig(req, cursorNativeGPTResolved(), "", RequestBuilderConfig{}).Tools
 
-	calls := renderCursorToolCalls(
-		t,
-		truncatedCustomToolCallStream("ApplyPatch", cursorApplyPatchPatch),
-		declared,
-	)
+	calls := renderCursorToolCalls(t, truncatedCustomToolCallStream("ApplyPatch", cursorApplyPatchPatch), declared)
 
 	if len(calls) == 0 {
 		t.Fatalf("no tool calls reached the client")
 	}
-
 	var got strings.Builder
-
 	for _, call := range calls {
 		got.WriteString(call.Function.Arguments)
 	}
-
 	if got.String() != cursorApplyPatchPatch {
 		t.Fatalf("client payload = %q, want the buffered patch", got.String())
 	}
@@ -484,42 +365,27 @@ func TestTruncatedCustomPatchToolStillReachesClient(t *testing.T) {
 func TestCustomToolReplayDoesNotUnwrapJSONPayload(t *testing.T) {
 	req := decodeChatRequest(t, twoCustomToolRequestJSON)
 	payload := `{"input":"SELECT 1"}`
-	req.Messages = append(
-		req.Messages,
-		adapteropenai.ChatMessage{
-			Role: "assistant",
-			ToolCalls: []adapteropenai.ToolCall{
-				{
-					Index:    0,
-					ID:       "call_sql",
-					Type:     "function",
-					Function: adapteropenai.ToolCallFunction{Name: "RunSQL", Arguments: payload},
-				},
-			},
-		},
-	)
+	req.Messages = append(req.Messages, adapteropenai.ChatMessage{
+		Role: "assistant",
+		ToolCalls: []adapteropenai.ToolCall{{
+			Index:    0,
+			ID:       "call_sql",
+			Type:     "function",
+			Function: adapteropenai.ToolCallFunction{Name: "RunSQL", Arguments: payload},
+		}},
+	})
 
-	body := marshalUpstreamBody(
-		t,
-		BuildRequestWithConfig(req, cursorNativeGPTResolved(), "", RequestBuilderConfig{}),
-	)
+	body := marshalUpstreamBody(t, BuildRequestWithConfig(req, cursorNativeGPTResolved(), "", RequestBuilderConfig{}))
 
 	for i := range body.Input {
 		if body.Input[i].Type != codexwire.ItemTypeCustomToolCall {
 			continue
 		}
-
 		if body.Input[i].Input != payload {
-			t.Fatalf(
-				"replayed input = %q, want the payload verbatim %q",
-				body.Input[i].Input,
-				payload,
-			)
+			t.Fatalf("replayed input = %q, want the payload verbatim %q", body.Input[i].Input, payload)
 		}
-
 		return
 	}
-
 	t.Fatalf("no custom_tool_call in the replayed input: %+v", body.Input)
 }
 
@@ -530,21 +396,15 @@ func TestCustomToolReplayDoesNotUnwrapJSONPayload(t *testing.T) {
 // the declared tool set has to decide the shape.
 func TestCursorCustomToolReplayKeepsFreeformShape(t *testing.T) {
 	req := decodeCursorChatRequest(t)
-	req.Messages = append(
-		req.Messages,
+	req.Messages = append(req.Messages,
 		adapteropenai.ChatMessage{
 			Role: "assistant",
-			ToolCalls: []adapteropenai.ToolCall{
-				{
-					Index: 0,
-					ID:    "call_patch",
-					Type:  "function",
-					Function: adapteropenai.ToolCallFunction{
-						Name:      "ApplyPatch",
-						Arguments: cursorApplyPatchPatch,
-					},
-				},
-			},
+			ToolCalls: []adapteropenai.ToolCall{{
+				Index:    0,
+				ID:       "call_patch",
+				Type:     "function",
+				Function: adapteropenai.ToolCallFunction{Name: "ApplyPatch", Arguments: cursorApplyPatchPatch},
+			}},
 		},
 		adapteropenai.ChatMessage{
 			Role:       "tool",
@@ -553,13 +413,9 @@ func TestCursorCustomToolReplayKeepsFreeformShape(t *testing.T) {
 		},
 	)
 
-	body := marshalUpstreamBody(
-		t,
-		BuildRequestWithConfig(req, cursorNativeGPTResolved(), "", RequestBuilderConfig{}),
-	)
+	body := marshalUpstreamBody(t, BuildRequestWithConfig(req, cursorNativeGPTResolved(), "", RequestBuilderConfig{}))
 
 	var call, output *codexwire.InputItem
-
 	for i := range body.Input {
 		switch body.Input[i].Type {
 		case codexwire.ItemTypeCustomToolCall:
@@ -568,36 +424,27 @@ func TestCursorCustomToolReplayKeepsFreeformShape(t *testing.T) {
 			output = &body.Input[i]
 		case codexwire.ItemTypeFunctionCall, codexwire.ItemTypeFunctionCallOutput:
 			t.Fatalf("ApplyPatch replayed under the function shape: %+v", body.Input[i])
-		case codexwire.ItemTypeMessage,
-			codexwire.ItemTypeLocalShellCall,
-			codexwire.ItemTypeReasoning:
+		case codexwire.ItemTypeMessage, codexwire.ItemTypeLocalShellCall, codexwire.ItemTypeReasoning:
 		}
 	}
-
 	if call == nil {
 		t.Fatalf("no custom_tool_call in the replayed input: %+v", body.Input)
 	}
-
 	if call.Name != "ApplyPatch" {
 		t.Fatalf("replayed call name = %q, want ApplyPatch", call.Name)
 	}
-
 	if call.Input != cursorApplyPatchPatch {
 		t.Fatalf("replayed call input = %q, want the raw patch", call.Input)
 	}
-
 	if call.Arguments != "" {
 		t.Fatalf("replayed call carried JSON arguments %q, want none", call.Arguments)
 	}
-
 	if output == nil {
 		t.Fatalf("no custom_tool_call_output in the replayed input: %+v", body.Input)
 	}
-
 	if output.Name != "ApplyPatch" {
 		t.Fatalf("replayed output name = %q, want ApplyPatch", output.Name)
 	}
-
 	if !strings.Contains(string(output.Output), "Applied patch") {
 		t.Fatalf("replayed output body = %q", output.Output)
 	}
@@ -608,21 +455,15 @@ func TestCursorCustomToolReplayKeepsFreeformShape(t *testing.T) {
 // function_call with its JSON arguments intact.
 func TestFunctionToolReplayKeepsFunctionShape(t *testing.T) {
 	req := decodeCursorChatRequest(t)
-	req.Messages = append(
-		req.Messages,
+	req.Messages = append(req.Messages,
 		adapteropenai.ChatMessage{
 			Role: "assistant",
-			ToolCalls: []adapteropenai.ToolCall{
-				{
-					Index: 0,
-					ID:    "call_read",
-					Type:  "function",
-					Function: adapteropenai.ToolCallFunction{
-						Name:      "ReadFile",
-						Arguments: `{"path":"out.md"}`,
-					},
-				},
-			},
+			ToolCalls: []adapteropenai.ToolCall{{
+				Index:    0,
+				ID:       "call_read",
+				Type:     "function",
+				Function: adapteropenai.ToolCallFunction{Name: "ReadFile", Arguments: `{"path":"out.md"}`},
+			}},
 		},
 		adapteropenai.ChatMessage{
 			Role:       "tool",
@@ -631,27 +472,20 @@ func TestFunctionToolReplayKeepsFunctionShape(t *testing.T) {
 		},
 	)
 
-	body := marshalUpstreamBody(
-		t,
-		BuildRequestWithConfig(req, cursorNativeGPTResolved(), "", RequestBuilderConfig{}),
-	)
+	body := marshalUpstreamBody(t, BuildRequestWithConfig(req, cursorNativeGPTResolved(), "", RequestBuilderConfig{}))
 
 	var call *codexwire.InputItem
-
 	for i := range body.Input {
 		if body.Input[i].Type == codexwire.ItemTypeFunctionCall {
 			call = &body.Input[i]
 		}
-
 		if body.Input[i].Type == codexwire.ItemTypeCustomToolCall {
 			t.Fatalf("ReadFile replayed under the freeform shape: %+v", body.Input[i])
 		}
 	}
-
 	if call == nil {
 		t.Fatalf("no function_call in the replayed input: %+v", body.Input)
 	}
-
 	if call.Name != "ReadFile" || call.Arguments != `{"path":"out.md"}` {
 		t.Fatalf("replayed function call = %+v", call)
 	}

@@ -10,11 +10,9 @@ func TestFormatSyntheticContentReasoningWrapsBody(t *testing.T) {
 	if !strings.Contains(got, "<!--clyde-thinking-->") {
 		t.Fatalf("missing reasoning open marker: %q", got)
 	}
-
 	if !strings.Contains(got, "<!--/clyde-thinking-->") {
 		t.Fatalf("missing reasoning close marker: %q", got)
 	}
-
 	if !strings.Contains(got, "> first line\n> second line") {
 		t.Fatalf("missing blockquote body: %q", got)
 	}
@@ -22,11 +20,9 @@ func TestFormatSyntheticContentReasoningWrapsBody(t *testing.T) {
 
 func TestFormatSyntheticContentNoticeWrapsBody(t *testing.T) {
 	got := FormatSyntheticContent(SyntheticNotice, "⚠️ You have about 7% left.")
-	if !strings.Contains(got, "<!--clyde-notice-->") ||
-		!strings.Contains(got, "<!--/clyde-notice-->") {
+	if !strings.Contains(got, "<!--clyde-notice-->") || !strings.Contains(got, "<!--/clyde-notice-->") {
 		t.Fatalf("missing notice markers: %q", got)
 	}
-
 	if !strings.Contains(got, "> ⚠️ You have about 7% left.") {
 		t.Fatalf("missing blockquote body: %q", got)
 	}
@@ -44,11 +40,9 @@ func TestExtractSyntheticPartsSingleThinking(t *testing.T) {
 	if len(parts) != 1 {
 		t.Fatalf("want 1 part, got %d: %#v", len(parts), parts)
 	}
-
 	if parts[0].Kind != SyntheticKindThinking {
 		t.Fatalf("kind=%q want %q", parts[0].Kind, SyntheticKindThinking)
 	}
-
 	if parts[0].Body != "internal scratch" {
 		t.Fatalf("body=%q want %q", parts[0].Body, "internal scratch")
 	}
@@ -61,15 +55,12 @@ func TestExtractSyntheticPartsMixedTextThinkingText(t *testing.T) {
 	if len(parts) != 3 {
 		t.Fatalf("want 3 parts, got %d: %#v", len(parts), parts)
 	}
-
 	if parts[0].Kind != SyntheticKindText || !strings.HasPrefix(parts[0].Body, "Hello there.") {
 		t.Fatalf("part0=%#v", parts[0])
 	}
-
 	if parts[1].Kind != SyntheticKindThinking || parts[1].Body != "the model thought hard" {
 		t.Fatalf("part1=%#v", parts[1])
 	}
-
 	if parts[2].Kind != SyntheticKindText || !strings.Contains(parts[2].Body, "Final answer.") {
 		t.Fatalf("part2=%#v", parts[2])
 	}
@@ -83,15 +74,12 @@ func TestExtractSyntheticPartsMultipleConsecutiveThinking(t *testing.T) {
 	if len(parts) != 3 {
 		t.Fatalf("want 3 parts, got %d: %#v", len(parts), parts)
 	}
-
 	if parts[0].Kind != SyntheticKindThinking || parts[0].Body != "first pass" {
 		t.Fatalf("part0=%#v", parts[0])
 	}
-
 	if parts[1].Kind != SyntheticKindThinking || parts[1].Body != "second pass" {
 		t.Fatalf("part1=%#v", parts[1])
 	}
-
 	if parts[2].Kind != SyntheticKindText || parts[2].Body != "Done." {
 		t.Fatalf("part2=%#v", parts[2])
 	}
@@ -118,28 +106,17 @@ func TestExtractSyntheticPartsMentionedOpenDoesNotAbsorbLaterPair(t *testing.T) 
 	if len(parts) != 3 {
 		t.Fatalf("want 3 parts, got %d: %#v", len(parts), parts)
 	}
-
 	if parts[0].Kind != SyntheticKindText {
 		t.Fatalf("part0 kind=%q want text: %#v", parts[0].Kind, parts[0])
 	}
-
 	for _, want := range []string{mention, sentence1, sentence2} {
 		if !strings.Contains(parts[0].Body, want) {
-			t.Fatalf(
-				"part0=%q, want it to contain %q (prose around the mention must survive untouched)",
-				parts[0].Body,
-				want,
-			)
+			t.Fatalf("part0=%q, want it to contain %q (prose around the mention must survive untouched)", parts[0].Body, want)
 		}
 	}
-
 	if parts[1].Kind != SyntheticKindThinking || parts[1].Body != "genuine reasoning" {
-		t.Fatalf(
-			"part1=%#v, want the real envelope's own body, not the text spanning both markers",
-			parts[1],
-		)
+		t.Fatalf("part1=%#v, want the real envelope's own body, not the text spanning both markers", parts[1])
 	}
-
 	if parts[2].Kind != SyntheticKindText || !strings.Contains(parts[2].Body, trailing) {
 		t.Fatalf("part2=%#v, want %q preserved", parts[2], trailing)
 	}
@@ -151,11 +128,9 @@ func TestExtractSyntheticPartsNoticeMaterializes(t *testing.T) {
 	if len(parts) != 2 {
 		t.Fatalf("want 2 parts, got %d: %#v", len(parts), parts)
 	}
-
 	if parts[0].Kind != SyntheticKindNotice || parts[0].Body != "⚠️ heads up" {
 		t.Fatalf("part0=%#v", parts[0])
 	}
-
 	if parts[1].Kind != SyntheticKindText || parts[1].Body != "Body." {
 		t.Fatalf("part1=%#v", parts[1])
 	}
@@ -176,17 +151,11 @@ func TestExtractSyntheticPartsPreservesIndentationAfterClose(t *testing.T) {
 	if len(parts) != 2 {
 		t.Fatalf("want 2 parts, got %d: %#v", len(parts), parts)
 	}
-
 	if parts[0].Kind != SyntheticKindNotice {
 		t.Fatalf("part0 kind=%q want notice: %#v", parts[0].Kind, parts[0])
 	}
-
 	if parts[1].Kind != SyntheticKindText || parts[1].Body != "    indented code line" {
-		t.Fatalf(
-			"part1=%#v, want text %q with leading indentation intact",
-			parts[1],
-			"    indented code line",
-		)
+		t.Fatalf("part1=%#v, want text %q with leading indentation intact", parts[1], "    indented code line")
 	}
 }
 
@@ -215,11 +184,7 @@ func TestSyntheticContentOpenWithEmptyRefMatchesLegacyShape(t *testing.T) {
 	withEmpty := SyntheticContentOpenWithRef(SyntheticReasoning, "", OriginUnknown)
 	legacy := SyntheticContentOpen(SyntheticReasoning)
 	if withEmpty != legacy {
-		t.Fatalf(
-			"empty ref must round-trip to legacy shape:\n with-ref: %q\n legacy:   %q",
-			withEmpty,
-			legacy,
-		)
+		t.Fatalf("empty ref must round-trip to legacy shape:\n with-ref: %q\n legacy:   %q", withEmpty, legacy)
 	}
 }
 
@@ -231,15 +196,12 @@ func TestExtractSyntheticPartsCarriesRefAttribute(t *testing.T) {
 	if len(parts) != 1 {
 		t.Fatalf("want 1 part, got %d: %#v", len(parts), parts)
 	}
-
 	if parts[0].Kind != SyntheticKindThinking {
 		t.Fatalf("kind=%q want %q", parts[0].Kind, SyntheticKindThinking)
 	}
-
 	if parts[0].Body != "with ref" {
 		t.Fatalf("body=%q want %q", parts[0].Body, "with ref")
 	}
-
 	if parts[0].Ref != "rs_xyz789" {
 		t.Fatalf("ref=%q want %q", parts[0].Ref, "rs_xyz789")
 	}
@@ -251,11 +213,9 @@ func TestExtractSyntheticPartsLegacyMarkerHasEmptyRef(t *testing.T) {
 	if len(parts) != 1 {
 		t.Fatalf("want 1 part, got %d: %#v", len(parts), parts)
 	}
-
 	if parts[0].Ref != "" {
 		t.Fatalf("legacy marker should yield empty ref, got %q", parts[0].Ref)
 	}
-
 	if parts[0].Encrypted != "" {
 		t.Fatalf("legacy marker should yield empty encrypted, got %q", parts[0].Encrypted)
 	}
@@ -272,11 +232,7 @@ func TestSyntheticContentCloseWithEmptyEncryptedMatchesLegacyShape(t *testing.T)
 	withEmpty := SyntheticContentCloseWithAttrs(SyntheticReasoning, "", "")
 	legacy := SyntheticContentClose(SyntheticReasoning)
 	if withEmpty != legacy {
-		t.Fatalf(
-			"empty encrypted must match legacy close shape:\n with-encrypted: %q\n legacy:        %q",
-			withEmpty,
-			legacy,
-		)
+		t.Fatalf("empty encrypted must match legacy close shape:\n with-encrypted: %q\n legacy:        %q", withEmpty, legacy)
 	}
 }
 
@@ -292,19 +248,15 @@ func TestExtractSyntheticPartsRoundTripsEncryptedAttribute(t *testing.T) {
 	if len(parts) != 1 {
 		t.Fatalf("want 1 part, got %d: %#v", len(parts), parts)
 	}
-
 	if parts[0].Kind != SyntheticKindThinking {
 		t.Fatalf("kind=%q want %q", parts[0].Kind, SyntheticKindThinking)
 	}
-
 	if parts[0].Ref != "rs_inline" {
 		t.Fatalf("ref=%q want rs_inline", parts[0].Ref)
 	}
-
 	if parts[0].Body != "deep thoughts" {
 		t.Fatalf("body=%q want deep thoughts", parts[0].Body)
 	}
-
 	if parts[0].Encrypted != "OPAQUE_BASE64_BLOB==" {
 		t.Fatalf("encrypted=%q want OPAQUE_BASE64_BLOB==", parts[0].Encrypted)
 	}
@@ -335,19 +287,15 @@ func TestExtractSyntheticPartsRoundTripsSignatureAttribute(t *testing.T) {
 	if len(parts) != 1 {
 		t.Fatalf("want 1 part, got %d: %#v", len(parts), parts)
 	}
-
 	if parts[0].Kind != SyntheticKindThinking {
 		t.Fatalf("kind=%q want %q", parts[0].Kind, SyntheticKindThinking)
 	}
-
 	if parts[0].Body != "deliberation" {
 		t.Fatalf("body=%q want deliberation", parts[0].Body)
 	}
-
 	if parts[0].Encrypted != "" {
 		t.Fatalf("encrypted=%q want empty when only signature is set", parts[0].Encrypted)
 	}
-
 	if parts[0].Signature != "SIG_VALUE_BASE64==" {
 		t.Fatalf("signature=%q want SIG_VALUE_BASE64==", parts[0].Signature)
 	}
@@ -362,89 +310,49 @@ func TestExtractSyntheticPartsRoundTripsSignatureAttribute(t *testing.T) {
 func TestExtractSyntheticPartsCoexistsEncryptedAndSignature(t *testing.T) {
 	in := SyntheticContentOpenWithRef(SyntheticReasoning, "rs_co", OriginUnknown) +
 		formatSyntheticBody(syntheticContentSpecs[SyntheticReasoning], "co thinking", true) +
-		SyntheticContentCloseWithAttrs(
-			SyntheticReasoning,
-			"ENC_VALUE_BASE64==",
-			"SIG_VALUE_BASE64==",
-		)
+		SyntheticContentCloseWithAttrs(SyntheticReasoning, "ENC_VALUE_BASE64==", "SIG_VALUE_BASE64==")
 	parts := ExtractSyntheticParts(in)
 	if len(parts) != 1 {
 		t.Fatalf("want 1 part, got %d: %#v", len(parts), parts)
 	}
-
 	got := parts[0]
 	if got.Ref != "rs_co" {
 		t.Fatalf("ref=%q want rs_co", got.Ref)
 	}
-
 	if got.Body != "co thinking" {
 		t.Fatalf("body=%q want co thinking", got.Body)
 	}
-
 	if got.Encrypted != "ENC_VALUE_BASE64==" {
 		t.Fatalf("encrypted=%q want ENC_VALUE_BASE64==", got.Encrypted)
 	}
-
 	if got.Signature != "SIG_VALUE_BASE64==" {
 		t.Fatalf("signature=%q want SIG_VALUE_BASE64==", got.Signature)
 	}
 }
 
 func TestFormatSyntheticContentDeltaWithRefEmbedsAttributeOnOpen(t *testing.T) {
-	open := FormatSyntheticContentDeltaWithRef(
-		SyntheticReasoning,
-		true,
-		true,
-		"rs_delta",
-		OriginUnknown,
-		"first",
-	)
+	open := FormatSyntheticContentDeltaWithRef(SyntheticReasoning, true, true, "rs_delta", OriginUnknown, "first")
 	if !strings.HasPrefix(open, `<!--clyde-thinking data-ref="rs_delta"-->`) {
 		t.Fatalf("open delta with ref must carry attribute: %q", open)
 	}
-
-	cont := FormatSyntheticContentDeltaWithRef(
-		SyntheticReasoning,
-		false,
-		false,
-		"rs_delta",
-		OriginUnknown,
-		"\nsecond",
-	)
+	cont := FormatSyntheticContentDeltaWithRef(SyntheticReasoning, false, false, "rs_delta", OriginUnknown, "\nsecond")
 	if strings.Contains(cont, "data-ref=") {
 		t.Fatalf("continuation delta must not repeat the data-ref attribute: %q", cont)
 	}
 }
 
 func TestFormatSyntheticContentDeltaContinuesOpenBlockWithoutHeader(t *testing.T) {
-	open := FormatSyntheticContentDeltaWithRef(
-		SyntheticReasoning,
-		true,
-		true,
-		"",
-		OriginUnknown,
-		"first",
-	)
+	open := FormatSyntheticContentDeltaWithRef(SyntheticReasoning, true, true, "", OriginUnknown, "first")
 	if !strings.HasPrefix(open, "<!--clyde-thinking-->") {
 		t.Fatalf("first delta missing open marker: %q", open)
 	}
-
 	if !strings.HasSuffix(open, "> first") {
 		t.Fatalf("open delta should start fresh blockquote line: %q", open)
 	}
-
-	cont := FormatSyntheticContentDeltaWithRef(
-		SyntheticReasoning,
-		false,
-		false,
-		"",
-		OriginUnknown,
-		"\nsecond",
-	)
+	cont := FormatSyntheticContentDeltaWithRef(SyntheticReasoning, false, false, "", OriginUnknown, "\nsecond")
 	if strings.Contains(cont, "<!--clyde-thinking-->") {
 		t.Fatalf("continuation delta should not re-emit open marker: %q", cont)
 	}
-
 	if cont != "\n> second" {
 		t.Fatalf("continuation should turn its own newlines into quoted lines: %q", cont)
 	}
@@ -459,35 +367,20 @@ func TestFormatSyntheticContentDeltaContinuesOpenBlockWithoutHeader(t *testing.T
 // markdown blockquote rendered in Cursor BYOK.
 func TestFormatSyntheticContentDeltaPrefixesFirstBodyAfterStandaloneOpen(t *testing.T) {
 	openMarker := SyntheticContentOpenWithRef(SyntheticReasoning, "", OriginCodex)
-	body := FormatSyntheticContentDeltaWithRef(
-		SyntheticReasoning,
-		false,
-		true,
-		"",
-		OriginCodex,
-		"The first body line",
-	)
+	body := FormatSyntheticContentDeltaWithRef(SyntheticReasoning, false, true, "", OriginCodex, "The first body line")
 	if strings.Contains(body, "<!--clyde-thinking") {
 		t.Fatalf("body delta must not re-emit open marker: %q", body)
 	}
-
 	if !strings.HasPrefix(body, "> ") {
 		t.Fatalf("first body delta after standalone open must start with `> `: %q", body)
 	}
-
 	concatenated := openMarker + body
 	for idx, line := range strings.Split(concatenated, "\n") {
 		if strings.HasPrefix(line, "<!--") || line == "" {
 			continue
 		}
-
 		if !strings.HasPrefix(line, ">") {
-			t.Fatalf(
-				"line %d not blockquote-prefixed in concatenated stream: %q\nfull: %q",
-				idx,
-				line,
-				concatenated,
-			)
+			t.Fatalf("line %d not blockquote-prefixed in concatenated stream: %q\nfull: %q", idx, line, concatenated)
 		}
 	}
 }
@@ -508,44 +401,29 @@ func TestExtractSyntheticPartsRedactedThinkingRoundTrip(t *testing.T) {
 		{name: "empty_body", body: ""},
 	}
 	for _, tc := range cases {
-		t.Run(
-			tc.name,
-			func(t *testing.T) {
-				open := SyntheticContentOpen(SyntheticRedactedThinking)
-				decorated := formatSyntheticBody(
-					syntheticContentSpecs[SyntheticRedactedThinking],
-					tc.body,
-					true,
-				)
-				closeMarker := SyntheticContentCloseWithAttrs(
-					SyntheticRedactedThinking,
-					"REDACTED_BLOB_BASE64==",
-					"",
-				)
-				in := open + decorated + closeMarker
-				parts := ExtractSyntheticParts(in)
-				if len(parts) != 1 {
-					t.Fatalf("want 1 part, got %d: %#v", len(parts), parts)
-				}
-
-				got := parts[0]
-				if got.Kind != SyntheticRedactedThinking {
-					t.Fatalf("kind=%q want %q", got.Kind, SyntheticRedactedThinking)
-				}
-
-				if got.Body != tc.body {
-					t.Fatalf("body=%q want %q", got.Body, tc.body)
-				}
-
-				if got.Encrypted != "REDACTED_BLOB_BASE64==" {
-					t.Fatalf("encrypted=%q want REDACTED_BLOB_BASE64==", got.Encrypted)
-				}
-
-				if got.Signature != "" {
-					t.Fatalf("signature=%q want empty for redacted_thinking", got.Signature)
-				}
-			},
-		)
+		t.Run(tc.name, func(t *testing.T) {
+			open := SyntheticContentOpen(SyntheticRedactedThinking)
+			decorated := formatSyntheticBody(syntheticContentSpecs[SyntheticRedactedThinking], tc.body, true)
+			closeMarker := SyntheticContentCloseWithAttrs(SyntheticRedactedThinking, "REDACTED_BLOB_BASE64==", "")
+			in := open + decorated + closeMarker
+			parts := ExtractSyntheticParts(in)
+			if len(parts) != 1 {
+				t.Fatalf("want 1 part, got %d: %#v", len(parts), parts)
+			}
+			got := parts[0]
+			if got.Kind != SyntheticRedactedThinking {
+				t.Fatalf("kind=%q want %q", got.Kind, SyntheticRedactedThinking)
+			}
+			if got.Body != tc.body {
+				t.Fatalf("body=%q want %q", got.Body, tc.body)
+			}
+			if got.Encrypted != "REDACTED_BLOB_BASE64==" {
+				t.Fatalf("encrypted=%q want REDACTED_BLOB_BASE64==", got.Encrypted)
+			}
+			if got.Signature != "" {
+				t.Fatalf("signature=%q want empty for redacted_thinking", got.Signature)
+			}
+		})
 	}
 }
 
@@ -557,31 +435,22 @@ func TestExtractSyntheticPartsRedactedThinkingRoundTrip(t *testing.T) {
 // rides on the materialized Body so the Anthropic mapper can forward it
 // as `{"type":"redacted_thinking","data":Body}`.
 func TestMaterializeSyntheticPartsRedactedThinking(t *testing.T) {
-	parts := []SyntheticPart{
-		{
-			Kind:      SyntheticRedactedThinking,
-			Body:      "[redacted]",
-			Encrypted: "OPAQUE_BLOB==",
-		},
-	}
+	parts := []SyntheticPart{{
+		Kind:      SyntheticRedactedThinking,
+		Body:      "[redacted]",
+		Encrypted: "OPAQUE_BLOB==",
+	}}
 	got := MaterializeSyntheticParts(parts, MaterializeNativeThinkingBlock)
 	if len(got) != 1 {
 		t.Fatalf("want 1 materialized part, got %d: %#v", len(got), got)
 	}
-
 	if got[0].Kind != MaterializedKindNativeRedactedThinking {
 		t.Fatalf("kind=%q want %q", got[0].Kind, MaterializedKindNativeRedactedThinking)
 	}
-
 	if got[0].Body != "OPAQUE_BLOB==" {
 		t.Fatalf("body=%q want OPAQUE_BLOB==", got[0].Body)
 	}
-
-	for _, strategy := range []MaterializationStrategy{
-		MaterializeDrop,
-		MaterializePlainTextConcat,
-		MaterializePassthrough,
-	} {
+	for _, strategy := range []MaterializationStrategy{MaterializeDrop, MaterializePlainTextConcat, MaterializePassthrough} {
 		out := MaterializeSyntheticParts(parts, strategy)
 		if len(out) != 0 {
 			t.Fatalf("strategy=%q want zero materialized, got %d: %#v", strategy, len(out), out)

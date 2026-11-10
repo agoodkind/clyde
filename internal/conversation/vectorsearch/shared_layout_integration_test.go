@@ -41,21 +41,18 @@ func openClient(t *testing.T, address string, layout vectorsearch.Layout) *vecto
 	var err error
 	deadline := time.Now().Add(time.Minute)
 	for {
-		client, err = vectorsearch.Open(
-			context.Background(),
-			vectorsearch.Options{
-				Backend:            vectorsearch.BackendMilvus,
-				MilvusAddress:      address,
-				MilvusDatabase:     "default",
-				MilvusLayout:       layout,
-				EmbeddingBaseURL:   baseURL,
-				EmbeddingModel:     integrationModel,
-				EmbeddingDimension: integrationDimension,
-				EmbeddingAPIKey:    integrationEmbeddingKey,
-				EmbeddingTimeout:   2 * time.Minute,
-				CheckpointDir:      t.TempDir(),
-			},
-		)
+		client, err = vectorsearch.Open(context.Background(), vectorsearch.Options{
+			Backend:            vectorsearch.BackendMilvus,
+			MilvusAddress:      address,
+			MilvusDatabase:     "default",
+			MilvusLayout:       layout,
+			EmbeddingBaseURL:   baseURL,
+			EmbeddingModel:     integrationModel,
+			EmbeddingDimension: integrationDimension,
+			EmbeddingAPIKey:    integrationEmbeddingKey,
+			EmbeddingTimeout:   2 * time.Minute,
+			CheckpointDir:      t.TempDir(),
+		})
 		if err == nil || time.Now().After(deadline) {
 			break
 		}
@@ -71,18 +68,8 @@ func openClient(t *testing.T, address string, layout vectorsearch.Layout) *vecto
 // integrationDocuments returns six conversations. Every conversation repeats
 // two message texts, which produces rows that store equal content.
 func integrationDocuments() ([]semsearch.SemDoc, []semsearch.Fingerprint) {
-	topics := []string{
-		"Milvus segment compaction",
-		"Go module version",
-		"SwiftUI view model",
-		"WireGuard peer routing",
-		"MinIO bucket retention",
-		"BM25 ranking",
-	}
-	repeated := []string{
-		"The build passes on the main branch.",
-		"The test suite reports zero failures.",
-	}
+	topics := []string{"Milvus segment compaction", "Go module version", "SwiftUI view model", "WireGuard peer routing", "MinIO bucket retention", "BM25 ranking"}
+	repeated := []string{"The build passes on the main branch.", "The test suite reports zero failures."}
 	docs := make([]semsearch.SemDoc, 0)
 	manifest := make([]semsearch.Fingerprint, 0)
 	for conversationIndex, topic := range topics {
@@ -100,27 +87,21 @@ func integrationDocuments() ([]semsearch.SemDoc, []semsearch.Fingerprint) {
 			if messageIndex%2 == 1 {
 				role = "assistant"
 			}
-			docs = append(
-				docs,
-				semsearch.SemDoc{
-					ConversationID:       conversationID,
-					ParentConversationID: "",
-					MessageIndex:         int32(messageIndex),
-					Role:                 role,
-					TimestampUnix:        1_790_000_000 + int64(conversationIndex*100+messageIndex),
-					Text:                 text,
-					Tools:                nil,
-					Thinking:             "",
-					WorkspaceRoot:        fmt.Sprintf("/work/%d", conversationIndex%2),
-					Archived:             false,
-					LoadRules:            "",
-				},
-			)
+			docs = append(docs, semsearch.SemDoc{
+				ConversationID:       conversationID,
+				ParentConversationID: "",
+				MessageIndex:         int32(messageIndex),
+				Role:                 role,
+				TimestampUnix:        1_790_000_000 + int64(conversationIndex*100+messageIndex),
+				Text:                 text,
+				Tools:                nil,
+				Thinking:             "",
+				WorkspaceRoot:        fmt.Sprintf("/work/%d", conversationIndex%2),
+				Archived:             false,
+				LoadRules:            "",
+			})
 		}
-		manifest = append(
-			manifest,
-			semsearch.Fingerprint{ConversationID: conversationID, Value: "v1"},
-		)
+		manifest = append(manifest, semsearch.Fingerprint{ConversationID: conversationID, Value: "v1"})
 	}
 	return docs, manifest
 }
@@ -135,33 +116,12 @@ func integrationSearchCases() []searchCase {
 	cases := make([]searchCase, 0)
 	from := int64(1_790_000_100)
 	until := int64(1_790_000_400)
-	for _, query := range []string{
-		"segment compaction configuration",
-		"test suite failures",
-		"logs report warning",
-		"build main branch",
-		"WireGuard routing value",
-	} {
-		cases = append(
-			cases,
+	for _, query := range []string{"segment compaction configuration", "test suite failures", "logs report warning", "build main branch", "WireGuard routing value"} {
+		cases = append(cases,
 			searchCase{name: "all", query: query, filter: semsearch.SearchFilter{}},
-			searchCase{
-				name:   "assistant",
-				query:  query,
-				filter: semsearch.SearchFilter{Roles: []string{"assistant"}},
-			},
-			searchCase{
-				name:  "conversations",
-				query: query,
-				filter: semsearch.SearchFilter{
-					ConversationIDs: []string{"codex:integration-01", "codex:integration-04"},
-				},
-			},
-			searchCase{
-				name:   "time",
-				query:  query,
-				filter: semsearch.SearchFilter{FromUnix: &from, UntilUnix: &until},
-			},
+			searchCase{name: "assistant", query: query, filter: semsearch.SearchFilter{Roles: []string{"assistant"}}},
+			searchCase{name: "conversations", query: query, filter: semsearch.SearchFilter{ConversationIDs: []string{"codex:integration-01", "codex:integration-04"}}},
+			searchCase{name: "time", query: query, filter: semsearch.SearchFilter{FromUnix: &from, UntilUnix: &until}},
 		)
 	}
 	return cases
@@ -175,33 +135,17 @@ func hitIdentity(hit semsearch.SemHit) string {
 // position and the same rows at every score above the last one. Rows with the
 // last score can differ, because Milvus keeps equal-score rows at the cut in
 // segment order.
-func requireSameRanking(
-	t *testing.T,
-	label string,
-	single []semsearch.SemHit,
-	shared []semsearch.SemHit,
-) {
+func requireSameRanking(t *testing.T, label string, single []semsearch.SemHit, shared []semsearch.SemHit) {
 	t.Helper()
 	if len(single) != len(shared) {
-		t.Fatalf(
-			"%s: single layout returned %d hits, shared layout %d",
-			label,
-			len(single),
-			len(shared),
-		)
+		t.Fatalf("%s: single layout returned %d hits, shared layout %d", label, len(single), len(shared))
 	}
 	if len(single) == 0 {
 		t.Fatalf("%s: both layouts returned zero hits", label)
 	}
 	for position := range single {
 		if math.Abs(single[position].Score-shared[position].Score) > integrationScoreEpsilon {
-			t.Fatalf(
-				"%s: score at %d is %.9f in single layout and %.9f in shared layout",
-				label,
-				position,
-				single[position].Score,
-				shared[position].Score,
-			)
+			t.Fatalf("%s: score at %d is %.9f in single layout and %.9f in shared layout", label, position, single[position].Score, shared[position].Score)
 		}
 	}
 	lastScore := single[len(single)-1].Score
@@ -216,22 +160,13 @@ func requireSameRanking(
 	slices.Sort(singleRows)
 	slices.Sort(sharedRows)
 	if !slices.Equal(singleRows, sharedRows) {
-		t.Fatalf(
-			"%s: rows above the last score differ: single %v, shared %v",
-			label,
-			singleRows,
-			sharedRows,
-		)
+		t.Fatalf("%s: rows above the last score differ: single %v, shared %v", label, singleRows, sharedRows)
 	}
 }
 
 func requireIndexPasses(t *testing.T, stage string, client *vectorsearch.Client) {
 	t.Helper()
-	check, err := client.VerifyIndex(
-		context.Background(),
-		sharedCollectionID,
-		integrationVerifySamples,
-	)
+	check, err := client.VerifyIndex(context.Background(), sharedCollectionID, integrationVerifySamples)
 	if err != nil {
 		t.Fatalf("%s: verify shared index: %v", stage, err)
 	}
@@ -245,25 +180,11 @@ func requireSearchesMatch(t *testing.T, single *vectorsearch.Client, shared *vec
 	ctx := context.Background()
 	for _, test := range integrationSearchCases() {
 		label := test.name + " " + strconv.Quote(test.query)
-		singleHits, err := single.SearchConversations(
-			ctx,
-			sourceCollectionID,
-			test.query,
-			integrationSearchLimit,
-			test.filter,
-			0,
-		)
+		singleHits, err := single.SearchConversations(ctx, sourceCollectionID, test.query, integrationSearchLimit, test.filter, 0)
 		if err != nil {
 			t.Fatalf("%s: single layout search: %v", label, err)
 		}
-		sharedHits, err := shared.SearchConversations(
-			ctx,
-			sharedCollectionID,
-			test.query,
-			integrationSearchLimit,
-			test.filter,
-			0,
-		)
+		sharedHits, err := shared.SearchConversations(ctx, sharedCollectionID, test.query, integrationSearchLimit, test.filter, 0)
 		if err != nil {
 			t.Fatalf("%s: shared layout search: %v", label, err)
 		}
@@ -274,38 +195,16 @@ func requireSearchesMatch(t *testing.T, single *vectorsearch.Client, shared *vec
 func requireSharedWriteSearchable(t *testing.T, shared *vectorsearch.Client) {
 	t.Helper()
 	ctx := context.Background()
-	added := []semsearch.SemDoc{
-		{
-			ConversationID:       "codex:integration-new",
-			ParentConversationID: "",
-			MessageIndex:         0,
-			Role:                 "user",
-			TimestampUnix:        1_790_001_000,
-			Text:                 "The etcd snapshot count setting equals fifty thousand.",
-			Tools:                nil,
-			Thinking:             "",
-			WorkspaceRoot:        "/work/0",
-			Archived:             false,
-			LoadRules:            "",
-		},
-	}
-	if _, err := shared.UpsertConversationDocuments(
-		ctx,
-		sharedCollectionID,
-		added,
-		[]semsearch.Fingerprint{{ConversationID: "codex:integration-new", Value: "v1"}},
-	); err != nil {
+	added := []semsearch.SemDoc{{
+		ConversationID: "codex:integration-new", ParentConversationID: "", MessageIndex: 0, Role: "user",
+		TimestampUnix: 1_790_001_000, Text: "The etcd snapshot count setting equals fifty thousand.", Tools: nil, Thinking: "",
+		WorkspaceRoot: "/work/0", Archived: false, LoadRules: "",
+	}}
+	if _, err := shared.UpsertConversationDocuments(ctx, sharedCollectionID, added, []semsearch.Fingerprint{{ConversationID: "codex:integration-new", Value: "v1"}}); err != nil {
 		t.Fatalf("write shared layout: %v", err)
 	}
 	time.Sleep(visibilityWait)
-	hits, err := shared.SearchConversations(
-		ctx,
-		sharedCollectionID,
-		"etcd snapshot count setting",
-		3,
-		semsearch.SearchFilter{},
-		0,
-	)
+	hits, err := shared.SearchConversations(ctx, sharedCollectionID, "etcd snapshot count setting", 3, semsearch.SearchFilter{}, 0)
 	if err != nil {
 		t.Fatalf("search new shared row: %v", err)
 	}
@@ -348,12 +247,7 @@ func TestSharedLayoutCopiesAndSearchesLikeSingleLayout(t *testing.T) {
 	single := openClient(t, address, vectorsearch.LayoutSingle)
 	shared := openClient(t, address, vectorsearch.LayoutShared)
 	docs, manifest := integrationDocuments()
-	if _, err := single.UpsertConversationDocuments(
-		ctx,
-		sourceCollectionID,
-		docs,
-		manifest,
-	); err != nil {
+	if _, err := single.UpsertConversationDocuments(ctx, sourceCollectionID, docs, manifest); err != nil {
 		t.Fatalf("write single layout: %v", err)
 	}
 	copied, err := shared.CopyToShared(ctx, sourceCollectionID, sharedCollectionID, false, nil)
@@ -379,11 +273,7 @@ func TestSharedLayoutCopiesAndSearchesLikeSingleLayout(t *testing.T) {
 		t.Fatalf("shared copy report %+v, want %d equal rows", report, len(docs))
 	}
 	if report.TargetVectors >= report.TargetRows {
-		t.Fatalf(
-			"shared copy stores %d vectors for %d rows, want fewer vectors than rows",
-			report.TargetVectors,
-			report.TargetRows,
-		)
+		t.Fatalf("shared copy stores %d vectors for %d rows, want fewer vectors than rows", report.TargetVectors, report.TargetRows)
 	}
 	t.Logf("copied %d rows into %d distinct vectors", report.TargetRows, report.TargetVectors)
 	requireSearchesMatch(t, single, shared)

@@ -60,11 +60,9 @@ func TestSanitizeForUpstreamCacheRoundTripDropsThinkingByDefault(t *testing.T) {
 	thinking := codexOriginThinkingEnvelope("private chain of thought")
 	in := "Pre.\n\n" + thinking + "Post."
 	got := SanitizeForUpstreamCache(in)
-	if strings.Contains(got, "clyde-thinking") ||
-		strings.Contains(got, "private chain of thought") {
+	if strings.Contains(got, "clyde-thinking") || strings.Contains(got, "private chain of thought") {
 		t.Fatalf("thinking content leaked upstream: %q", got)
 	}
-
 	if !strings.Contains(got, "Pre.") || !strings.Contains(got, "Post.") {
 		t.Fatalf("surrounding prose lost: %q", got)
 	}
@@ -75,11 +73,7 @@ func TestSanitizeForUpstreamCacheRoundTripDropsThinkingByDefault(t *testing.T) {
 // drop path (configured by the active MaterializationStrategy) rather than
 // the cross-provider injection path.
 func codexOriginThinkingEnvelope(body string) string {
-	return adapterrender.SyntheticContentOpenWithRef(
-		adapterrender.SyntheticReasoning,
-		"",
-		adapterrender.OriginCodex,
-	) +
+	return adapterrender.SyntheticContentOpenWithRef(adapterrender.SyntheticReasoning, "", adapterrender.OriginCodex) +
 		"> " + body +
 		adapterrender.SyntheticContentClose(adapterrender.SyntheticReasoning)
 }
@@ -96,11 +90,9 @@ func TestSanitizeForUpstreamCacheWithStrategyPlainTextConcatPreservesThinking(t 
 	if strings.Contains(got, "clyde-thinking") {
 		t.Fatalf("envelope marker leaked upstream: %q", got)
 	}
-
 	if !strings.Contains(got, "the model considered three options") {
 		t.Fatalf("thinking content was dropped under plain_text_concat: %q", got)
 	}
-
 	if !strings.Contains(got, "Pre.") || !strings.Contains(got, "Post.") {
 		t.Fatalf("surrounding prose lost: %q", got)
 	}
@@ -127,27 +119,17 @@ func TestSanitizeForUpstreamCacheWithStrategyDropMatchesDefault(t *testing.T) {
 // The body is injected into the message text so the prior reasoning
 // stays in context for the Codex turn.
 func TestSanitizeForUpstreamCacheInjectsForeignOriginThinkingAsText(t *testing.T) {
-	anthropicThinking := adapterrender.SyntheticContentOpenWithRef(
-		adapterrender.SyntheticReasoning,
-		"",
-		adapterrender.OriginAnthropic,
-	) +
+	anthropicThinking := adapterrender.SyntheticContentOpenWithRef(adapterrender.SyntheticReasoning, "", adapterrender.OriginAnthropic) +
 		"> I should answer 42." +
-		adapterrender.SyntheticContentCloseWithAttrs(
-			adapterrender.SyntheticReasoning,
-			"",
-			"OPAQUE_SIG_BASE64==",
-		)
+		adapterrender.SyntheticContentCloseWithAttrs(adapterrender.SyntheticReasoning, "", "OPAQUE_SIG_BASE64==")
 	in := "Pre.\n\n" + anthropicThinking + "Final answer."
 	got := SanitizeForUpstreamCache(in)
 	if strings.Contains(got, "clyde-thinking") {
 		t.Fatalf("envelope marker leaked: %q", got)
 	}
-
 	if !strings.Contains(got, "I should answer 42.") {
 		t.Fatalf("foreign-origin body should be injected as text, got %q", got)
 	}
-
 	if !strings.Contains(got, "Pre.") || !strings.Contains(got, "Final answer.") {
 		t.Fatalf("surrounding prose lost: %q", got)
 	}
@@ -159,16 +141,12 @@ func TestSanitizeForUpstreamCacheInjectsForeignOriginThinkingAsText(t *testing.T
 // and routes through the same plain-text injection path as a foreign
 // origin.
 func TestSanitizeForUpstreamCacheInjectsUnknownOriginThinkingAsText(t *testing.T) {
-	legacy := adapterrender.FormatSyntheticContent(
-		adapterrender.SyntheticReasoning,
-		"legacy thinking body",
-	)
+	legacy := adapterrender.FormatSyntheticContent(adapterrender.SyntheticReasoning, "legacy thinking body")
 	in := "Pre.\n\n" + legacy + "Final."
 	got := SanitizeForUpstreamCache(in)
 	if strings.Contains(got, "clyde-thinking") {
 		t.Fatalf("envelope marker leaked: %q", got)
 	}
-
 	if !strings.Contains(got, "legacy thinking body") {
 		t.Fatalf("unknown-origin body should inject as text, got %q", got)
 	}
@@ -182,7 +160,6 @@ func TestSanitizeForUpstreamCacheStripsBothReasoningAndNoticeEnvelopes(t *testin
 	if strings.Contains(got, "clyde-thinking") || strings.Contains(got, "clyde-notice") {
 		t.Fatalf("synthetic markers leaked: %q", got)
 	}
-
 	if !strings.Contains(got, "Real answer.") || !strings.Contains(got, "trailing answer.") {
 		t.Fatalf("answer text lost: %q", got)
 	}

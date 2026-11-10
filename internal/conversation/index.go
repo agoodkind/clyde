@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -82,18 +83,11 @@ func NewIndex(registry *Registry, conversationConfig config.ConversationConfig) 
 		lastRefresh:      time.Time{},
 		cachePresent:     false,
 		cachePath:        CachePath(),
-		debounce: refreshDebounceFor(
-			conversationConfig.Semantic.IndexRefreshPeriod(),
-			refreshDebounce,
-		),
-		scanProvider: func(ctx context.Context, registry *Registry, prior scanCache) (
-			scanResult,
-			error,
-		) {
+		debounce:         refreshDebounceFor(conversationConfig.Semantic.IndexRefreshPeriod(), refreshDebounce),
+		scanProvider: func(ctx context.Context, registry *Registry, prior scanCache) (scanResult, error) {
 			if !conversationConfig.Cursor.RawIndexingEnabled() {
 				prior.skipProviders = map[providerid.Provider]bool{providerid.ProviderCursor: true}
 			}
-
 			return scan(ctx, registry, prior)
 		},
 	}
@@ -109,22 +103,11 @@ func (idx *Index) Start(ctx context.Context, interval time.Duration) {
 	if interval <= 0 {
 		interval = time.Minute
 	}
-
 	// Load cached records and stamps before scheduling the first refresh so the
 	// worker can reuse unchanged transcripts when the cache becomes due.
 	if err := idx.loadOnce(); err != nil {
-		slog.WarnContext(
-			ctx,
-			"conversation.index.start_load_failed",
-			"concern",
-			"conversation.index",
-			"component",
-			"conversation",
-			"err",
-			err,
-		)
+		slog.WarnContext(ctx, "conversation.index.start_load_failed", "concern", "conversation.index", "component", "conversation", "err", err)
 	}
-
 	idx.mu.Lock()
 	firstRefreshDelay := interval
 	if !idx.cachePresent {
@@ -133,7 +116,6 @@ func (idx *Index) Start(ctx context.Context, interval time.Duration) {
 		firstRefreshDelay = idx.lastRefresh.Add(interval).Sub(clock.Now())
 		firstRefreshDelay = max(firstRefreshDelay, 0)
 	}
-
 	idx.mu.Unlock()
 	defer func() {
 		idx.mu.Lock()
@@ -145,7 +127,6 @@ func (idx *Index) Start(ctx context.Context, interval time.Duration) {
 	}()
 	timer := time.NewTimer(firstRefreshDelay)
 	defer timer.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -162,10 +143,8 @@ func (idx *Index) List(ctx context.Context) ([]Record, error) {
 	if err := idx.loadOnce(); err != nil {
 		return nil, err
 	}
-
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
-
 	return idx.visibleRecords(), nil
 }
 
@@ -184,38 +163,30 @@ func (idx *Index) Resolve(ctx context.Context, selector string) (Record, error) 
 	if selector == "" {
 		return Record{}, errors.New("conversation selector is required")
 	}
-
 	records, err := idx.List(ctx)
 	if err != nil {
 		return Record{}, err
 	}
-
 	if looksLikeRequestID(selector) {
 		if record, ok := resolveRecordIdentity(records, selector); ok {
 			return record, nil
 		}
-
 		return idx.resolveUUIDShapedSelector(ctx, selector)
 	}
-
 	if record, ok := resolveRecordExact(records, selector); ok {
 		return record, nil
 	}
-
 	if record, ok := resolveRecordFuzzyTitle(records, selector); ok {
 		return record, nil
 	}
-
 	fresh := idx.refreshBeforeLookup(ctx)
 	records = idx.recordsSnapshot()
 	if record, ok := resolveRecord(records, selector); ok {
 		return record, nil
 	}
-
 	if !fresh {
 		return Record{}, fmt.Errorf("conversation %q not found: %s", selector, staleIndexNote)
 	}
-
 	return Record{}, fmt.Errorf("conversation %q not found", selector)
 }
 
@@ -233,20 +204,9 @@ const staleIndexNote = "the conversation index could not be refreshed, so this m
 // the caller reports the miss as possibly stale rather than as a determination.
 func (idx *Index) refreshBeforeLookup(ctx context.Context) bool {
 	if err := idx.refreshWithReason(ctx, RefreshReasonLookupMiss); err != nil {
-		slog.WarnContext(
-			ctx,
-			"conversation.index.lookup_refresh_failed",
-			"concern",
-			"conversation.index",
-			"component",
-			"conversation",
-			"err",
-			err,
-		)
-
+		slog.WarnContext(ctx, "conversation.index.lookup_refresh_failed", "concern", "conversation.index", "component", "conversation", "err", err)
 		return false
 	}
-
 	return true
 }
 
@@ -276,16 +236,12 @@ func (idx *Index) resolveUUIDShapedSelector(ctx context.Context, selector string
 	if record, ok := resolveRecordIdentity(records, selector); ok {
 		return record, nil
 	}
-
 	switch record, carriers := recordByLatestRequestID(records, selector); {
 	case carriers == 1:
 		return record, nil
 	case carriers > 1:
-		return Record{}, fmt.Errorf(
-			"conversation %q not found: %s",
-			selector,
-			notFoundNote(RequestNotFoundReasonAmbiguousConversation, true),
-		)
+		return Record{}, fmt.Errorf("conversation %q not found: %s", selector,
+			notFoundNote(RequestNotFoundReasonAmbiguousConversation, true))
 	}
 
 	match := idx.resolveRequestMatch(ctx, selector, RequestLookupOptions{AllowFullScan: false})
@@ -300,30 +256,19 @@ func (idx *Index) resolveUUIDShapedSelector(ctx context.Context, selector string
 	if record, ok := resolveRecordIdentity(records, selector); ok {
 		return record, nil
 	}
-
 	switch record, carriers := recordByLatestRequestID(records, selector); {
 	case carriers == 1:
 		return record, nil
 	case carriers > 1:
-		return Record{}, fmt.Errorf(
-			"conversation %q not found: %s",
-			selector,
-			notFoundNote(RequestNotFoundReasonAmbiguousConversation, fresh),
-		)
+		return Record{}, fmt.Errorf("conversation %q not found: %s", selector,
+			notFoundNote(RequestNotFoundReasonAmbiguousConversation, fresh))
 	}
-
 	if !match.Found {
-		return Record{}, fmt.Errorf(
-			"conversation %q not found: %s",
-			selector,
-			notFoundNote(match.Reason, fresh),
-		)
+		return Record{}, fmt.Errorf("conversation %q not found: %s", selector, notFoundNote(match.Reason, fresh))
 	}
-
 	if record, ok := recordByNativeID(records, match.Provider, match.NativeConversationID); ok {
 		return record, nil
 	}
-
 	return Record{}, fmt.Errorf(
 		"conversation %q not found: %s",
 		selector,
@@ -337,7 +282,6 @@ func notFoundNote(reason RequestNotFoundReason, fresh bool) string {
 	if fresh {
 		return reason.Describe()
 	}
-
 	return reason.Describe() + "; " + staleIndexNote
 }
 
@@ -365,13 +309,11 @@ func (idx *Index) ResolveRequest(
 	if requestID == "" {
 		return RequestResolution{}, errors.New("request id is required")
 	}
-
 	// List loads the cache. A request absent from that snapshot gets a targeted
 	// provider lookup first, so a normal request hit does not pay for a full scan.
 	if _, err := idx.List(ctx); err != nil {
 		return RequestResolution{}, err
 	}
-
 	records := idx.recordsSnapshot()
 	if record, carriers := recordByLatestRequestID(records, requestID); carriers == 1 {
 		return foundRequestResolution(requestID, RequestOriginIndex, record), nil
@@ -397,51 +339,29 @@ func (idx *Index) ResolveRequest(
 	} else if carriers > 1 {
 		return ambiguousRequestResolution(ctx, requestID, carriers), nil
 	}
-
 	if !match.Found && opts.AllowFullScan {
 		match = idx.resolveRequestMatch(ctx, requestID, opts)
 	}
-
 	if match.Found {
 		if record, ok := recordByNativeID(records, match.Provider, match.NativeConversationID); ok {
 			return foundRequestResolution(requestID, match.Origin, record), nil
 		}
-
 		if !fresh {
 			return missingRequestResolution(requestID, RequestNotFoundReasonInconclusive), nil
 		}
-
 		return missingRequestResolution(requestID, RequestNotFoundReasonUnindexedConversation), nil
 	}
-
 	if !fresh {
 		match.Reason = MergeRequestNotFoundReason(match.Reason, RequestNotFoundReasonInconclusive)
 	}
-
 	return missingRequestResolution(requestID, match.Reason), nil
 }
 
 // ambiguousRequestResolution reports a request id several conversations carry.
 // Answering with one of them would be answering with whichever the record order
 // happened to reach, which is the guess this operation exists not to make.
-func ambiguousRequestResolution(
-	ctx context.Context,
-	requestID string,
-	carriers int,
-) RequestResolution {
-	slog.InfoContext(
-		ctx,
-		"conversation.index.request_carried_by_several_conversations",
-		"concern",
-		"conversation.index",
-		"component",
-		"conversation",
-		"request_id",
-		requestID,
-		"count",
-		carriers,
-	)
-
+func ambiguousRequestResolution(ctx context.Context, requestID string, carriers int) RequestResolution {
+	slog.InfoContext(ctx, "conversation.index.request_carried_by_several_conversations", "concern", "conversation.index", "component", "conversation", "request_id", requestID, "count", carriers)
 	return missingRequestResolution(requestID, RequestNotFoundReasonAmbiguousConversation)
 }
 
@@ -469,33 +389,18 @@ func (idx *Index) resolveRequestMatch(
 	}
 
 	reason := RequestNotFoundReasonUnspecified
-
 	for _, resolver := range resolvers {
 		match, err := resolver.ResolveRequestID(ctx, requestID, opts)
 		if err != nil {
-			slog.WarnContext(
-				ctx,
-				"conversation.index.request_resolver_failed",
-				"concern",
-				"conversation.index",
-				"component",
-				"conversation",
-				"request_id",
-				requestID,
-				"err",
-				err,
-			)
+			slog.WarnContext(ctx, "conversation.index.request_resolver_failed", "concern", "conversation.index", "component", "conversation", "request_id", requestID, "err", err)
 			reason = MergeRequestNotFoundReason(reason, RequestNotFoundReasonInconclusive)
 			continue
 		}
-
 		if match.Found {
 			return match
 		}
-
 		reason = MergeRequestNotFoundReason(reason, match.Reason)
 	}
-
 	return missingRequestMatch(reason)
 }
 
@@ -514,30 +419,22 @@ func missingRequestMatch(reason RequestNotFoundReason) RequestMatch {
 func (idx *Index) requestResolvers() []RequestResolver {
 	providers := idx.registry.Providers()
 	slices.Sort(providers)
-
 	resolvers := make([]RequestResolver, 0, len(providers))
 	for _, provider := range providers {
 		parser, err := idx.registry.Lookup(provider)
 		if err != nil {
 			continue
 		}
-
 		resolver, ok := parser.(RequestResolver)
 		if !ok {
 			continue
 		}
-
 		resolvers = append(resolvers, resolver)
 	}
-
 	return resolvers
 }
 
-func foundRequestResolution(
-	requestID string,
-	origin RequestOrigin,
-	record Record,
-) RequestResolution {
+func foundRequestResolution(requestID string, origin RequestOrigin, record Record) RequestResolution {
 	return RequestResolution{
 		RequestID: requestID,
 		Found:     true,
@@ -570,22 +467,17 @@ func recordByLatestRequestID(records []Record, requestID string) (Record, int) {
 	if requestID == "" {
 		return emptyRecord(), 0
 	}
-
 	first := emptyRecord()
 	carriers := 0
-
 	for _, record := range records {
 		if record.LatestRequestID != requestID {
 			continue
 		}
-
 		if carriers == 0 {
 			first = record
 		}
-
 		carriers++
 	}
-
 	return first, carriers
 }
 
@@ -600,21 +492,15 @@ func recordByLatestRequestID(records []Record, requestID string) (Record, int) {
 // conversation from any provider whose title happens to be that id answer, so a
 // Cursor composer id pasted into a Claude chat while debugging returns the Claude
 // conversation as the one that issued the request.
-func recordByNativeID(
-	records []Record,
-	provider providerid.Provider,
-	nativeID string,
-) (Record, bool) {
+func recordByNativeID(records []Record, provider providerid.Provider, nativeID string) (Record, bool) {
 	if nativeID == "" {
 		return emptyRecord(), false
 	}
-
 	for _, record := range records {
 		if record.Provider == provider && record.NativeID == nativeID {
 			return record, true
 		}
 	}
-
 	return emptyRecord(), false
 }
 
@@ -637,12 +523,10 @@ func (idx *Index) refreshWithReason(ctx context.Context, reason RefreshReason) (
 	if err := idx.loadOnce(); err != nil {
 		return err
 	}
-
 	run, prior, claimed := idx.beginRefresh()
 	if !claimed {
 		return idx.waitForRefresh(ctx, run)
 	}
-
 	defer func() { idx.endRefresh(run, err) }()
 
 	return idx.refresh(ctx, prior, reason)
@@ -653,33 +537,31 @@ func (idx *Index) refresh(ctx context.Context, prior scanCache, reason RefreshRe
 	provider := idx.refreshProviderLabel()
 	result := scanResult{changed: false, records: nil, stamps: nil, multiStates: nil}
 	cacheChanged := false
-	logIndexRefreshStarted(ctx, reason, provider)
+	slog.InfoContext(ctx, "conversation.index.refresh_started",
+		"concern", "conversation.index",
+		"component", "conversation",
+		"reason", reason.String(),
+		"provider", provider,
+		"duration_ms", 0,
+		"outcome", "in_progress",
+		"record_count", 0,
+		"cache_changed", false,
+	)
 	defer func() {
 		recovered := recover()
 		outcome := "success"
 		if err != nil || recovered != nil {
 			outcome = "failed"
 		}
-
-		slog.InfoContext(
-			ctx,
-			"conversation.index.refresh_finished",
-			"concern",
-			"conversation.index",
-			"component",
-			"conversation",
-			"reason",
-			reason.String(),
-			"provider",
-			provider,
-			"duration_ms",
-			clock.Since(startedAt).Milliseconds(),
-			"outcome",
-			outcome,
-			"record_count",
-			len(result.records),
-			"cache_changed",
-			cacheChanged,
+		slog.InfoContext(ctx, "conversation.index.refresh_finished",
+			"concern", "conversation.index",
+			"component", "conversation",
+			"reason", reason.String(),
+			"provider", provider,
+			"duration_ms", clock.Since(startedAt).Milliseconds(),
+			"outcome", outcome,
+			"record_count", len(result.records),
+			"cache_changed", cacheChanged,
 		)
 		if recovered != nil {
 			err = fmt.Errorf("conversation index refresh panicked: %v", recovered)
@@ -690,72 +572,49 @@ func (idx *Index) refresh(ctx context.Context, prior scanCache, reason RefreshRe
 	if err != nil {
 		return err
 	}
-
 	if err := ctx.Err(); err != nil {
-		slog.WarnContext(
-			ctx,
-			"conversation.index.refresh_canceled",
-			"concern",
-			"conversation.index",
-			"component",
-			"conversation",
-			"err",
-			err,
-		)
-
+		slog.WarnContext(ctx, "conversation.index.refresh_canceled", "concern", "conversation.index", "component", "conversation", "err", err)
 		return fmt.Errorf("refresh conversation index: %w", err)
 	}
-
 	sortRecords(result.records)
 	idx.mu.Lock()
 	previous := idx.records
 	retainedBefore := idx.retained
 	idx.mu.Unlock()
 	// Save retained records before writing the cache. If the cache write fails, refresh returns without installing the new records in memory, and the retained file lists every deleted conversation for the next load.
-	retained, newlyRetained, retainedChanged := retainDropped(
-		previous,
-		result.records,
-		retainedBefore,
-	)
+	retained, newlyRetained, retainedChanged := retainDropped(previous, result.records, retainedBefore)
 	if retainedChanged {
 		if err := writeRetained(idx.retainedPath, retained); err != nil {
 			return err
 		}
-
-		logRetainedRecords(ctx, newlyRetained, retained)
+		slog.InfoContext(ctx, "conversation.index.records_retained",
+			"concern", "conversation.index",
+			"component", "conversation",
+			"newly_retained", newlyRetained,
+			"retained", len(retained),
+		)
 	}
-
 	completedAt := clock.Now()
 	if result.changed {
-		if err := writeCache(
-			idx.cachePath,
-			result.records,
-			result.stamps,
-			result.multiStates,
-			completedAt,
-		); err != nil {
+		if err := writeCache(idx.cachePath, result.records, result.stamps, result.multiStates, completedAt); err != nil {
 			return err
 		}
 	}
-
 	idx.installRefreshResult(result, retained, completedAt)
 	cacheChanged = result.changed
 	if result.changed {
 		idx.reportSkippedSubagents(ctx, result.records)
 	}
-
 	return nil
 }
 
 func (idx *Index) refreshProviderLabel() string {
 	providers := idx.registry.Providers()
 	slices.Sort(providers)
-
 	labels := make([]string, 0, len(providers))
 	for _, provider := range providers {
 		labels = append(labels, provider.String())
 	}
-
 	return strings.Join(labels, ",")
 }
 
@@ -774,23 +633,11 @@ func (idx *Index) beginRefresh() (*refreshRun, scanCache, bool) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	if idx.refreshing {
-		return idx.refreshRun, scanCache{
-			records:       nil,
-			stamps:        nil,
-			multiStates:   nil,
-			skipProviders: nil,
-		}, false
+		return idx.refreshRun, scanCache{records: nil, stamps: nil, multiStates: nil, skipProviders: nil}, false
 	}
-
 	idx.refreshing = true
 	idx.refreshRun = &refreshRun{done: make(chan struct{}), err: nil}
-
-	return idx.refreshRun, scanCache{
-		records:       idx.prevRecords,
-		stamps:        idx.prevStamps,
-		multiStates:   idx.prevMultiStates,
-		skipProviders: nil,
-	}, true
+	return idx.refreshRun, scanCache{records: idx.prevRecords, stamps: idx.prevStamps, multiStates: idx.prevMultiStates, skipProviders: nil}, true
 }
 
 // endRefresh releases the refresh slot after the new records are installed.
@@ -801,7 +648,6 @@ func (idx *Index) endRefresh(run *refreshRun, err error) {
 	if idx.refreshRun == run {
 		idx.refreshRun = nil
 	}
-
 	idx.mu.Unlock()
 	close(run.done)
 }
@@ -811,46 +657,20 @@ func (idx *Index) waitForRefresh(ctx context.Context, run *refreshRun) error {
 	if run == nil {
 		return nil
 	}
-
 	select {
 	case <-run.done:
 		if run.err != nil {
-			slog.WarnContext(
-				ctx,
-				"conversation.index.awaited_refresh_failed",
-				"concern",
-				"conversation.index",
-				"component",
-				"conversation",
-				"err",
-				run.err,
-			)
-
+			slog.WarnContext(ctx, "conversation.index.awaited_refresh_failed", "concern", "conversation.index", "component", "conversation", "err", run.err)
 			return fmt.Errorf("await conversation index refresh: %w", run.err)
 		}
-
 		return nil
 	case <-ctx.Done():
-		slog.WarnContext(
-			ctx,
-			"conversation.index.refresh_wait_canceled",
-			"concern",
-			"conversation.index",
-			"component",
-			"conversation",
-			"err",
-			ctx.Err(),
-		)
-
+		slog.WarnContext(ctx, "conversation.index.refresh_wait_canceled", "concern", "conversation.index", "component", "conversation", "err", ctx.Err())
 		return fmt.Errorf("wait for conversation index refresh: %w", ctx.Err())
 	}
 }
 
-func (idx *Index) installRefreshResult(
-	result scanResult,
-	retained []Record,
-	completedAt time.Time,
-) {
+func (idx *Index) installRefreshResult(result scanResult, retained []Record, completedAt time.Time) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	idx.records = result.records
@@ -869,13 +689,11 @@ func (idx *Index) installRefreshResult(
 // none.
 func (idx *Index) reportSkippedSubagents(ctx context.Context, records []Record) {
 	skipped := 0
-
 	for _, record := range records {
 		if record.IsSubagent() {
 			skipped++
 		}
 	}
-
 	idx.mu.Lock()
 	includeSubagents := idx.includeSubagents
 	unchanged := skipped == idx.lastSkippedCount
@@ -884,43 +702,55 @@ func (idx *Index) reportSkippedSubagents(ctx context.Context, records []Record) 
 	if includeSubagents || skipped == 0 || unchanged {
 		return
 	}
+	slog.InfoContext(ctx, "conversation.index.subagent_conversations_skipped",
+		"concern", "conversation.index", "component", "conversation",
+		"count", skipped, "setting", "conversation.include_subagent_conversations")
+}
 
-	slog.InfoContext(
-		ctx,
-		"conversation.index.subagent_conversations_skipped",
-		"concern",
-		"conversation.index",
-		"component",
-		"conversation",
-		"count",
-		skipped,
-		"setting",
-		"conversation.include_subagent_conversations",
-	)
+func (idx *Index) loadOnce() error {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	if idx.loaded {
+		return nil
+	}
+
+	cache, present, err := readCache(idx.cachePath)
+	if err != nil {
+		return err
+	}
+	retained, err := readRetained(idx.retainedPath)
+	if err != nil {
+		return err
+	}
+	idx.records = cache.Records
+	idx.retained = retained
+	idx.prevRecords = recordsByPath(cache.Records)
+	idx.prevStamps = cache.Stamps
+	idx.prevMultiStates = cache.MultiStates
+	idx.lastRefresh = cache.RefreshCompletedAt
+	idx.cachePresent = present
+	idx.loaded = true
+	return nil
 }
 
 func (idx *Index) refreshAsync(ctx context.Context, reasons ...RefreshReason) {
 	if ctx.Err() != nil {
 		return
 	}
-
 	reason := RefreshReasonPeriodic
 	if len(reasons) > 0 {
 		reason = reasons[0]
 	}
-
 	idx.mu.Lock()
 	debounced := clock.Now().Sub(idx.lastRefresh) < idx.debounce
 	idx.mu.Unlock()
 	if debounced {
 		return
 	}
-
 	run, prior, claimed := idx.beginRefresh()
 	if !claimed {
 		return
 	}
-
 	go func() {
 		// The outcome is recorded on the run so a caller of Refresh that waits on
 		// this rebuild is told what it produced, rather than only that it stopped.
@@ -929,34 +759,25 @@ func (idx *Index) refreshAsync(ctx context.Context, reasons ...RefreshReason) {
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				err = fmt.Errorf("conversation index refresh panicked: %v", recovered)
-				slog.ErrorContext(
-					ctx,
-					"conversation.index.refresh_panic",
-					"concern",
-					"conversation.index",
-					"component",
-					"conversation",
-					"err",
-					err,
-				)
+				slog.ErrorContext(ctx, "conversation.index.refresh_panic", "concern", "conversation.index", "component", "conversation", "err", err)
 			}
 		}()
 		err = idx.refresh(ctx, prior, reason)
 		if err != nil {
-			slog.WarnContext(
-				ctx,
-				"conversation.index.background_refresh_failed",
-				"concern",
-				"conversation.index",
-				"component",
-				"conversation",
-				"err",
-				err,
-			)
-
+			slog.WarnContext(ctx, "conversation.index.background_refresh_failed", "concern", "conversation.index", "component", "conversation", "err", err)
 			return
 		}
 	}()
+}
+
+// recordsByPath indexes records by artifact path and selector so the next
+// incremental scan can reuse every conversation from an unchanged artifact.
+func recordsByPath(records []Record) map[string]Record {
+	byPath := make(map[string]Record, len(records))
+	for _, record := range records {
+		byPath[recordKey(record.ArtifactPath, record.Selector)] = record
+	}
+	return byPath
 }
 
 // cacheFile is the on-disk index cache. It persists the successful refresh time
@@ -979,56 +800,55 @@ func readCache(path string) (cacheFile, bool, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return empty, false, nil
 		}
-
-		slog.Warn(
-			"conversation.index.cache_read_failed",
-			"concern",
-			"conversation.index",
-			"component",
-			"conversation",
-			"path",
-			path,
-			"err",
-			err,
-		)
-
+		slog.Warn("conversation.index.cache_read_failed", "concern", "conversation.index", "component", "conversation", "path", path, "err", err)
 		return empty, false, fmt.Errorf("read conversation cache: %w", err)
 	}
-
 	var cache cacheFile
 	if err := json.Unmarshal(data, &cache); err != nil {
-		slog.Warn(
-			"conversation.index.cache_decode_failed",
-			"concern",
-			"conversation.index",
-			"component",
-			"conversation",
-			"path",
-			path,
-			"err",
-			err,
-		)
-
+		slog.Warn("conversation.index.cache_decode_failed", "concern", "conversation.index", "component", "conversation", "path", path, "err", err)
 		return empty, false, fmt.Errorf("decode conversation cache: %w", err)
 	}
-
 	if cache.Version != cacheFormatVersion {
-		return empty, false, fmt.Errorf(
-			"unsupported conversation cache format %d: run clyde daemon hard-reset",
-			cache.Version,
-		)
+		return empty, false, fmt.Errorf("unsupported conversation cache format %d: run clyde daemon hard-reset", cache.Version)
 	}
-
 	sortRecords(cache.Records)
-
 	return cache, true, nil
+}
+
+func writeCache(
+	path string,
+	records []Record,
+	stamps map[string]FileStamp,
+	multiStates map[string]MultiConversationScanState,
+	refreshCompletedAt time.Time,
+) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		slog.Warn("conversation.index.cache_mkdir_failed", "concern", "conversation.index", "component", "conversation", "path", filepath.Dir(path), "err", err)
+		return fmt.Errorf("create conversation cache dir: %w", err)
+	}
+	data, err := json.MarshalIndent(cacheFile{
+		Version:            cacheFormatVersion,
+		Records:            records,
+		Stamps:             stamps,
+		MultiStates:        multiStates,
+		RefreshCompletedAt: refreshCompletedAt,
+	}, "", "  ")
+	if err != nil {
+		slog.Warn("conversation.index.cache_encode_failed", "concern", "conversation.index", "component", "conversation", "path", path, "err", err)
+		return fmt.Errorf("encode conversation cache: %w", err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+		slog.Warn("conversation.index.cache_write_failed", "concern", "conversation.index", "component", "conversation", "path", path, "err", err)
+		return fmt.Errorf("write conversation cache: %w", err)
+	}
+	slog.Debug("conversation.index.cache_written", "concern", "conversation.index", "component", "conversation", "path", path, "records", len(records))
+	return nil
 }
 
 func resolveRecord(records []Record, selector string) (Record, bool) {
 	if record, ok := resolveRecordExact(records, selector); ok {
 		return record, true
 	}
-
 	return resolveRecordFuzzyTitle(records, selector)
 }
 
@@ -1047,13 +867,11 @@ func resolveRecordExact(records []Record, selector string) (Record, bool) {
 	if record, ok := resolveRecordIdentity(records, selector); ok {
 		return record, true
 	}
-
 	for _, record := range records {
 		if record.Title == selector {
 			return record, true
 		}
 	}
-
 	return emptyRecord(), false
 }
 
@@ -1075,7 +893,6 @@ func resolveRecordIdentity(records []Record, selector string) (Record, bool) {
 			return record, true
 		}
 	}
-
 	return emptyRecord(), false
 }
 
@@ -1087,19 +904,50 @@ func resolveRecordFuzzyTitle(records []Record, selector string) (Record, bool) {
 	lower := strings.ToLower(selector)
 	var matched Record
 	matchCount := 0
-
 	for _, record := range records {
 		if strings.Contains(strings.ToLower(record.Title), lower) {
 			matched = record
 			matchCount++
 		}
 	}
-
 	if matchCount != 1 {
 		return emptyRecord(), false
 	}
-
 	return matched, true
+}
+
+func sortRecords(records []Record) {
+	sort.SliceStable(records, func(i int, j int) bool {
+		left := records[i]
+		right := records[j]
+		if !left.UpdatedAt.Equal(right.UpdatedAt) {
+			return left.UpdatedAt.After(right.UpdatedAt)
+		}
+		return left.ID < right.ID
+	})
+}
+
+func cloneRecords(records []Record) []Record {
+	if len(records) == 0 {
+		return nil
+	}
+	out := make([]Record, len(records))
+	copy(out, records)
+	return out
+}
+
+func cloneStampedRecords(records []Record, stamps map[string]FileStamp) []StampedRecord {
+	if len(records) == 0 {
+		return nil
+	}
+	out := make([]StampedRecord, 0, len(records))
+	for _, record := range records {
+		out = append(out, StampedRecord{
+			Record: record,
+			Stamp:  stamps[recordKey(record.ArtifactPath, record.Selector)],
+		})
+	}
+	return out
 }
 
 // DerivedID returns the stable conversation id for an artifact: the provider
@@ -1111,46 +959,6 @@ func DerivedID(provider Provider, providerID string, artifactPath string) string
 	if providerID != "" {
 		return provider.String() + ":" + providerID
 	}
-
 	sum := sha256.Sum256([]byte(artifactPath))
-
 	return ProviderArtifact.String() + ":" + hex.EncodeToString(sum[:8])
-}
-
-func logIndexRefreshStarted(ctx context.Context, reason RefreshReason, provider string) {
-	slog.InfoContext(
-		ctx,
-		"conversation.index.refresh_started",
-		"concern",
-		"conversation.index",
-		"component",
-		"conversation",
-		"reason",
-		reason.String(),
-		"provider",
-		provider,
-		"duration_ms",
-		0,
-		"outcome",
-		"in_progress",
-		"record_count",
-		0,
-		"cache_changed",
-		false,
-	)
-}
-
-func logRetainedRecords(ctx context.Context, newlyRetained int, retained []Record) {
-	slog.InfoContext(
-		ctx,
-		"conversation.index.records_retained",
-		"concern",
-		"conversation.index",
-		"component",
-		"conversation",
-		"newly_retained",
-		newlyRetained,
-		"retained",
-		len(retained),
-	)
 }

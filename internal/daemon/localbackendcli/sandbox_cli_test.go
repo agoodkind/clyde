@@ -30,15 +30,9 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	if clydeBuildDirectory != "" {
 		if err := os.RemoveAll(clydeBuildDirectory); err != nil {
-			fmt.Fprintf(
-				os.Stderr,
-				"The test could not remove the shared clyde build directory %s: %v.\n",
-				clydeBuildDirectory,
-				err,
-			)
+			fmt.Fprintf(os.Stderr, "The test could not remove the shared clyde build directory %s: %v.\n", clydeBuildDirectory, err)
 		}
 	}
-
 	os.Exit(code)
 }
 
@@ -48,7 +42,6 @@ func buildClydeCLI(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	return binaryPath
 }
 
@@ -57,40 +50,27 @@ func compileClydeCLI() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve working directory: %w", err)
 	}
-
 	for {
 		if _, statErr := os.Stat(filepath.Join(directory, "go.mod")); statErr == nil {
 			break
 		}
-
 		parent := filepath.Dir(directory)
 		if parent == directory {
 			return "", errors.New("go.mod not found above the working directory")
 		}
-
 		directory = parent
 	}
-
 	clydeBuildDirectory, err = os.MkdirTemp("", "clyde-localbackendcli-")
 	if err != nil {
 		return "", fmt.Errorf("create clyde CLI build directory: %w", err)
 	}
-
 	binaryPath := filepath.Join(clydeBuildDirectory, "clyde")
-	command := exec.CommandContext(
-		context.Background(),
-		"go",
-		"build",
-		"-o",
-		binaryPath,
-		"./cmd/clyde",
-	)
+	command := exec.CommandContext(context.Background(), "go", "build", "-o", binaryPath, "./cmd/clyde")
 	command.Dir = directory
 	output, err := command.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("build clyde CLI: %w\n%s", err, output)
 	}
-
 	return binaryPath, nil
 }
 
@@ -102,38 +82,16 @@ func TestMCPServeExitsPromptlyAfterStdinCloses(t *testing.T) {
 	binaryPath := buildClydeCLI(t)
 	home := t.TempDir()
 	item := codexProbeInjectedItem(t, codexProbeResponse)
-	installLocalProofTranscript(
-		t,
-		codexProbeRolloutPath(home, mcpExitSession),
-		codexProbeRollout(t, mcpExitSession, item),
-	)
+	installLocalProofTranscript(t, codexProbeRolloutPath(home, mcpExitSession), codexProbeRollout(t, mcpExitSession, item))
 	settingsPath := writeSandboxSemanticSettings(t, "")
 	sandboxDaemon := startLocalProofDaemon(t, binaryPath, home, "--semantic-settings", settingsPath)
-	waitForInjectedProbeMCP(
-		t,
-		binaryPath,
-		sandboxDaemon.environment,
-		codexProbeProvider,
-		mcpExitSession,
-	)
+	waitForInjectedProbeMCP(t, binaryPath, sandboxDaemon.environment, codexProbeProvider, mcpExitSession)
 
-	export := injectedProbeExport{
-		name:      "chat",
-		provider:  codexProbeProvider,
-		session:   mcpExitSession,
-		only:      injectedProbeChatOnly,
-		maxTokens: "",
-		output:    "",
-		lastN:     injectedProbeLastN,
-	}
+	export := injectedProbeExport{name: "chat", provider: codexProbeProvider, session: mcpExitSession, only: injectedProbeChatOnly, maxTokens: "", output: "", lastN: injectedProbeLastN}
 	started := time.Now()
 	injectedProbeMCPBody(t, binaryPath, sandboxDaemon.environment, export)
 	if elapsed := time.Since(started); elapsed >= mcpExitBudget {
-		t.Errorf(
-			"The clyde mcp serve call and process exit took %s, longer than the budget of %s.",
-			elapsed,
-			mcpExitBudget,
-		)
+		t.Errorf("The clyde mcp serve call and process exit took %s, longer than the budget of %s.", elapsed, mcpExitBudget)
 	}
 }
 
@@ -145,16 +103,13 @@ func environmentWith(overrides ...string) []string {
 			overrideKeys[key] = true
 		}
 	}
-
 	environment := make([]string, 0, len(os.Environ())+len(overrides))
 	for _, entry := range os.Environ() {
 		key, _, found := strings.Cut(entry, "=")
 		if found && overrideKeys[key] {
 			continue
 		}
-
 		environment = append(environment, entry)
 	}
-
 	return append(environment, overrides...)
 }

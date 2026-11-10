@@ -81,15 +81,10 @@ var chatUnsupportedDocumentedKeys = map[string]bool{
 // returns the presence of a top-level key. ChatRejection checks unknown keys
 // and the stream_options rule for every provider. The OpenAI-compatible
 // passthrough has no catalog column and skips the provider checks.
-func ChatRejection(
-	presenceFor func(string) int,
-	values ChatRequestValues,
-	provider adaptermodel.BackendID,
-) (Rejection, bool) {
+func ChatRejection(presenceFor func(string) int, values ChatRequestValues, provider adaptermodel.BackendID) (Rejection, bool) {
 	if rejection, ok := chatUnknownKeyRejection(values.UnknownKeys); ok {
 		return rejection, true
 	}
-
 	if presenceSet(presenceFor("stream_options")) && !values.Stream {
 		return Rejection{
 			Code:    RejectionCodeInvalidParameter,
@@ -97,18 +92,15 @@ func ChatRejection(
 			Message: "The 'stream_options' parameter is only allowed when 'stream' is enabled.",
 		}, true
 	}
-
 	column, known := providerColumnFor(provider)
 	if !known {
 		return noRejection(), false
 	}
-
 	for _, check := range chatFieldChecks(presenceFor, values, column) {
 		if check.unsupported() {
 			return unsupportedParameter(check.param, column), true
 		}
 	}
-
 	return noRejection(), false
 }
 
@@ -122,88 +114,31 @@ type chatFieldCheck struct {
 // 1 and offers no processing tier. Neither provider reads n, penalties,
 // logit bias, logprobs, seed, audio, non-text modalities, stored
 // completions, or the legacy function_call control.
-func chatFieldChecks(
-	presenceFor func(string) int,
-	values ChatRequestValues,
-	column providerColumn,
-) []chatFieldCheck {
+func chatFieldChecks(presenceFor func(string) int, values ChatRequestValues, column providerColumn) []chatFieldCheck {
 	codex := column == columnCodex
-
 	return []chatFieldCheck{
 		{param: "n", unsupported: func() bool { return values.N != nil && *values.N > 1 }},
-		{
-			param:       "temperature",
-			unsupported: func() bool { return temperatureUnsupported(column, values.Temperature) },
-		},
-		{
-			param:       "top_p",
-			unsupported: func() bool { return codex && numberDiffers(values.TopP, 1) },
-		},
-		{
-			param:       "max_tokens",
-			unsupported: func() bool { return codex && presenceSet(presenceFor("max_tokens")) },
-		},
-		{
-			param: "max_completion_tokens",
-			unsupported: func() bool {
-				return codex && presenceSet(presenceFor("max_completion_tokens"))
-			},
-		},
-		{
-			param: "max_output_tokens",
-			unsupported: func() bool {
-				return codex && presenceSet(presenceFor("max_output_tokens"))
-			},
-		},
+		{param: "temperature", unsupported: func() bool { return temperatureUnsupported(column, values.Temperature) }},
+		{param: "top_p", unsupported: func() bool { return codex && numberDiffers(values.TopP, 1) }},
+		{param: "max_tokens", unsupported: func() bool { return codex && presenceSet(presenceFor("max_tokens")) }},
+		{param: "max_completion_tokens", unsupported: func() bool { return codex && presenceSet(presenceFor("max_completion_tokens")) }},
+		{param: "max_output_tokens", unsupported: func() bool { return codex && presenceSet(presenceFor("max_output_tokens")) }},
 		{param: "stop", unsupported: func() bool { return codex && valueSet(presenceFor("stop")) }},
-		{
-			param:       "presence_penalty",
-			unsupported: func() bool { return numberDiffers(values.PresencePenalty, 0) },
-		},
-		{
-			param:       "frequency_penalty",
-			unsupported: func() bool { return numberDiffers(values.FrequencyPenalty, 0) },
-		},
-		{
-			param:       "logit_bias",
-			unsupported: func() bool { return valueSet(presenceFor("logit_bias")) },
-		},
-		{
-			param:       "logprobs",
-			unsupported: func() bool { return values.Logprobs != nil && *values.Logprobs },
-		},
-		{
-			param:       "top_logprobs",
-			unsupported: func() bool { return values.TopLogprobs != nil && *values.TopLogprobs > 0 },
-		},
+		{param: "presence_penalty", unsupported: func() bool { return numberDiffers(values.PresencePenalty, 0) }},
+		{param: "frequency_penalty", unsupported: func() bool { return numberDiffers(values.FrequencyPenalty, 0) }},
+		{param: "logit_bias", unsupported: func() bool { return valueSet(presenceFor("logit_bias")) }},
+		{param: "logprobs", unsupported: func() bool { return values.Logprobs != nil && *values.Logprobs }},
+		{param: "top_logprobs", unsupported: func() bool { return values.TopLogprobs != nil && *values.TopLogprobs > 0 }},
 		{param: "seed", unsupported: func() bool { return presenceSet(presenceFor("seed")) }},
 		{param: "audio", unsupported: func() bool { return presenceSet(presenceFor("audio")) }},
-		{
-			param:       "modalities",
-			unsupported: func() bool { return modalitiesUnsupported(values.Modalities) },
-		},
+		{param: "modalities", unsupported: func() bool { return modalitiesUnsupported(values.Modalities) }},
 		{param: "store", unsupported: func() bool { return values.Store != nil && *values.Store }},
-		{
-			param: "service_tier",
-			unsupported: func() bool {
-				return !codex && serviceTierUnsupported(values.ServiceTier)
-			},
-		},
-		{
-			param:       "tool_choice",
-			unsupported: func() bool { return codex && !choiceIsAuto(values.ToolChoice) },
-		},
-		{
-			param:       "function_call",
-			unsupported: func() bool { return !choiceIsAuto(values.FunctionCall) },
-		},
-		{
-			param: "response_format",
-			unsupported: func() bool {
-				return codex && !values.AllowCodexResponseFormat &&
-					!responseFormatIsText(values.ResponseFormat)
-			},
-		},
+		{param: "service_tier", unsupported: func() bool { return !codex && serviceTierUnsupported(values.ServiceTier) }},
+		{param: "tool_choice", unsupported: func() bool { return codex && !choiceIsAuto(values.ToolChoice) }},
+		{param: "function_call", unsupported: func() bool { return !choiceIsAuto(values.FunctionCall) }},
+		{param: "response_format", unsupported: func() bool {
+			return codex && !values.AllowCodexResponseFormat && !responseFormatIsText(values.ResponseFormat)
+		}},
 	}
 }
 
@@ -216,7 +151,6 @@ func chatUnknownKeyRejection(unknownKeys []string) (Rejection, bool) {
 		if chatAcceptedUnknownKeys[key] {
 			continue
 		}
-
 		if chatUnsupportedDocumentedKeys[key] {
 			return Rejection{
 				Code:    RejectionCodeUnsupportedParameter,
@@ -224,24 +158,20 @@ func chatUnknownKeyRejection(unknownKeys []string) (Rejection, bool) {
 				Message: "Unsupported parameter: '" + key + "' is not supported by Clyde.",
 			}, true
 		}
-
 		return Rejection{
 			Code:    RejectionCodeUnknownParameter,
 			Param:   key,
 			Message: "Unrecognized request argument supplied: " + key,
 		}, true
 	}
-
 	return noRejection(), false
 }
 
 func unsupportedParameter(param string, column providerColumn) Rejection {
 	return Rejection{
-		Code:  RejectionCodeUnsupportedParameter,
-		Param: param,
-		Message: "Unsupported parameter: '" + param + "' is not supported with the " + backendLabel(
-			column,
-		) + " backend.",
+		Code:    RejectionCodeUnsupportedParameter,
+		Param:   param,
+		Message: "Unsupported parameter: '" + param + "' is not supported with the " + backendLabel(column) + " backend.",
 	}
 }
 
@@ -263,11 +193,9 @@ func temperatureUnsupported(column providerColumn, temperature *float64) bool {
 	if temperature == nil {
 		return false
 	}
-
 	if column == columnCodex {
 		return *temperature != 1
 	}
-
 	return *temperature > 1
 }
 
@@ -275,18 +203,15 @@ func modalitiesUnsupported(raw json.RawMessage) bool {
 	if isNullOrEmptyJSON(raw) {
 		return false
 	}
-
 	var modalities []string
 	if err := json.Unmarshal(raw, &modalities); err != nil {
 		return true
 	}
-
 	for _, modality := range modalities {
 		if modality != "text" {
 			return true
 		}
 	}
-
 	return false
 }
 
@@ -304,12 +229,10 @@ func choiceIsAuto(raw json.RawMessage) bool {
 	if isNullOrEmptyJSON(raw) {
 		return true
 	}
-
 	var choice string
 	if err := json.Unmarshal(raw, &choice); err != nil {
 		return false
 	}
-
 	return choice == "auto"
 }
 
@@ -317,14 +240,12 @@ func responseFormatIsText(raw json.RawMessage) bool {
 	if isNullOrEmptyJSON(raw) {
 		return true
 	}
-
 	var format struct {
 		Type string `json:"type"`
 	}
 	if err := json.Unmarshal(raw, &format); err != nil {
 		return false
 	}
-
 	return format.Type == "text"
 }
 

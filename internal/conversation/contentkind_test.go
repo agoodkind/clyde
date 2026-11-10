@@ -7,7 +7,6 @@ import (
 
 func TestExpandContentSelector(t *testing.T) {
 	t.Parallel()
-
 	cases := []struct {
 		value string
 		want  []ContentKind
@@ -25,7 +24,6 @@ func TestExpandContentSelector(t *testing.T) {
 		if ok != tc.ok {
 			t.Errorf("%q: ok = %t, want %t", tc.value, ok, tc.ok)
 		}
-
 		if ok && !slices.Equal(got, tc.want) {
 			t.Errorf("%q: got %v, want %v", tc.value, got, tc.want)
 		}
@@ -38,11 +36,8 @@ func TestResolveContentKinds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-
 	want := []ContentKind{
-		ContentKindChat,
-		ContentKindThinking,
-		ContentKindToolSummaries,
+		ContentKindChat, ContentKindThinking, ContentKindToolSummaries,
 	}
 	if got := set.Kinds(); !slices.Equal(got, want) {
 		t.Errorf("kinds = %v, want %v", got, want)
@@ -52,7 +47,6 @@ func TestResolveContentKinds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve tool_calls: %v", err)
 	}
-
 	if got := callSet.Kinds(); !slices.Equal(got, []ContentKind{ContentKindToolCalls}) {
 		t.Errorf("tool_calls precedence kinds = %v", got)
 	}
@@ -61,7 +55,6 @@ func TestResolveContentKinds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve tool_outputs: %v", err)
 	}
-
 	if got := outputSet.Kinds(); !slices.Equal(got, []ContentKind{ContentKindToolOutputs}) {
 		t.Errorf("tool_outputs precedence kinds = %v", got)
 	}
@@ -70,7 +63,6 @@ func TestResolveContentKinds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve all: %v", err)
 	}
-
 	if got := allSet.Kinds(); !slices.Equal(got, allSelectorContentKinds()) {
 		t.Errorf("all kinds = %v, want %v", got, allSelectorContentKinds())
 	}
@@ -78,11 +70,9 @@ func TestResolveContentKinds(t *testing.T) {
 	if _, err := ResolveContentKinds([]string{"bogus"}); err == nil {
 		t.Error("expected error for unknown kind")
 	}
-
 	if _, err := ResolveContentKinds(nil); err == nil {
 		t.Error("expected error for empty selection")
 	}
-
 	if _, err := ResolveContentKinds([]string{"", "  "}); err == nil {
 		t.Error("expected error for blank-only selection")
 	}
@@ -94,23 +84,16 @@ func TestContentKindSetHasAndKindsOrder(t *testing.T) {
 	if !set.Has(ContentKindChat) || !set.Has(ContentKindRawJSONMetadata) {
 		t.Error("set missing expected members")
 	}
-
 	if set.Has(ContentKindThinking) {
 		t.Error("set has unexpected member")
 	}
-
 	// Kinds returns canonical order regardless of insertion order.
-	if got := set.Kinds(); !slices.Equal(
-		got,
-		[]ContentKind{ContentKindChat, ContentKindRawJSONMetadata},
-	) {
+	if got := set.Kinds(); !slices.Equal(got, []ContentKind{ContentKindChat, ContentKindRawJSONMetadata}) {
 		t.Errorf("kinds order = %v", got)
 	}
-
 	if NewContentKindSet().Empty() != true {
 		t.Error("empty set should report Empty")
 	}
-
 	var zero ContentKindSet
 	if zero.Has(ContentKindChat) {
 		t.Error("zero set should have no members")

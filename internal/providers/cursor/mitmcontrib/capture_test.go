@@ -22,11 +22,9 @@ func TestRouteProviderClaimsCursorConnectHosts(t *testing.T) {
 	if !claim.Claimed {
 		t.Fatal("expected api2.cursor.sh claim")
 	}
-
 	if claim.ProviderID != providerID {
 		t.Fatalf("provider id = %v want %v", claim.ProviderID, providerID)
 	}
-
 	if provider.ClassifyConnect("api.openai.com").Claimed {
 		t.Fatal("expected non-Cursor host to fall through")
 	}
@@ -44,23 +42,18 @@ func TestRouteProviderExtractsCursorIdentity(t *testing.T) {
 	if contrib.PreferredRequestID != "cursor-req" {
 		t.Fatalf("preferred request id = %q", contrib.PreferredRequestID)
 	}
-
 	if contrib.PreferredUpstreamRequestID != "cursor-orig" {
 		t.Fatalf("preferred upstream request id = %q", contrib.PreferredUpstreamRequestID)
 	}
-
 	if contrib.SessionID != "cursor-session" {
 		t.Fatalf("session id = %q", contrib.SessionID)
 	}
-
 	if contrib.ConversationID != "cursor-conv" {
 		t.Fatalf("conversation id = %q", contrib.ConversationID)
 	}
-
 	if contrib.ConversationSource != "header" {
 		t.Fatalf("conversation source = %q", contrib.ConversationSource)
 	}
-
 	if contrib.Facet == nil {
 		t.Fatal("expected Cursor facet")
 	}
@@ -81,50 +74,39 @@ func TestDiagnoseExchangeEmitsBidiDiagnosticOnWireConcern(t *testing.T) {
 
 	logBuffer := &bytes.Buffer{}
 	logger := slog.New(slog.NewJSONHandler(logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	routeProvider{}.DiagnoseExchange(
-		context.Background(),
-		logger,
-		mitm.ExchangeDiagnostic{
-			RequestHeader:      headers,
-			DecodedRequestBody: body,
-			Method:             http.MethodPost,
-			Path:               "/aiserver.v1.AiService/BidiAppend",
-			Host:               "api2.cursor.sh",
-			Concern:            "cursor.bidi",
-			HookName:           "",
-		},
-	)
+	routeProvider{}.DiagnoseExchange(context.Background(), logger, mitm.ExchangeDiagnostic{
+		RequestHeader:      headers,
+		DecodedRequestBody: body,
+		Method:             http.MethodPost,
+		Path:               "/aiserver.v1.AiService/BidiAppend",
+		Host:               "api2.cursor.sh",
+		Concern:            "cursor.bidi",
+		HookName:           "",
+	})
 
 	raw := logBuffer.Bytes()
 	if bytes.Contains(raw, []byte(sentinel)) {
 		t.Fatalf("diagnostic log leaked sentinel: %s", raw)
 	}
-
 	var event map[string]any
 	if err := json.Unmarshal(bytes.TrimSpace(raw), &event); err != nil {
 		t.Fatalf("unmarshal diagnostic log: %v\n%s", err, raw)
 	}
-
 	if event["msg"] != "mitm.cursor.bidi_append.diagnostic" {
 		t.Fatalf("msg = %v want mitm.cursor.bidi_append.diagnostic", event["msg"])
 	}
-
 	if event["concern"] != "providers.mitm.wire" {
 		t.Fatalf("concern = %v want providers.mitm.wire", event["concern"])
 	}
-
 	if event["provider"] != ProviderName {
 		t.Fatalf("provider = %v want %q", event["provider"], ProviderName)
 	}
-
 	if event["trace_id"] != "0123456789abcdef0123456789abcdef" {
 		t.Fatalf("trace id = %v", event["trace_id"])
 	}
-
 	if event["bidi_request_id"] != requestID {
 		t.Fatalf("bidi request id = %v want %q", event["bidi_request_id"], requestID)
 	}
-
 	if event["bidi_append_seqno"].(float64) != 42 {
 		t.Fatalf("bidi append seqno = %v want 42", event["bidi_append_seqno"])
 	}
@@ -135,30 +117,22 @@ func TestDiagnoseExchangeSkipsNonBidiRequests(t *testing.T) {
 
 	logBuffer := &bytes.Buffer{}
 	logger := slog.New(slog.NewJSONHandler(logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	routeProvider{}.DiagnoseExchange(
-		context.Background(),
-		logger,
-		mitm.ExchangeDiagnostic{
-			RequestHeader:      http.Header{},
-			DecodedRequestBody: []byte("not a bidi frame"),
-			Method:             http.MethodPost,
-			Path:               "/aiserver.v1.DashboardService/GetTeams",
-			Host:               "api2.cursor.sh",
-			Concern:            "cursor.account",
-			HookName:           "",
-		},
-	)
+	routeProvider{}.DiagnoseExchange(context.Background(), logger, mitm.ExchangeDiagnostic{
+		RequestHeader:      http.Header{},
+		DecodedRequestBody: []byte("not a bidi frame"),
+		Method:             http.MethodPost,
+		Path:               "/aiserver.v1.DashboardService/GetTeams",
+		Host:               "api2.cursor.sh",
+		Concern:            "cursor.account",
+		HookName:           "",
+	})
 	if logBuffer.Len() != 0 {
 		t.Fatalf("expected no diagnostic for non-bidi request, got %s", logBuffer.String())
 	}
 }
 
 func TestDecodeCaptureRequestPreservesFieldTreeAndToolEvent(t *testing.T) {
-	outer := cursorBidiAppendPayload(
-		"request-1",
-		4,
-		[]byte("0a0663616c6c2d311209656469745f66696c651a117b227061746368223a2268656c6c6f227d"),
-	)
+	outer := cursorBidiAppendPayload("request-1", 4, []byte("0a0663616c6c2d311209656469745f66696c651a117b227061746368223a2268656c6c6f227d"))
 
 	decoded, ok := DecodeCaptureRequest(RequestCapture{
 		Path:    "/aiserver.v1.AiService/BidiAppend",
@@ -168,23 +142,17 @@ func TestDecodeCaptureRequestPreservesFieldTreeAndToolEvent(t *testing.T) {
 	if !ok {
 		t.Fatal("expected BidiAppend capture decode")
 	}
-
 	if decoded.Status != capture.DecodeStatusSuccess {
 		t.Fatalf("status = %q error = %q", decoded.Status, decoded.Error)
 	}
-
 	if !bytes.Contains(decoded.RepresentationJSON, []byte(`"hex_envelope"`)) {
 		t.Fatalf("representation omits hex envelope: %s", decoded.RepresentationJSON)
 	}
-
 	if len(decoded.ToolEvents) != 1 {
 		t.Fatalf("tool events = %d", len(decoded.ToolEvents))
 	}
-
 	event := decoded.ToolEvents[0]
-	if event.Ordering != 4 || event.CallID != "call-1" || event.ToolName != "edit_file" ||
-		event.InputRepresentation != `{"patch":"hello"}` ||
-		event.InputEncoding != capture.ToolInputEncodingJSON {
+	if event.Ordering != 4 || event.CallID != "call-1" || event.ToolName != "edit_file" || event.InputRepresentation != `{"patch":"hello"}` || event.InputEncoding != capture.ToolInputEncodingJSON {
 		t.Fatalf("tool event = %#v", event)
 	}
 }
@@ -202,12 +170,10 @@ func TestDecodeCaptureRequestMarksRawToolInputAsBase64(t *testing.T) {
 	if !ok || len(decoded.ToolEvents) != 1 {
 		t.Fatalf("decoded=%#v ok=%t", decoded, ok)
 	}
-
 	event := decoded.ToolEvents[0]
 	if event.InputEncoding != capture.ToolInputEncodingBase64 {
 		t.Fatalf("input encoding=%q", event.InputEncoding)
 	}
-
 	if event.InputRepresentation != "/wB/" {
 		t.Fatalf("input representation=%q", event.InputRepresentation)
 	}
@@ -221,20 +187,16 @@ func TestDecodeCaptureRequestPersistsMalformedFrameFailure(t *testing.T) {
 	if !ok {
 		t.Fatal("expected BidiAppend capture decode")
 	}
-
 	if decoded.Status != capture.DecodeStatusFailed {
 		t.Fatalf("status = %q", decoded.Status)
 	}
-
 	if decoded.Error == "" {
 		t.Fatal("decode error is empty")
 	}
 }
 
 func TestDecodeCaptureRequestUsesSequenceFieldForToolOrdering(t *testing.T) {
-	payload := []byte(
-		"0a0663616c6c2d311209656469745f66696c651a117b227061746368223a2268656c6c6f227d",
-	)
+	payload := []byte("0a0663616c6c2d311209656469745f66696c651a117b227061746368223a2268656c6c6f227d")
 	outer := appendProtoString(nil, 1, "request-1")
 	outer = appendProtoVarint(outer, 9, 99)
 	outer = appendProtoVarint(outer, 2, 4)
@@ -247,20 +209,16 @@ func TestDecodeCaptureRequestUsesSequenceFieldForToolOrdering(t *testing.T) {
 	if !ok {
 		t.Fatal("expected BidiAppend capture decode")
 	}
-
 	if len(decoded.ToolEvents) != 1 {
 		t.Fatalf("tool events = %d", len(decoded.ToolEvents))
 	}
-
 	if decoded.ToolEvents[0].Ordering != 4 {
 		t.Fatalf("tool ordering = %d, want 4", decoded.ToolEvents[0].Ordering)
 	}
 }
 
 func TestDecodeCaptureRequestSkipsMalformedHexRequestIDBeforePayload(t *testing.T) {
-	payload := []byte(
-		"0a0663616c6c2d311209656469745f66696c651a117b227061746368223a2268656c6c6f227d",
-	)
+	payload := []byte("0a0663616c6c2d311209656469745f66696c651a117b227061746368223a2268656c6c6f227d")
 	outer := appendProtoString(nil, 1, "deadbeef")
 	outer = appendProtoVarint(outer, 2, 4)
 	outer = appendProtoBytes(outer, 3, payload)
@@ -272,24 +230,19 @@ func TestDecodeCaptureRequestSkipsMalformedHexRequestIDBeforePayload(t *testing.
 	if !ok {
 		t.Fatal("expected BidiAppend capture decode")
 	}
-
 	if decoded.Status != capture.DecodeStatusSuccess {
 		t.Fatalf("status = %q error = %q", decoded.Status, decoded.Error)
 	}
-
 	if len(decoded.ToolEvents) != 1 {
 		t.Fatalf("tool events = %d", len(decoded.ToolEvents))
 	}
-
 	if decoded.ToolEvents[0].CallID != "call-1" {
 		t.Fatalf("tool call id = %q", decoded.ToolEvents[0].CallID)
 	}
 }
 
 func TestDecodeCaptureRequestSkipsParseableNonEnvelopeBeforePayload(t *testing.T) {
-	payload := []byte(
-		"0a0663616c6c2d311209656469745f66696c651a117b227061746368223a2268656c6c6f227d",
-	)
+	payload := []byte("0a0663616c6c2d311209656469745f66696c651a117b227061746368223a2268656c6c6f227d")
 	outer := appendProtoString(nil, 1, "0a00")
 	outer = appendProtoVarint(outer, 2, 4)
 	outer = appendProtoBytes(outer, 3, payload)
@@ -301,15 +254,12 @@ func TestDecodeCaptureRequestSkipsParseableNonEnvelopeBeforePayload(t *testing.T
 	if !ok {
 		t.Fatal("expected BidiAppend capture decode")
 	}
-
 	if decoded.Status != capture.DecodeStatusSuccess {
 		t.Fatalf("status = %q error = %q", decoded.Status, decoded.Error)
 	}
-
 	if len(decoded.ToolEvents) != 1 {
 		t.Fatalf("tool events = %d", len(decoded.ToolEvents))
 	}
-
 	if decoded.ToolEvents[0].CallID != "call-1" {
 		t.Fatalf("tool call id = %q", decoded.ToolEvents[0].CallID)
 	}
@@ -317,26 +267,21 @@ func TestDecodeCaptureRequestSkipsParseableNonEnvelopeBeforePayload(t *testing.T
 
 func TestParseProtobufFieldsBoundsRecursiveChildren(t *testing.T) {
 	nested := make([]byte, 0, 4097*3)
-
 	for i := 0; i < 4097; i++ {
 		nested = appendProtoBytes(nested, 1, []byte("x"))
 	}
-
 	raw := appendProtoBytes(nil, 1, nested)
 
 	fields, err := parseProtobufFields(raw)
 	if err != nil {
 		t.Fatalf("parseProtobufFields: %v", err)
 	}
-
 	if len(fields) != 1 {
 		t.Fatalf("top-level fields = %d, want 1", len(fields))
 	}
-
 	if fields[0].DataBase64 == "" {
 		t.Fatal("parent bytes field lost its base64 representation")
 	}
-
 	if len(fields[0].Children) > 4096 {
 		t.Fatalf("recursive children = %d, want at most 4096", len(fields[0].Children))
 	}
@@ -344,7 +289,6 @@ func TestParseProtobufFieldsBoundsRecursiveChildren(t *testing.T) {
 
 func TestParseProtobufFieldsBoundsTopLevelFields(t *testing.T) {
 	raw := make([]byte, 0, 4097*3)
-
 	for i := 0; i < 4097; i++ {
 		raw = appendProtoBytes(raw, 1, []byte("x"))
 	}
@@ -353,7 +297,6 @@ func TestParseProtobufFieldsBoundsTopLevelFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseProtobufFields: %v", err)
 	}
-
 	if len(fields) > 4096 {
 		t.Fatalf("top-level fields = %d, want at most 4096", len(fields))
 	}
@@ -364,21 +307,18 @@ func cursorBidiAppendPayload(requestID string, seqno uint64, payload []byte) []b
 	out = appendProtoString(out, 1, requestID)
 	out = appendProtoVarint(out, 2, seqno)
 	out = appendProtoBytes(out, 3, payload)
-
 	return out
 }
 
 func appendProtoString(dst []byte, fieldNumber uint64, value string) []byte {
 	dst = appendProtoKey(dst, fieldNumber, 2)
 	dst = binary.AppendUvarint(dst, uint64(len(value)))
-
 	return append(dst, value...)
 }
 
 func appendProtoBytes(dst []byte, fieldNumber uint64, value []byte) []byte {
 	dst = appendProtoKey(dst, fieldNumber, 2)
 	dst = binary.AppendUvarint(dst, uint64(len(value)))
-
 	return append(dst, value...)
 }
 

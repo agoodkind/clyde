@@ -26,18 +26,14 @@ func connectFrame(t *testing.T, message []byte, compressed bool) []byte {
 		if _, err := writer.Write(message); err != nil {
 			t.Fatalf("gzip write: %v", err)
 		}
-
 		if err := writer.Close(); err != nil {
 			t.Fatalf("gzip close: %v", err)
 		}
-
 		payload = buf.Bytes()
 	}
-
 	framed := make([]byte, 5, 5+len(payload))
 	framed[0] = flag
 	binary.BigEndian.PutUint32(framed[1:5], uint32(len(payload)))
-
 	return append(framed, payload...)
 }
 
@@ -53,7 +49,6 @@ func protoBytes(fieldNumber byte, payload []byte) []byte {
 func updateConversationMetadataBody(id string) []byte {
 	body := protoBytes(1, []byte(id))
 	body = append(body, protoBytes(2, []byte("a title"))...)
-
 	return append(body, protoBytes(4, []byte("/repo"))...)
 }
 
@@ -62,7 +57,6 @@ func updateConversationMetadataBody(id string) []byte {
 func agentRunBody(id string) []byte {
 	inner := protoBytes(2, []byte("payload"))
 	inner = append(inner, protoBytes(5, []byte(id))...)
-
 	return protoBytes(1, inner)
 }
 
@@ -107,22 +101,18 @@ func TestConversationIDFromBodyReadsBothAgentRoutes(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		t.Run(
-			test.name,
-			func(t *testing.T) {
-				t.Parallel()
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 
-				body := connectFrame(t, test.message, test.compressed)
-				got, ok := routeProvider{}.ConversationIDFromBody(exchangeFor(test.path, body))
-				if !ok {
-					t.Fatalf("ConversationIDFromBody returned ok=false")
-				}
-
-				if got != testConversationID {
-					t.Fatalf("conversation id = %q, want %q", got, testConversationID)
-				}
-			},
-		)
+			body := connectFrame(t, test.message, test.compressed)
+			got, ok := routeProvider{}.ConversationIDFromBody(exchangeFor(test.path, body))
+			if !ok {
+				t.Fatalf("ConversationIDFromBody returned ok=false")
+			}
+			if got != testConversationID {
+				t.Fatalf("conversation id = %q, want %q", got, testConversationID)
+			}
+		})
 	}
 }
 
@@ -135,7 +125,6 @@ func TestConversationIDFromBodyRejectsNonConversationInput(t *testing.T) {
 	t.Parallel()
 
 	full := connectFrame(t, updateConversationMetadataBody(testConversationID), true)
-
 	tests := []struct {
 		name string
 		path string
@@ -178,17 +167,14 @@ func TestConversationIDFromBodyRejectsNonConversationInput(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		t.Run(
-			test.name,
-			func(t *testing.T) {
-				t.Parallel()
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 
-				got, ok := routeProvider{}.ConversationIDFromBody(exchangeFor(test.path, test.body))
-				if ok || got != "" {
-					t.Fatalf("ConversationIDFromBody = (%q, %t), want empty and false", got, ok)
-				}
-			},
-		)
+			got, ok := routeProvider{}.ConversationIDFromBody(exchangeFor(test.path, test.body))
+			if ok || got != "" {
+				t.Fatalf("ConversationIDFromBody = (%q, %t), want empty and false", got, ok)
+			}
+		})
 	}
 }
 
@@ -204,7 +190,6 @@ func TestLooksLikeConversationID(t *testing.T) {
 			t.Fatalf("looksLikeConversationID(%q) = false, want true", candidate)
 		}
 	}
-
 	invalid := []string{
 		"",
 		"2e26c0f6c33d4b5493a496c94b0b7b11",

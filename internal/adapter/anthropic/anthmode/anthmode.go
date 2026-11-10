@@ -45,11 +45,7 @@ func (t InboundThinking) Validate() error {
 		InboundThinkingPassthrough:
 		return nil
 	default:
-		return fmt.Errorf(
-			"anthropic: reasoning.inbound_thinking must be one of "+
-				"native_thinking_block|drop|plain_text_concat|passthrough (got %q)",
-			string(t),
-		)
+		return fmt.Errorf("anthropic: reasoning.inbound_thinking must be one of native_thinking_block|drop|plain_text_concat|passthrough (got %q)", string(t))
 	}
 }
 
@@ -59,6 +55,5 @@ func (t InboundThinking) Resolved() InboundThinking {
 	if t == "" {
 		return InboundThinkingNative
 	}
-
 	return t
 }

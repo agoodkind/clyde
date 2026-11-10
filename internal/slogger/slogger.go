@@ -71,51 +71,31 @@ func setupPolicyLogger(policy SetupPolicy) (io.Closer, error) {
 		handlers := appendSharedPolicyHandlers(nil, policy, policy.ProcessSink.Rotation)
 		return buildPolicyAsyncLogger(handlers), nil
 	}
-
 	path := policy.ProcessSink.Path
 	if strings.TrimSpace(path) == "" {
 		slog.Warn("slogger.setup.empty_process_path", "component", "slogger")
 		return nopCloser{Closed: false}, fmt.Errorf("slogger: process log path is required")
 	}
-
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		slog.Warn(
-			"slogger.setup.mkdir_failed",
-			"component",
-			"slogger",
-			"path",
-			filepath.Dir(path),
-			"err",
-			err,
+		slog.Warn("slogger.setup.mkdir_failed",
+			"component", "slogger",
+			"path", filepath.Dir(path),
+			"err", err,
 		)
-
-		return nopCloser{
-			Closed: false,
-		}, fmt.Errorf("slogger: mkdir %s: %w", filepath.Dir(path), err)
+		return nopCloser{Closed: false}, fmt.Errorf("slogger: mkdir %s: %w", filepath.Dir(path), err)
 	}
-
 	if !policy.ProcessSink.Rotation.Enabled {
 		file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 		if err != nil {
-			slog.Warn(
-				"slogger.setup.open_json_log_failed",
-				"component",
-				"slogger",
-				"path",
-				path,
-				"err",
-				err,
+			slog.Warn("slogger.setup.open_json_log_failed",
+				"component", "slogger",
+				"path", path,
+				"err", err,
 			)
-
-			return nopCloser{
-				Closed: false,
-			}, fmt.Errorf("slogger: open json log file %s: %w", path, err)
+			return nopCloser{Closed: false}, fmt.Errorf("slogger: open json log file %s: %w", path, err)
 		}
-
 		lockedFile := gklog.NewLockedWriteCloser(path, file)
-		handlers := []slog.Handler{
-			slog.NewJSONHandler(lockedFile, &slog.HandlerOptions{Level: policy.Level}),
-		}
+		handlers := []slog.Handler{slog.NewJSONHandler(lockedFile, &slog.HandlerOptions{Level: policy.Level})}
 		disabledRotation := RotationPolicy{
 			Enabled:    false,
 			MaxSizeMB:  0,
@@ -125,36 +105,23 @@ func setupPolicyLogger(policy SetupPolicy) (io.Closer, error) {
 		}
 		handlers = appendSharedPolicyHandlers(handlers, policy, disabledRotation)
 		closer := buildPolicyAsyncLogger(handlers)
-
 		return newMultiCloser(closer, lockedFile), nil
 	}
-
 	handlers := []slog.Handler{
 		gklog.FileJSON(path, policy.Level, rotationConfig(policy.ProcessSink.Rotation)),
 	}
 	handlers = appendSharedPolicyHandlers(handlers, policy, policy.ProcessSink.Rotation)
-
 	return buildPolicyAsyncLogger(handlers), nil
 }
 
-func appendSharedPolicyHandlers(
-	handlers []slog.Handler,
-	policy SetupPolicy,
-	rotation RotationPolicy,
-) []slog.Handler {
+func appendSharedPolicyHandlers(handlers []slog.Handler, policy SetupPolicy, rotation RotationPolicy) []slog.Handler {
 	handlers = append(handlers, buildConcernRouter(policy, rotation))
-	if inventoryHandler := buildInventoryIndexHandler(
-		policy.InventoryPolicy,
-		policy.ConcernRoot,
-		policy.Level,
-	); inventoryHandler != nil {
+	if inventoryHandler := buildInventoryIndexHandler(policy.InventoryPolicy, policy.ConcernRoot, policy.Level); inventoryHandler != nil {
 		handlers = append(handlers, inventoryHandler)
 	}
-
 	if router := buildTranscriptRouter(policy.TranscriptPolicy, policy.ConcernRoot); router != nil {
 		handlers = append(handlers, router)
 	}
-
 	return handlers
 }
 
@@ -172,25 +139,18 @@ func buildConcernRouter(policy SetupPolicy, rotation RotationPolicy) slog.Handle
 	if rotation.Enabled {
 		routerRotation = rotationConfig(rotation)
 	}
-
 	// The router's own Enabled gate must clear the lowest per-concern level so a
 	// concern override below the process-wide level still reaches Handle, where
 	// the per-concern child handler applies the precise level. Gating the router
 	// at policy.Level alone would let slog drop those records before routing.
 	routerLevel := routerMinLevel(policy.Level, policy.ConcernPolicies)
-
-	return gklog.NewRouter(
-		policy.ConcernRoot,
-		routerLevel,
-		slog.DiscardHandler,
-		gklog.RouterOptions{
-			FallbackConcern: routerFallbackConcern,
-			Rotation:        routerRotation,
-			ConcernAttr:     concernAttr,
-			PathForConcern:  routerPathForConcern(policy.ConcernPolicies),
-			LevelForConcern: routerLevelForConcern(policy.Level, policy.ConcernPolicies),
-		},
-	)
+	return gklog.NewRouter(policy.ConcernRoot, routerLevel, slog.DiscardHandler, gklog.RouterOptions{
+		FallbackConcern: routerFallbackConcern,
+		Rotation:        routerRotation,
+		ConcernAttr:     concernAttr,
+		PathForConcern:  routerPathForConcern(policy.ConcernPolicies),
+		LevelForConcern: routerLevelForConcern(policy.Level, policy.ConcernPolicies),
+	})
 }
 
 // routerMinLevel returns the lowest of the process-wide level and every
@@ -198,13 +158,11 @@ func buildConcernRouter(policy SetupPolicy, rotation RotationPolicy) slog.Handle
 // Enabled gate must use so no concern's records are dropped before routing.
 func routerMinLevel(defaultLevel slog.Level, policies map[string]ConcernPolicy) slog.Level {
 	minLevel := defaultLevel
-
 	for _, policy := range policies {
 		if policy.Level != nil && *policy.Level < minLevel {
 			minLevel = *policy.Level
 		}
 	}
-
 	return minLevel
 }
 
@@ -217,11 +175,9 @@ func routerPathForConcern(policies map[string]ConcernPolicy) func(string) string
 		if concern == routerFallbackConcern {
 			return ""
 		}
-
 		if policy, ok := policies[concern]; ok && policy.Enabled != nil && !*policy.Enabled {
 			return ""
 		}
-
 		return ConcernRelPath(concern)
 	}
 }
@@ -229,15 +185,11 @@ func routerPathForConcern(policies map[string]ConcernPolicy) func(string) string
 // routerLevelForConcern returns the file router's per-concern level resolver.
 // A concern with an explicit level override uses that level; every other
 // concern uses the process-wide default level.
-func routerLevelForConcern(
-	defaultLevel slog.Level,
-	policies map[string]ConcernPolicy,
-) func(string) slog.Level {
+func routerLevelForConcern(defaultLevel slog.Level, policies map[string]ConcernPolicy) func(string) slog.Level {
 	return func(concern string) slog.Level {
 		if policy, ok := policies[concern]; ok && policy.Level != nil {
 			return *policy.Level
 		}
-
 		return defaultLevel
 	}
 }
@@ -246,20 +198,17 @@ func buildPolicyAsyncLogger(handlers []slog.Handler) io.Closer {
 	if len(handlers) == 0 {
 		handlers = append(handlers, slog.DiscardHandler)
 	}
-
 	// Each sink gets its own async drain goroutine behind the tee, rather than a
 	// single drain wrapping the whole tee. A rotation or a slow write on one log
 	// file then runs on that file's own goroutine and never blocks the producers
 	// or the other sinks, so log rotation is off every producing hot path.
 	asyncChildren := make([]slog.Handler, len(handlers))
-
 	closers := make([]io.Closer, 0, len(handlers))
 	for i, handler := range handlers {
 		async := newAsyncHandler(handler, sinkCloser(handler))
 		asyncChildren[i] = async
 		closers = append(closers, async)
 	}
-
 	rootHandler := correlation.SlogHandler(
 		gklog.NewTeeHandler(asyncChildren...),
 		correlation.HandlerOptions{
@@ -269,7 +218,6 @@ func buildPolicyAsyncLogger(handlers []slog.Handler) io.Closer {
 	)
 	logger := slog.New(rootHandler).With("build", version.String())
 	slog.SetDefault(logger)
-
 	return newMultiCloser(closers...)
 }
 
@@ -279,7 +227,6 @@ func sinkCloser(handler slog.Handler) io.Closer {
 	if closer, ok := handler.(io.Closer); ok {
 		return closer
 	}
-
 	return nil
 }
 
@@ -290,10 +237,8 @@ func buildTranscriptRouter(policy TranscriptPolicy, concernRoot string) *Transcr
 	if !policy.Enabled {
 		return nil
 	}
-
 	return NewTranscriptRouter(TranscriptRouterConfig{
-		Root:     filepath.Join(concernRoot, "chats"),
-		PoolCap:  0,
+		Root: filepath.Join(concernRoot, "chats"), PoolCap: 0,
 		Rotation: policy.Rotation,
 
 		// WithConcern is part of Clyde's typed adapter surface.
@@ -306,11 +251,9 @@ func WithConcern(logger *slog.Logger, concern string) *slog.Logger {
 	if logger == nil {
 		logger = slog.Default()
 	}
-
 	if concern = strings.TrimSpace(concern); concern == "" {
 		return logger
 	}
-
 	return logger.With(concernAttr, concern)
 }
 
@@ -344,15 +287,12 @@ func defaultPath(cfg config.LoggingConfig, role ProcessRole) string {
 	if p := os.Getenv(envOverride); p != "" {
 		return p
 	}
-
 	if role == ProcessRoleDaemon && cfg.Paths.Daemon != "" {
 		return cfg.Paths.Daemon
 	}
-
 	if role == ProcessRoleCLI && cfg.Paths.CLI != "" {
 		return cfg.Paths.CLI
 	}
-
 	return filepath.Join(config.DefaultStateDir(), fileForRole(role))
 }
 
@@ -364,7 +304,6 @@ func fileForRole(role ProcessRole) string {
 	if role == ProcessRoleDaemon {
 		return defaultDaemonFile
 	}
-
 	return defaultCLIFile
 }
 

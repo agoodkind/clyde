@@ -38,79 +38,40 @@ func startSelfUpdateSchedulerWith(
 	if log == nil {
 		log = slog.Default()
 	}
-
 	schedulerCtx, cancel := context.WithCancel(ctx)
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				log.ErrorContext(
-					schedulerCtx,
-					"daemon.update_scheduler.panic",
-					"concern",
-					"process.daemon.lifecycle",
-					"component",
-					"daemon",
-					"err",
-					fmt.Sprintf("panic: %v", recovered),
-				)
+				log.ErrorContext(schedulerCtx, "daemon.update_scheduler.panic", "concern", "process.daemon.lifecycle", "component", "daemon", "err", fmt.Sprintf("panic: %v", recovered))
 			}
 		}()
-		runScheduler(
-			schedulerCtx,
-			selfupdate.SchedulerHooks{
-				Enabled: func() bool {
-					return true
-				},
-				Mode: func() string {
-					return selfupdate.ModeApply
-				},
-				Options: func() selfupdate.Options {
-					return options(
-						schedulerCtx,
-						updateopts.Overrides{
-							Client:      nil,
-							InstallPath: "",
-							DryRun:      false,
-							Log:         log.With("component", "update"),
-						},
-					)
-				},
-				StopForRelaunch: func() {
-					// Deploy output goes through the daemon log rather than the
-					// supervisor's stdio, which belongs to the service manager.
-					var deployOutput strings.Builder
-					if err := deploy(schedulerCtx, &deployOutput, &deployOutput); err != nil {
-						log.WarnContext(
-							schedulerCtx,
-							"daemon.update_scheduler.deploy_handoff_failed",
-							"concern",
-							"process.daemon.lifecycle",
-							"component",
-							"daemon",
-							"err",
-							err,
-							"deploy_output",
-							updatehandoff.TruncateForLog(deployOutput.String()),
-						)
-
-						return
-					}
-
-					log.InfoContext(
-						schedulerCtx,
-						"daemon.update_scheduler.deploy_handoff_done",
-						"concern",
-						"process.daemon.lifecycle",
-						"component",
-						"daemon",
-						"deploy_output",
-						updatehandoff.TruncateForLog(deployOutput.String()),
-					)
-				},
-				Log: log,
+		runScheduler(schedulerCtx, selfupdate.SchedulerHooks{
+			Enabled: func() bool {
+				return true
 			},
-		)
+			Mode: func() string {
+				return selfupdate.ModeApply
+			},
+			Options: func() selfupdate.Options {
+				return options(schedulerCtx, updateopts.Overrides{
+					Client:      nil,
+					InstallPath: "",
+					DryRun:      false,
+					Log:         log.With("component", "update"),
+				})
+			},
+			StopForRelaunch: func() {
+				// Deploy output goes through the daemon log rather than the
+				// supervisor's stdio, which belongs to the service manager.
+				var deployOutput strings.Builder
+				if err := deploy(schedulerCtx, &deployOutput, &deployOutput); err != nil {
+					log.WarnContext(schedulerCtx, "daemon.update_scheduler.deploy_handoff_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err, "deploy_output", updatehandoff.TruncateForLog(deployOutput.String()))
+					return
+				}
+				log.InfoContext(schedulerCtx, "daemon.update_scheduler.deploy_handoff_done", "concern", "process.daemon.lifecycle", "component", "daemon", "deploy_output", updatehandoff.TruncateForLog(deployOutput.String()))
+			},
+			Log: log,
+		})
 	}()
-
 	return cancel
 }

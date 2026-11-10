@@ -63,20 +63,13 @@ func FromAnthropicStream(s string) string {
 func FromCodex(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
 	switch codexFinishReason(s) {
-	case codexFinishReasonToolCalls,
-		codexFinishReasonToolCall,
-		codexFinishReasonFunctionCall,
-		codexFinishReasonRequiresAction:
+	case codexFinishReasonToolCalls, codexFinishReasonToolCall, codexFinishReasonFunctionCall, codexFinishReasonRequiresAction:
 		return "tool_calls"
 	case codexFinishReasonMaxTokens, codexFinishReasonMaxOutputTokens, codexFinishReasonLength:
 		return "length"
 	case codexFinishReasonContentFilter, codexFinishReasonRefusal:
 		return "content_filter"
-	case codexFinishReasonStop,
-		codexFinishReasonCompleted,
-		codexFinishReasonComplete,
-		codexFinishReasonEndTurn,
-		codexFinishReasonUnset:
+	case codexFinishReasonStop, codexFinishReasonCompleted, codexFinishReasonComplete, codexFinishReasonEndTurn, codexFinishReasonUnset:
 		return "stop"
 	default:
 		return "stop"
@@ -89,6 +82,5 @@ func FromCodexResponse(status, incompleteReason string) string {
 	if incompleteReason != "" {
 		return FromCodex(incompleteReason)
 	}
-
 	return FromCodex(status)
 }

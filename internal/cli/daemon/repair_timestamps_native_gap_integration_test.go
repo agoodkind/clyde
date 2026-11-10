@@ -60,33 +60,18 @@ type nativeGapResult struct {
 }
 
 func nativeUser(text string) userBoundaryNativeMessage {
-	return userBoundaryNativeMessage{
-		Role: "user",
-		Content: []userBoundaryNativePart{
-			{Type: "text", Text: text, ToolCallID: "", ToolName: "", Args: nil},
-		},
-	}
+	return userBoundaryNativeMessage{Role: "user", Content: []userBoundaryNativePart{{Type: "text", Text: text, ToolCallID: "", ToolName: "", Args: nil}}}
 }
 
 func nativeReply(text string) userBoundaryNativeMessage {
-	return userBoundaryNativeMessage{
-		Role: "assistant",
-		Content: []userBoundaryNativePart{
-			{Type: "text", Text: text, ToolCallID: "", ToolName: "", Args: nil},
-		},
-	}
+	return userBoundaryNativeMessage{Role: "assistant", Content: []userBoundaryNativePart{{Type: "text", Text: text, ToolCallID: "", ToolName: "", Args: nil}}}
 }
 
 func nativeCommand(t *testing.T, callID string, command string) userBoundaryNativeMessage {
 	t.Helper()
 	marshal := combinedCopyJSON(t)
 	args := json.RawMessage(marshal(json.Marshal(userBoundaryArgs{Command: command})))
-	return userBoundaryNativeMessage{
-		Role: "assistant",
-		Content: []userBoundaryNativePart{
-			{Type: "tool-call", Text: "", ToolCallID: callID, ToolName: "Shell", Args: args},
-		},
-	}
+	return userBoundaryNativeMessage{Role: "assistant", Content: []userBoundaryNativePart{{Type: "tool-call", Text: "", ToolCallID: callID, ToolName: "Shell", Args: args}}}
 }
 
 func nativeMinute(minute int) time.Time {
@@ -94,30 +79,11 @@ func nativeMinute(minute int) time.Time {
 }
 
 func nativeTextBubble(kind int, id string, text string, minute int) userBoundaryBubble {
-	return userBoundaryBubble{
-		Version:        3,
-		Type:           kind,
-		BubbleID:       id,
-		Text:           text,
-		CreatedAt:      nativeMinute(minute).Format(time.RFC3339Nano),
-		ToolFormerData: nil,
-	}
+	return userBoundaryBubble{Version: 3, Type: kind, BubbleID: id, Text: text, CreatedAt: nativeMinute(minute).Format(time.RFC3339Nano), ToolFormerData: nil}
 }
 
 func nativeToolBubble(id string, callID string, minute int) userBoundaryBubble {
-	return userBoundaryBubble{
-		Version:   3,
-		Type:      2,
-		BubbleID:  id,
-		Text:      "",
-		CreatedAt: nativeMinute(minute).Format(time.RFC3339Nano),
-		ToolFormerData: &userBoundaryToolFormer{
-			Name:       "run_terminal_command_v2",
-			RawArgs:    "",
-			Status:     "completed",
-			ToolCallID: callID,
-		},
-	}
+	return userBoundaryBubble{Version: 3, Type: 2, BubbleID: id, Text: "", CreatedAt: nativeMinute(minute).Format(time.RFC3339Nano), ToolFormerData: &userBoundaryToolFormer{Name: "run_terminal_command_v2", RawArgs: "", Status: "completed", ToolCallID: callID}}
 }
 
 func savedUser(text string) nativeGapLine {
@@ -148,15 +114,7 @@ func repairAcrossNativeGap(t *testing.T, scenario nativeGapScenario) nativeGapRe
 	t.Setenv("CLYDE_CURSOR_DATA_DIRS", dataRoot)
 	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", projects)
 	marshal := combinedCopyJSON(t)
-	writeNativeComposerStoreOmitting(
-		t,
-		dataRoot,
-		nativeGapComposerID,
-		scenario.native(t),
-		scenario.omitted,
-		scenario.bubbles,
-		nil,
-	)
+	writeNativeComposerStoreOmitting(t, dataRoot, nativeGapComposerID, scenario.native(t), scenario.omitted, scenario.bubbles, nil)
 
 	lines := make([]string, 0, len(scenario.lines))
 	for _, entry := range scenario.lines {
@@ -164,40 +122,22 @@ func repairAcrossNativeGap(t *testing.T, scenario nativeGapScenario) nativeGapRe
 		switch {
 		case entry.user != "":
 			line.Role = "user"
-			line.Message.Content = []userBoundaryLinePart{
-				{Type: "text", Text: entry.user, Name: "", Input: nil},
-			}
+			line.Message.Content = []userBoundaryLinePart{{Type: "text", Text: entry.user, Name: "", Input: nil}}
 		case entry.command != "":
 			line.Role = "assistant"
-			input := json.RawMessage(
-				marshal(json.Marshal(userBoundaryArgs{Command: entry.command})),
-			)
-			line.Message.Content = []userBoundaryLinePart{
-				{Type: "tool_use", Text: "", Name: "Shell", Input: input},
-			}
+			input := json.RawMessage(marshal(json.Marshal(userBoundaryArgs{Command: entry.command})))
+			line.Message.Content = []userBoundaryLinePart{{Type: "tool_use", Text: "", Name: "Shell", Input: input}}
 		default:
 			line.Role = "assistant"
-			line.Message.Content = []userBoundaryLinePart{
-				{Type: "text", Text: entry.reply, Name: "", Input: nil},
-			}
+			line.Message.Content = []userBoundaryLinePart{{Type: "text", Text: entry.reply, Name: "", Input: nil}}
 		}
 		lines = append(lines, marshal(json.Marshal(line)))
 	}
-	transcriptPath := filepath.Join(
-		projects,
-		repairProjectKey,
-		"agent-transcripts",
-		nativeGapComposerID,
-		nativeGapComposerID+".jsonl",
-	)
+	transcriptPath := filepath.Join(projects, repairProjectKey, "agent-transcripts", nativeGapComposerID, nativeGapComposerID+".jsonl")
 	if err := os.MkdirAll(filepath.Dir(transcriptPath), 0o755); err != nil {
 		t.Fatalf("cannot create transcript directory: %v", err)
 	}
-	if err := os.WriteFile(
-		transcriptPath,
-		[]byte(strings.Join(lines, "\n")+"\n"),
-		0o600,
-	); err != nil {
+	if err := os.WriteFile(transcriptPath, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatalf("cannot write transcript: %v", err)
 	}
 
@@ -214,8 +154,7 @@ func repairAcrossNativeGap(t *testing.T, scenario nativeGapScenario) nativeGapRe
 	}
 	var record conversation.Record
 	for _, entry := range stamped {
-		if entry.Record.NativeID == nativeGapComposerID &&
-			strings.HasSuffix(entry.Record.ArtifactPath, ".jsonl") {
+		if entry.Record.NativeID == nativeGapComposerID && strings.HasSuffix(entry.Record.ArtifactPath, ".jsonl") {
 			record = entry.Record
 		}
 	}
@@ -223,10 +162,7 @@ func repairAcrossNativeGap(t *testing.T, scenario nativeGapScenario) nativeGapRe
 		t.Fatalf("index did not discover the transcript; indexed conversations: %d", len(stamped))
 	}
 	kinds := backfillTestContentKinds(t)
-	messages, err := index.LoadMessagesWithOptions(
-		record,
-		daemonsvc.SemanticConversationLoadOptions(kinds),
-	)
+	messages, err := index.LoadMessagesWithOptions(record, daemonsvc.SemanticConversationLoadOptions(kinds))
 	if err != nil {
 		t.Fatalf("cannot load transcript messages: %v", err)
 	}
@@ -249,12 +185,7 @@ func repairAcrossNativeGap(t *testing.T, scenario nativeGapScenario) nativeGapRe
 	}
 	client := openRepairClient(t, address, vectorsearch.LayoutShared)
 	manifest := []semsearch.Fingerprint{{ConversationID: record.ID, Value: "native-gap"}}
-	if _, err := client.UpsertConversationDocuments(
-		ctx,
-		repairCollectionID,
-		docs,
-		manifest,
-	); err != nil {
+	if _, err := client.UpsertConversationDocuments(ctx, repairCollectionID, docs, manifest); err != nil {
 		t.Fatalf("cannot seed conversation documents: %v", err)
 	}
 	time.Sleep(repairVisibilityWait)
@@ -271,18 +202,7 @@ func repairAcrossNativeGap(t *testing.T, scenario nativeGapScenario) nativeGapRe
 		sourceTotals:   newSourceRepairTotals(),
 		evidenceOut:    &evidence,
 	}
-	options := repairTimestampsOptions{
-		DryRun:         false,
-		Provider:       "",
-		ConversationID: record.ID,
-		Limit:          0,
-		MaxRows:        100,
-		After:          "",
-		Resume:         false,
-		ProgressPath:   filepath.Join(home, "progress.json"),
-		SourceStore:    true,
-		EvidencePath:   "",
-	}
+	options := repairTimestampsOptions{DryRun: false, Provider: "", ConversationID: record.ID, Limit: 0, MaxRows: 100, After: "", Resume: false, ProgressPath: filepath.Join(home, "progress.json"), SourceStore: true, EvidencePath: ""}
 	if _, err := runRepair(t, ctx, base, options); err != nil {
 		t.Fatalf("cannot repair timestamps from source store: %v", err)
 	}
@@ -296,27 +216,14 @@ func repairAcrossNativeGap(t *testing.T, scenario nativeGapScenario) nativeGapRe
 		}
 		entries = append(entries, entry)
 	}
-	return nativeGapResult{
-		seeded:          seeded,
-		seededVectors:   seededVectors,
-		repaired:        repaired,
-		repairedVectors: repairedVectors,
-		evidence:        entries,
-	}
+	return nativeGapResult{seeded: seeded, seededVectors: seededVectors, repaired: repaired, repairedVectors: repairedVectors, evidence: entries}
 }
 
 // requireStoredFieldsPreserved checks that repair preserves row counts, vector counts and bits, content, paths, vector keys, and unrelated scalar fields.
 func requireStoredFieldsPreserved(t *testing.T, result nativeGapResult) {
 	t.Helper()
-	if len(result.repaired) != len(result.seeded) ||
-		len(result.repairedVectors) != len(result.seededVectors) {
-		t.Fatalf(
-			"repair changed row or vector counts; repaired rows, seeded rows, repaired vectors, seeded vectors: %d, %d, %d, %d",
-			len(result.repaired),
-			len(result.seeded),
-			len(result.repairedVectors),
-			len(result.seededVectors),
-		)
+	if len(result.repaired) != len(result.seeded) || len(result.repairedVectors) != len(result.seededVectors) {
+		t.Fatalf("repair changed row or vector counts; repaired rows, seeded rows, repaired vectors, seeded vectors: %d, %d, %d, %d", len(result.repaired), len(result.seeded), len(result.repairedVectors), len(result.seededVectors))
 	}
 	for key, bits := range result.seededVectors {
 		if !slices.Equal(bits, result.repairedVectors[key]) {
@@ -325,15 +232,8 @@ func requireStoredFieldsPreserved(t *testing.T, result nativeGapResult) {
 	}
 	for id, after := range result.repaired {
 		before := result.seeded[id]
-		if after.content != before.content || after.relativePath != before.relativePath ||
-			after.vectorKey != before.vectorKey ||
-			after.others != before.others {
-			t.Fatalf(
-				"repair changed stored fields unrelated to timestamps; row ID, before, after: %s: %+v, %+v",
-				id,
-				before,
-				after,
-			)
+		if after.content != before.content || after.relativePath != before.relativePath || after.vectorKey != before.vectorKey || after.others != before.others {
+			t.Fatalf("repair changed stored fields unrelated to timestamps; row ID, before, after: %s: %+v, %+v", id, before, after)
 		}
 	}
 }
@@ -345,52 +245,34 @@ func TestRepairKeepsEveryRowUnknownWhenANativeRecordIsMissing(t *testing.T) {
 			name: "identical tool call missing",
 			native: func(t *testing.T) []userBoundaryNativeMessage {
 				t.Helper()
-				return []userBoundaryNativeMessage{
-					nativeUser(nativeGapFirst),
-					nativeCommand(t, "call_a", nativeGapGit),
-					nativeCommand(t, "call_b", nativeGapGit),
-				}
+				return []userBoundaryNativeMessage{nativeUser(nativeGapFirst), nativeCommand(t, "call_a", nativeGapGit), nativeCommand(t, "call_b", nativeGapGit)}
 			},
 			omitted: map[int]bool{2: true},
-			bubbles: []userBoundaryBubble{
-				nativeTextBubble(1, "u1", nativeGapFirst, 0),
-				nativeToolBubble("t1", "call_a", 1),
-				nativeToolBubble("t2", "call_b", 3),
-			},
-			lines: []nativeGapLine{savedUser(nativeGapFirst), savedCommand(nativeGapGit)},
+			bubbles: []userBoundaryBubble{nativeTextBubble(1, "u1", nativeGapFirst, 0), nativeToolBubble("t1", "call_a", 1), nativeToolBubble("t2", "call_b", 3)},
+			lines:   []nativeGapLine{savedUser(nativeGapFirst), savedCommand(nativeGapGit)},
 		},
 		{
 			name: "repeated user text aligns the saved history to earlier native turns",
 			native: func(t *testing.T) []userBoundaryNativeMessage {
 				t.Helper()
 				return []userBoundaryNativeMessage{
-					nativeUser(nativeGapSame),
-					nativeCommand(t, "call_a", nativeGapGit),
-					nativeUser(nativeGapSame),
-					nativeCommand(t, "call_b", nativeGapGit),
-					nativeUser(nativeGapSame + "\n"),
-					nativeReply(nativeGapAck),
-					nativeUser(nativeGapNext),
-					nativeCommand(t, "call_c", nativeGapTest),
+					nativeUser(nativeGapSame), nativeCommand(t, "call_a", nativeGapGit),
+					nativeUser(nativeGapSame), nativeCommand(t, "call_b", nativeGapGit),
+					nativeUser(nativeGapSame + "\n"), nativeReply(nativeGapAck),
+					nativeUser(nativeGapNext), nativeCommand(t, "call_c", nativeGapTest),
 				}
 			},
 			omitted: map[int]bool{4: true},
 			bubbles: []userBoundaryBubble{
-				nativeTextBubble(1, "u1", nativeGapSame, 0),
-				nativeToolBubble("t1", "call_a", 1),
-				nativeTextBubble(1, "u2", nativeGapSame, 2),
-				nativeToolBubble("t2", "call_b", 3),
+				nativeTextBubble(1, "u1", nativeGapSame, 0), nativeToolBubble("t1", "call_a", 1),
+				nativeTextBubble(1, "u2", nativeGapSame, 2), nativeToolBubble("t2", "call_b", 3),
 				nativeTextBubble(2, "a1", nativeGapAck, 4),
-				nativeTextBubble(1, "u3", nativeGapNext, 5),
-				nativeToolBubble("t3", "call_c", 6),
+				nativeTextBubble(1, "u3", nativeGapNext, 5), nativeToolBubble("t3", "call_c", 6),
 			},
 			lines: []nativeGapLine{
-				savedUser(nativeGapSame),
-				savedCommand(nativeGapGit),
-				savedUser(nativeGapSame),
-				savedReply(nativeGapAck),
-				savedUser(nativeGapNext),
-				savedCommand(nativeGapTest),
+				savedUser(nativeGapSame), savedCommand(nativeGapGit),
+				savedUser(nativeGapSame), savedReply(nativeGapAck),
+				savedUser(nativeGapNext), savedCommand(nativeGapTest),
 			},
 		},
 		{
@@ -398,77 +280,50 @@ func TestRepairKeepsEveryRowUnknownWhenANativeRecordIsMissing(t *testing.T) {
 			native: func(t *testing.T) []userBoundaryNativeMessage {
 				t.Helper()
 				return []userBoundaryNativeMessage{
-					nativeUser(nativeGapFirst),
-					nativeCommand(t, "call_a", nativeGapGit),
-					nativeUser(nativeGapSecond),
-					nativeCommand(t, "call_lost", nativeGapGit),
-					nativeUser(nativeGapThird),
-					nativeCommand(t, "call_b", nativeGapTest),
+					nativeUser(nativeGapFirst), nativeCommand(t, "call_a", nativeGapGit),
+					nativeUser(nativeGapSecond), nativeCommand(t, "call_lost", nativeGapGit),
+					nativeUser(nativeGapThird), nativeCommand(t, "call_b", nativeGapTest),
 				}
 			},
 			omitted: map[int]bool{3: true},
 			bubbles: []userBoundaryBubble{
-				nativeTextBubble(1, "u1", nativeGapFirst, 0),
-				nativeToolBubble("t1", "call_a", 1),
+				nativeTextBubble(1, "u1", nativeGapFirst, 0), nativeToolBubble("t1", "call_a", 1),
 				nativeTextBubble(1, "u2", nativeGapSecond, 2),
-				nativeTextBubble(1, "u3", nativeGapThird, 4),
-				nativeToolBubble("t2", "call_b", 5),
+				nativeTextBubble(1, "u3", nativeGapThird, 4), nativeToolBubble("t2", "call_b", 5),
 			},
 			lines: []nativeGapLine{
-				savedUser(nativeGapFirst),
-				savedCommand(nativeGapGit),
-				savedUser(nativeGapSecond),
-				savedCommand(nativeGapGit),
-				savedUser(nativeGapThird),
-				savedCommand(nativeGapTest),
+				savedUser(nativeGapFirst), savedCommand(nativeGapGit),
+				savedUser(nativeGapSecond), savedCommand(nativeGapGit),
+				savedUser(nativeGapThird), savedCommand(nativeGapTest),
 			},
 		},
 		{
 			name: "identical assistant text missing",
 			native: func(*testing.T) []userBoundaryNativeMessage {
-				return []userBoundaryNativeMessage{
-					nativeUser(nativeGapFirst),
-					nativeReply(nativeGapReply),
-					nativeReply(nativeGapReply + "\n"),
-				}
+				return []userBoundaryNativeMessage{nativeUser(nativeGapFirst), nativeReply(nativeGapReply), nativeReply(nativeGapReply + "\n")}
 			},
 			omitted: map[int]bool{2: true},
-			bubbles: []userBoundaryBubble{
-				nativeTextBubble(1, "u1", nativeGapFirst, 0),
-				nativeTextBubble(2, "a1", nativeGapReply, 1),
-			},
-			lines: []nativeGapLine{savedUser(nativeGapFirst), savedReply(nativeGapReply)},
+			bubbles: []userBoundaryBubble{nativeTextBubble(1, "u1", nativeGapFirst, 0), nativeTextBubble(2, "a1", nativeGapReply, 1)},
+			lines:   []nativeGapLine{savedUser(nativeGapFirst), savedReply(nativeGapReply)},
 		},
 	}
 	for _, scenario := range scenarios {
-		t.Run(
-			scenario.name,
-			func(t *testing.T) {
-				result := repairAcrossNativeGap(t, scenario)
-				requireStoredFieldsPreserved(t, result)
-				if len(result.repaired) == 0 || len(result.evidence) == 0 {
-					t.Fatalf(
-						"repair did not produce both rows and evidence; row count, evidence count: %d, %d",
-						len(result.repaired),
-						len(result.evidence),
-					)
+		t.Run(scenario.name, func(t *testing.T) {
+			result := repairAcrossNativeGap(t, scenario)
+			requireStoredFieldsPreserved(t, result)
+			if len(result.repaired) == 0 || len(result.evidence) == 0 {
+				t.Fatalf("repair did not produce both rows and evidence; row count, evidence count: %d, %d", len(result.repaired), len(result.evidence))
+			}
+			for _, row := range result.repaired {
+				if !row.timestampNull {
+					t.Fatalf("repair dated a row that must remain unknown; row: %+v", row)
 				}
-				for _, row := range result.repaired {
-					if !row.timestampNull {
-						t.Fatalf("repair dated a row that must remain unknown; row: %+v", row)
-					}
+			}
+			for _, entry := range result.evidence {
+				if entry.Outcome != vectorsearch.SourceOutcomeNativeGap || entry.ToolCallID != "" || entry.Chosen != 0 {
+					t.Fatalf("repair evidence differs from the expected native gap result; evidence: %+v", entry)
 				}
-				for _, entry := range result.evidence {
-					if entry.Outcome != vectorsearch.SourceOutcomeNativeGap ||
-						entry.ToolCallID != "" ||
-						entry.Chosen != 0 {
-						t.Fatalf(
-							"repair evidence differs from the expected native gap result; evidence: %+v",
-							entry,
-						)
-					}
-				}
-			},
-		)
+			}
+		})
 	}
 }

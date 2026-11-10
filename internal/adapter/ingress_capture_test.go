@@ -20,22 +20,12 @@ import (
 func openIngressTestStore(t *testing.T) (*capture.Store, string) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "capture.db")
-	store, err := capture.Open(
-		context.Background(),
-		capture.Config{
-			DBPath:            dbPath,
-			MaxBodyBytes:      0,
-			RetentionMaxAge:   0,
-			RetentionMaxBytes: 0,
-			RetentionInterval: 0,
-			QueueDepth:        0,
-		},
-		nil,
-	)
+	store, err := capture.Open(context.Background(), capture.Config{
+		DBPath: dbPath, MaxBodyBytes: 0, RetentionMaxAge: 0, RetentionMaxBytes: 0, RetentionInterval: 0, QueueDepth: 0,
+	}, nil)
 	if err != nil {
 		t.Fatalf("open capture store: %v", err)
 	}
-
 	return store, dbPath
 }
 
@@ -64,36 +54,24 @@ func TestBeginIngressCaptureGate(t *testing.T) {
 		{name: "store and knob on", store: store, enabled: true, wantNil: false},
 	}
 	for _, tc := range cases {
-		t.Run(
-			tc.name,
-			func(t *testing.T) {
-				s := ingressTestServer(tc.store, tc.enabled)
-				base := httptest.NewRecorder()
-				hctx := &handlerCtx{
-					Writer:      base,
-					Request:     nil,
-					Family:      adapterRouteOpenAI,
-					RequestID:   "r",
-					Correlation: correlation.Context{},
+		t.Run(tc.name, func(t *testing.T) {
+			s := ingressTestServer(tc.store, tc.enabled)
+			base := httptest.NewRecorder()
+			hctx := &handlerCtx{Writer: base, Request: nil, Family: adapterRouteOpenAI, RequestID: "r", Correlation: correlation.Context{}}
+			capW := s.beginIngressCapture(hctx)
+			if (capW == nil) != tc.wantNil {
+				t.Fatalf("beginIngressCapture nil=%v, want nil=%v", capW == nil, tc.wantNil)
+			}
+			if tc.wantNil {
+				if hctx.Writer != base {
+					t.Fatal("writer was wrapped when capture is off")
 				}
-				capW := s.beginIngressCapture(hctx)
-				if (capW == nil) != tc.wantNil {
-					t.Fatalf("beginIngressCapture nil=%v, want nil=%v", capW == nil, tc.wantNil)
-				}
-
-				if tc.wantNil {
-					if hctx.Writer != base {
-						t.Fatal("writer was wrapped when capture is off")
-					}
-
-					return
-				}
-
-				if _, ok := hctx.Writer.(*ingressCaptureWriter); !ok {
-					t.Fatalf("hctx.Writer not wrapped, got %T", hctx.Writer)
-				}
-			},
-		)
+				return
+			}
+			if _, ok := hctx.Writer.(*ingressCaptureWriter); !ok {
+				t.Fatalf("hctx.Writer not wrapped, got %T", hctx.Writer)
+			}
+		})
 	}
 }
 
@@ -106,20 +84,13 @@ func TestIngressCaptureRecordsResponseAndRedactsAuth(t *testing.T) {
 	s := ingressTestServer(store, true)
 
 	base := httptest.NewRecorder()
-	hctx := &handlerCtx{
-		Writer:      base,
-		Request:     nil,
-		Family:      adapterRouteOpenAI,
-		RequestID:   "req-ing-1",
-		Correlation: correlation.Context{},
-	}
+	hctx := &handlerCtx{Writer: base, Request: nil, Family: adapterRouteOpenAI, RequestID: "req-ing-1", Correlation: correlation.Context{}}
 	capW := s.beginIngressCapture(hctx)
 	if capW == nil {
 		t.Fatal("expected wrapper")
 	}
 
 	hctx.Writer.Header().Set("Content-Type", "text/event-stream")
-
 	respChunks := [][]byte{[]byte("data: {\"id\":\"chatcmpl-x\"}\n\n"), []byte("data: [DONE]\n\n")}
 	for _, chunk := range respChunks {
 		if _, err := hctx.Writer.Write(chunk); err != nil {
@@ -143,15 +114,11 @@ func TestIngressCaptureRecordsResponseAndRedactsAuth(t *testing.T) {
 		client, path, respType string
 		status                 int
 	)
-	row := db.QueryRow(
-		`SELECT client, path, status, resp_content_type FROM requests WHERE client='adapter.ingress'`,
-	)
+	row := db.QueryRow(`SELECT client, path, status, resp_content_type FROM requests WHERE client='adapter.ingress'`)
 	if err := row.Scan(&client, &path, &status, &respType); err != nil {
 		t.Fatalf("scan request row: %v", err)
 	}
-
-	if path != "/v1/chat/completions" || status != http.StatusOK ||
-		respType != "text/event-stream" {
+	if path != "/v1/chat/completions" || status != http.StatusOK || respType != "text/event-stream" {
 		t.Fatalf("row path=%q status=%d resp_type=%q", path, status, respType)
 	}
 
@@ -159,19 +126,15 @@ func TestIngressCaptureRecordsResponseAndRedactsAuth(t *testing.T) {
 	if string(gotReq) != string(reqBody) {
 		t.Fatalf("request body=%q want %q", gotReq, reqBody)
 	}
-
 	wantResp := string(respChunks[0]) + string(respChunks[1])
 	if gotResp := ingressBody(t, db, "response"); string(gotResp) != wantResp {
 		t.Fatalf("response body=%q want %q", gotResp, wantResp)
 	}
 
 	var headers string
-	if err := db.QueryRow(`SELECT req_headers FROM requests WHERE client='adapter.ingress'`).Scan(
-		&headers,
-	); err != nil {
+	if err := db.QueryRow(`SELECT req_headers FROM requests WHERE client='adapter.ingress'`).Scan(&headers); err != nil {
 		t.Fatalf("scan req_headers: %v", err)
 	}
-
 	if strings.Contains(headers, "secret-should-not-store") {
 		t.Fatalf("req_headers leaked Authorization: %q", headers)
 	}
@@ -179,16 +142,10 @@ func TestIngressCaptureRecordsResponseAndRedactsAuth(t *testing.T) {
 
 func TestIngressCaptureRedactsRequestAuthorizationEchoFromStoredResponse(t *testing.T) {
 	const authorization = "Bearer ingress-authorization-secret"
-	upstream := httptest.NewServer(
-		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write(
-				[]byte(
-					`{"id":"chatcmpl-test","object":"chat.completion","echo":"` + authorization + `","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`,
-				),
-			)
-		}),
-	)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-test","object":"chat.completion","echo":"` + authorization + `","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
 	t.Cleanup(upstream.Close)
 
 	store, dbPath := openIngressTestStore(t)
@@ -204,14 +161,8 @@ func TestIngressCaptureRedactsRequestAuthorizationEchoFromStoredResponse(t *test
 	recorder := httptest.NewRecorder()
 	s.mux.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
-		t.Fatalf(
-			"status = %d, want %d; body=%s",
-			recorder.Code,
-			http.StatusOK,
-			recorder.Body.String(),
-		)
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
 	}
-
 	if err := store.Close(context.Background(), "test"); err != nil {
 		t.Fatalf("close store: %v", err)
 	}
@@ -221,7 +172,6 @@ func TestIngressCaptureRedactsRequestAuthorizationEchoFromStoredResponse(t *test
 	if bytes.Contains(storedResponse, []byte(authorization)) {
 		t.Fatalf("stored response leaked request Authorization: %s", storedResponse)
 	}
-
 	if !bytes.Contains(storedResponse, []byte("[REDACTED]")) {
 		t.Fatalf("stored response did not redact request Authorization echo: %s", storedResponse)
 	}
@@ -235,13 +185,7 @@ func TestIngressCaptureErrorStatusFromAdapterError(t *testing.T) {
 	s := ingressTestServer(store, true)
 
 	base := httptest.NewRecorder()
-	hctx := &handlerCtx{
-		Writer:      base,
-		Request:     nil,
-		Family:      adapterRouteOpenAI,
-		RequestID:   "req-err",
-		Correlation: correlation.Context{},
-	}
+	hctx := &handlerCtx{Writer: base, Request: nil, Family: adapterRouteOpenAI, RequestID: "req-err", Correlation: correlation.Context{}}
 	capW := s.beginIngressCapture(hctx)
 	if capW == nil {
 		t.Fatal("expected wrapper")
@@ -249,14 +193,7 @@ func TestIngressCaptureErrorStatusFromAdapterError(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	aerr := newAdapterError(adapterErrorInvalidRequest, "bad request")
-	s.finishIngressCapture(
-		capW,
-		correlation.Context{RequestID: "req-err"},
-		req,
-		[]byte(`{}`),
-		clock.Now(),
-		aerr,
-	)
+	s.finishIngressCapture(capW, correlation.Context{RequestID: "req-err"}, req, []byte(`{}`), clock.Now(), aerr)
 
 	if err := store.Close(context.Background(), "test"); err != nil {
 		t.Fatalf("close store: %v", err)
@@ -264,12 +201,9 @@ func TestIngressCaptureErrorStatusFromAdapterError(t *testing.T) {
 
 	db := openIngressVerifier(t, dbPath)
 	var status int
-	if err := db.QueryRow(`SELECT status FROM requests WHERE client='adapter.ingress'`).Scan(
-		&status,
-	); err != nil {
+	if err := db.QueryRow(`SELECT status FROM requests WHERE client='adapter.ingress'`).Scan(&status); err != nil {
 		t.Fatalf("scan status: %v", err)
 	}
-
 	if status != aerr.HTTPStatus || status == 0 {
 		t.Fatalf("error-row status=%d want %d (adapterError HTTPStatus)", status, aerr.HTTPStatus)
 	}
@@ -281,9 +215,7 @@ func openIngressVerifier(t *testing.T, path string) *sql.DB {
 	if err != nil {
 		t.Fatalf("open verifier: %v", err)
 	}
-
 	t.Cleanup(func() { _ = db.Close() })
-
 	return db
 }
 
@@ -294,6 +226,5 @@ func ingressBody(t *testing.T, db *sql.DB, which string) []byte {
 	if err := db.QueryRow(q, which).Scan(&data); err != nil {
 		t.Fatalf("scan %s body: %v", which, err)
 	}
-
 	return data
 }

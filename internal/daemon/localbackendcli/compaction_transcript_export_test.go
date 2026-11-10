@@ -106,64 +106,20 @@ type injectedProbeExport struct {
 func TestExportAppliesContentKindsToInjectedClaudeTranscript(t *testing.T) {
 	binaryPath := buildClydeCLI(t)
 	home := t.TempDir()
-	transcriptPath := filepath.Join(
-		home,
-		".claude",
-		"projects",
-		strings.ReplaceAll(injectedProbeWorkspace, "/", "-"),
-		injectedProbeSession+".jsonl",
-	)
+	transcriptPath := filepath.Join(home, ".claude", "projects", strings.ReplaceAll(injectedProbeWorkspace, "/", "-"), injectedProbeSession+".jsonl")
 	installLocalProofTranscript(t, transcriptPath, injectedProbeTranscript(t))
 	before := injectedProbeDigest(t, transcriptPath)
 	environment := environmentWith(localProofProviderEnvironment(t, home)...)
 
 	settingsPath := writeSandboxSemanticSettings(t, "")
 	sandboxDaemon := startLocalProofDaemon(t, binaryPath, home, "--semantic-settings", settingsPath)
-	waitForInjectedProbeMCP(
-		t,
-		binaryPath,
-		sandboxDaemon.environment,
-		injectedProbeClaude,
-		injectedProbeSession,
-	)
+	waitForInjectedProbeMCP(t, binaryPath, sandboxDaemon.environment, injectedProbeClaude, injectedProbeSession)
 
 	exports := []injectedProbeExport{
-		{
-			name:      "chat",
-			provider:  injectedProbeClaude,
-			session:   injectedProbeSession,
-			only:      injectedProbeChatOnly,
-			maxTokens: "",
-			output:    "",
-			lastN:     injectedProbeLastN,
-		},
-		{
-			name:      "broad",
-			provider:  injectedProbeClaude,
-			session:   injectedProbeSession,
-			only:      injectedProbeBroad,
-			maxTokens: "",
-			output:    "",
-			lastN:     injectedProbeLastN,
-		},
-		{
-			name:      "chat capped",
-			provider:  injectedProbeClaude,
-			session:   injectedProbeSession,
-			only:      injectedProbeChatOnly,
-			maxTokens: injectedProbeMaxTokens,
-			output:    "",
-			lastN:     injectedProbeLastN,
-		},
-		{
-			name:      "raw",
-			provider:  injectedProbeClaude,
-			session:   injectedProbeSession,
-			only:      injectedProbeRaw,
-			maxTokens: "",
-			output:    "",
-			lastN:     injectedProbeLastN,
-		},
+		{name: "chat", provider: injectedProbeClaude, session: injectedProbeSession, only: injectedProbeChatOnly, maxTokens: "", output: "", lastN: injectedProbeLastN},
+		{name: "broad", provider: injectedProbeClaude, session: injectedProbeSession, only: injectedProbeBroad, maxTokens: "", output: "", lastN: injectedProbeLastN},
+		{name: "chat capped", provider: injectedProbeClaude, session: injectedProbeSession, only: injectedProbeChatOnly, maxTokens: injectedProbeMaxTokens, output: "", lastN: injectedProbeLastN},
+		{name: "raw", provider: injectedProbeClaude, session: injectedProbeSession, only: injectedProbeRaw, maxTokens: "", output: "", lastN: injectedProbeLastN},
 	}
 	for _, export := range exports {
 		bodies := map[string]string{
@@ -184,7 +140,6 @@ func TestExportAppliesContentKindsToInjectedClaudeTranscript(t *testing.T) {
 			}
 		}
 	}
-
 	if after := injectedProbeDigest(t, transcriptPath); after != before {
 		t.Errorf("export changed the source transcript: %s, %s", before, after)
 	}
@@ -192,39 +147,20 @@ func TestExportAppliesContentKindsToInjectedClaudeTranscript(t *testing.T) {
 
 func assertInjectedProbeChat(t *testing.T, label string, body string) {
 	t.Helper()
-
-	for _, kept := range []string{
-		injectedProbeSummaryProse,
-		injectedProbeSummaryTrailer,
-		injectedProbeUserChat,
-		injectedProbeAssistantChat,
-		injectedProbeImitationHead,
-		injectedProbeImitationTail,
-		injectedProbeLaterAnswer,
-		injectedProbeFinalAnswer,
-	} {
+	for _, kept := range []string{injectedProbeSummaryProse, injectedProbeSummaryTrailer, injectedProbeUserChat, injectedProbeAssistantChat, injectedProbeImitationHead, injectedProbeImitationTail, injectedProbeLaterAnswer, injectedProbeFinalAnswer} {
 		if !strings.Contains(body, kept) {
 			t.Errorf("%s export does not contain %q:\n%s", label, kept, body)
 		}
 	}
-
 	if !strings.Contains(body, injectedProbeQuotation) {
 		t.Errorf("%s export does not contain the user quotation byte for byte:\n%s", label, body)
 	}
-
 	assertInjectedProbeOmits(t, label, body)
 }
 
 func assertInjectedProbeOmits(t *testing.T, label string, body string) {
 	t.Helper()
-
-	for _, omitted := range []string{
-		injectedProbeSystem,
-		injectedProbeReasoning,
-		injectedProbeToolCall,
-		injectedProbeToolOutput,
-		injectedProbeOther,
-	} {
+	for _, omitted := range []string{injectedProbeSystem, injectedProbeReasoning, injectedProbeToolCall, injectedProbeToolOutput, injectedProbeOther} {
 		if strings.Contains(body, omitted) {
 			t.Errorf("%s export contains excluded text %q:\n%s", label, omitted, body)
 		}
@@ -233,20 +169,11 @@ func assertInjectedProbeOmits(t *testing.T, label string, body string) {
 
 func assertInjectedProbeBroad(t *testing.T, label string, body string) {
 	t.Helper()
-
-	for _, kept := range []string{
-		injectedProbeSummaryProse,
-		injectedProbeUserChat,
-		injectedProbeSystem,
-		injectedProbeReasoning,
-		injectedProbeToolCall,
-		injectedProbeToolOutput,
-	} {
+	for _, kept := range []string{injectedProbeSummaryProse, injectedProbeUserChat, injectedProbeSystem, injectedProbeReasoning, injectedProbeToolCall, injectedProbeToolOutput} {
 		if !strings.Contains(body, kept) {
 			t.Errorf("%s export does not contain %q:\n%s", label, kept, body)
 		}
 	}
-
 	if strings.Contains(body, injectedProbeOther) {
 		t.Errorf("%s export contains the other segment without raw_json_metadata:\n%s", label, body)
 	}
@@ -254,12 +181,7 @@ func assertInjectedProbeBroad(t *testing.T, label string, body string) {
 
 func assertInjectedProbeRaw(t *testing.T, label string, body string) {
 	t.Helper()
-
-	for _, kept := range []string{
-		injectedProbeSummaryProse,
-		injectedProbeUserChat,
-		injectedProbeOther,
-	} {
+	for _, kept := range []string{injectedProbeSummaryProse, injectedProbeUserChat, injectedProbeOther} {
 		if !strings.Contains(body, kept) {
 			t.Errorf("%s export does not contain %q:\n%s", label, kept, body)
 		}
@@ -281,49 +203,24 @@ const legacyProbeSpan = "<pre-compaction-transcript>\n" +
 func TestExportRejectsFilteredLegacyInjectedClaudeTranscript(t *testing.T) {
 	binaryPath := buildClydeCLI(t)
 	home := t.TempDir()
-	transcriptPath := filepath.Join(
-		home,
-		".claude",
-		"projects",
-		strings.ReplaceAll(injectedProbeWorkspace, "/", "-"),
-		legacyProbeSession+".jsonl",
-	)
+	transcriptPath := filepath.Join(home, ".claude", "projects", strings.ReplaceAll(injectedProbeWorkspace, "/", "-"), legacyProbeSession+".jsonl")
 	summary := injectedProbeSummaryPreface + injectedProbeSummaryProse + "\n\n" + legacyProbeSpan + "\n\n" + injectedProbeSummaryTrailer
-	installLocalProofTranscript(
-		t,
-		transcriptPath,
-		injectedProbeSummaryTranscript(t, legacyProbeSession, summary),
-	)
+	installLocalProofTranscript(t, transcriptPath, injectedProbeSummaryTranscript(t, legacyProbeSession, summary))
 	before := injectedProbeDigest(t, transcriptPath)
 	environment := environmentWith(localProofProviderEnvironment(t, home)...)
 
 	settingsPath := writeSandboxSemanticSettings(t, "")
 	sandboxDaemon := startLocalProofDaemon(t, binaryPath, home, "--semantic-settings", settingsPath)
-	waitForInjectedProbeMCP(
-		t,
-		binaryPath,
-		sandboxDaemon.environment,
-		injectedProbeClaude,
-		legacyProbeSession,
-	)
+	waitForInjectedProbeMCP(t, binaryPath, sandboxDaemon.environment, injectedProbeClaude, legacyProbeSession)
 
 	conversationID := injectedProbeClaude + ":" + legacyProbeSession
 	summaryUUID := injectedProbeUUID(3)
 	cliOutput := filepath.Join(t.TempDir(), legacyProbeExportFile)
-	filtered := injectedProbeExport{
-		name:      "legacy chat",
-		provider:  injectedProbeClaude,
-		session:   legacyProbeSession,
-		only:      injectedProbeChatOnly,
-		maxTokens: "",
-		output:    cliOutput,
-		lastN:     injectedProbeLastN,
-	}
+	filtered := injectedProbeExport{name: "legacy chat", provider: injectedProbeClaude, session: legacyProbeSession, only: injectedProbeChatOnly, maxTokens: "", output: cliOutput, lastN: injectedProbeLastN}
 	stdout, stderr, err := runInjectedProbeCLI(t, binaryPath, environment, filtered)
 	if err == nil {
 		t.Errorf("cli chat export of a legacy transcript succeeded:\n%s", stdout)
 	}
-
 	assertLegacyProbeError(t, "cli", stderr, conversationID, summaryUUID)
 	assertLegacyProbeNoFile(t, "cli", cliOutput)
 
@@ -333,72 +230,39 @@ func TestExportRejectsFilteredLegacyInjectedClaudeTranscript(t *testing.T) {
 	if err != nil {
 		t.Fatalf("clyde_export_transcript call failed: %v", err)
 	}
-
 	if response.Result == nil || !response.Result.IsError {
-		t.Errorf(
-			"mcp chat export of a legacy transcript did not return a tool error: %+v %+v",
-			response.Error,
-			response.Result,
-		)
+		t.Errorf("mcp chat export of a legacy transcript did not return a tool error: %+v %+v", response.Error, response.Result)
 	} else {
 		assertLegacyProbeError(t, "mcp", response.Result.text(), conversationID, summaryUUID)
 	}
-
 	assertLegacyProbeNoFile(t, "mcp", mcpOutput)
 
-	complete := injectedProbeExport{
-		name:      "legacy all",
-		provider:  injectedProbeClaude,
-		session:   legacyProbeSession,
-		only:      injectedProbeAll,
-		maxTokens: "",
-		output:    "",
-		lastN:     injectedProbeLastN,
-	}
+	complete := injectedProbeExport{name: "legacy all", provider: injectedProbeClaude, session: legacyProbeSession, only: injectedProbeAll, maxTokens: "", output: "", lastN: injectedProbeLastN}
 	bodies := map[string]string{
 		"cli": injectedProbeCLI(t, binaryPath, environment, complete),
 		"mcp": injectedProbeMCPBody(t, binaryPath, sandboxDaemon.environment, complete),
 	}
 	encodedSpan := strings.Trim(injectedProbeJSON(t, legacyProbeSpan), `"`)
-
 	for surface, body := range bodies {
 		if !strings.Contains(body, encodedSpan) {
-			t.Errorf(
-				"%s export with every content kind does not contain the original transcript:\n%s",
-				surface,
-				body,
-			)
+			t.Errorf("%s export with every content kind does not contain the original transcript:\n%s", surface, body)
 		}
-
 		if !strings.Contains(body, injectedProbeQuotation) {
-			t.Errorf(
-				"%s export with every content kind does not contain the user quotation byte for byte:\n%s",
-				surface,
-				body,
-			)
+			t.Errorf("%s export with every content kind does not contain the user quotation byte for byte:\n%s", surface, body)
 		}
 	}
-
 	if after := injectedProbeDigest(t, transcriptPath); after != before {
 		t.Errorf("export changed the source transcript: %s, %s", before, after)
 	}
 }
 
-func assertLegacyProbeError(
-	t *testing.T,
-	surface string,
-	text string,
-	conversationID string,
-	summaryUUID string,
-) {
+func assertLegacyProbeError(t *testing.T, surface string, text string, conversationID string, summaryUUID string) {
 	t.Helper()
-
 	for _, want := range []string{conversationID, summaryUUID, injectedProbeAll} {
 		if !strings.Contains(text, want) {
 			t.Errorf("%s legacy export error does not contain %q:\n%s", surface, want, text)
 		}
 	}
-
 	if strings.Contains(text, legacyProbeSystem) {
 		t.Errorf("%s legacy export error contains transcript text:\n%s", surface, text)
 	}
@@ -407,12 +271,7 @@ func assertLegacyProbeError(
 func assertLegacyProbeNoFile(t *testing.T, surface string, path string) {
 	t.Helper()
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf(
-			"%s rejected legacy export left a file or the file check failed %s: %v",
-			surface,
-			path,
-			err,
-		)
+		t.Errorf("%s rejected legacy export left a file or the file check failed %s: %v", surface, path, err)
 	}
 }
 
@@ -420,10 +279,7 @@ func assertLegacyProbeNoFile(t *testing.T, surface string, path string) {
 // injection between summary prose and a summary trailer.
 func injectedProbeTranscript(t *testing.T) string {
 	t.Helper()
-	summary := injectedProbeSummaryPreface + injectedProbeSummaryProse + injectedProbeInjection(
-		t,
-	) + "\n" + injectedProbeSummaryTrailer
-
+	summary := injectedProbeSummaryPreface + injectedProbeSummaryProse + injectedProbeInjection(t) + "\n" + injectedProbeSummaryTrailer
 	return injectedProbeSummaryTranscript(t, injectedProbeSession, summary)
 }
 
@@ -434,62 +290,14 @@ func injectedProbeTranscript(t *testing.T) string {
 func injectedProbeSummaryTranscript(t *testing.T, session string, summary string) string {
 	t.Helper()
 	records := []string{
-		injectedProbeRecord(
-			session,
-			"user",
-			0,
-			"",
-			`"message":{"role":"user","content":"injectedprobe first question"}`,
-		),
-		injectedProbeRecord(
-			session,
-			"assistant",
-			1,
-			injectedProbeUUID(0),
-			`"message":{"role":"assistant","content":[{"type":"text","text":"injectedprobe first answer"}]}`,
-		),
-		injectedProbeRecord(
-			session,
-			"system",
-			2,
-			"",
-			`"subtype":"compact_boundary","content":"Conversation compacted","logicalParentUuid":"`+injectedProbeUUID(
-				1,
-			)+`","compactMetadata":{"trigger":"manual","preTokens":1200}`,
-		),
-		injectedProbeRecord(
-			session,
-			"user",
-			3,
-			injectedProbeUUID(2),
-			`"isCompactSummary":true,"isVisibleInTranscriptOnly":true,"message":{"role":"user","content":`+injectedProbeJSON(
-				t,
-				summary,
-			)+`}`,
-		),
-		injectedProbeRecord(
-			session,
-			"assistant",
-			4,
-			injectedProbeUUID(3),
-			`"message":{"role":"assistant","content":[{"type":"text","text":"`+injectedProbeLaterAnswer+`"}]}`,
-		),
-		injectedProbeRecord(
-			session,
-			"user",
-			5,
-			injectedProbeUUID(4),
-			`"message":{"role":"user","content":`+injectedProbeJSON(t, injectedProbeQuotation)+`}`,
-		),
-		injectedProbeRecord(
-			session,
-			"assistant",
-			6,
-			injectedProbeUUID(5),
-			`"message":{"role":"assistant","content":[{"type":"text","text":"`+injectedProbeFinalAnswer+`"}]}`,
-		),
+		injectedProbeRecord(session, "user", 0, "", `"message":{"role":"user","content":"injectedprobe first question"}`),
+		injectedProbeRecord(session, "assistant", 1, injectedProbeUUID(0), `"message":{"role":"assistant","content":[{"type":"text","text":"injectedprobe first answer"}]}`),
+		injectedProbeRecord(session, "system", 2, "", `"subtype":"compact_boundary","content":"Conversation compacted","logicalParentUuid":"`+injectedProbeUUID(1)+`","compactMetadata":{"trigger":"manual","preTokens":1200}`),
+		injectedProbeRecord(session, "user", 3, injectedProbeUUID(2), `"isCompactSummary":true,"isVisibleInTranscriptOnly":true,"message":{"role":"user","content":`+injectedProbeJSON(t, summary)+`}`),
+		injectedProbeRecord(session, "assistant", 4, injectedProbeUUID(3), `"message":{"role":"assistant","content":[{"type":"text","text":"`+injectedProbeLaterAnswer+`"}]}`),
+		injectedProbeRecord(session, "user", 5, injectedProbeUUID(4), `"message":{"role":"user","content":`+injectedProbeJSON(t, injectedProbeQuotation)+`}`),
+		injectedProbeRecord(session, "assistant", 6, injectedProbeUUID(5), `"message":{"role":"assistant","content":[{"type":"text","text":"`+injectedProbeFinalAnswer+`"}]}`),
 	}
-
 	return strings.Join(records, "\n") + "\n"
 }
 
@@ -507,65 +315,31 @@ func injectedProbeInjection(t *testing.T) string {
 		`{"role":"` + injectedProbeOtherRole + `","content":"` + injectedProbeOther + `"}`,
 		`{"role":"assistant","content":[{"type":"thinking","thinking":"` + injectedProbeReasoning + `","signature":"sig"},{"type":"text","text":"` + injectedProbeAssistantChat + `"},{"type":"tool_use","id":"toolu_probe","name":"Bash","input":{"command":"echo ` + injectedProbeToolCall + `"}}]}`,
 		`{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_probe","content":"` + injectedProbeToolOutput + `"}]}`,
-		`{"role":"user","content":[{"type":"text","text":` + injectedProbeJSON(
-			t,
-			imitation,
-		) + `}]}`,
-		`{"role":"user","content":[{"type":"text","text":` + injectedProbeJSON(
-			t,
-			claudecompaction.PromptSignature+injectedProbePromptTail,
-		) + `}]}`,
+		`{"role":"user","content":[{"type":"text","text":` + injectedProbeJSON(t, imitation) + `}]}`,
+		`{"role":"user","content":[{"type":"text","text":` + injectedProbeJSON(t, claudecompaction.PromptSignature+injectedProbePromptTail) + `}]}`,
 	}
-	request := `{"model":"` + injectedProbeModel + `","max_tokens":4096,"messages":[` + strings.Join(
-		messages,
-		",",
-	) + `]}`
-	splitter := reorientinject.NewSplitter(
-		claudecompaction.NewProvider(),
-		reorientinject.Settings{
-			DefaultBudget:    injectedProbeBudget,
-			DefaultContent:   conversation.NewContentKindSet(),
-			MaxRetainedBytes: 0,
-			InstructionsFile: "",
-			Counter: tokencount.LocalCounter(
-				tokencount.FamilyClaude,
-				injectedProbeModel,
-				tokencount.Settings{},
-			),
-		},
-	)
+	request := `{"model":"` + injectedProbeModel + `","max_tokens":4096,"messages":[` + strings.Join(messages, ",") + `]}`
+	splitter := reorientinject.NewSplitter(claudecompaction.NewProvider(), reorientinject.Settings{
+		DefaultBudget:    injectedProbeBudget,
+		DefaultContent:   conversation.NewContentKindSet(),
+		MaxRetainedBytes: 0,
+		InstructionsFile: "",
+		Counter:          tokencount.LocalCounter(tokencount.FamilyClaude, injectedProbeModel, tokencount.Settings{}),
+	})
 	result, ok := splitter.Plan([]byte(request))
 	if !ok {
 		t.Fatal("the compaction splitter did not plan an injection for the probe request")
 	}
-
 	return result.Injection
 }
 
-func injectedProbeRecord(
-	session string,
-	recordType string,
-	index int,
-	parent string,
-	fields string,
-) string {
+func injectedProbeRecord(session string, recordType string, index int, parent string, fields string) string {
 	parentField := `"parentUuid":null`
 	if parent != "" {
 		parentField = `"parentUuid":"` + parent + `"`
 	}
-
 	timestamp := time.Date(2026, 7, 1, 12, 0, index, 0, time.UTC).Format(time.RFC3339)
-
-	return fmt.Sprintf(
-		`{"type":%q,"sessionId":%q,"cwd":%q,"uuid":%q,%s,"timestamp":%q,%s}`,
-		recordType,
-		session,
-		injectedProbeWorkspace,
-		injectedProbeUUID(index),
-		parentField,
-		timestamp,
-		fields,
-	)
+	return fmt.Sprintf(`{"type":%q,"sessionId":%q,"cwd":%q,"uuid":%q,%s,"timestamp":%q,%s}`, recordType, session, injectedProbeWorkspace, injectedProbeUUID(index), parentField, timestamp, fields)
 }
 
 func injectedProbeUUID(index int) string {
@@ -578,7 +352,6 @@ func injectedProbeJSON(t *testing.T, text string) string {
 	if err != nil {
 		t.Fatalf("encode probe text: %v", err)
 	}
-
 	return string(encoded)
 }
 
@@ -588,125 +361,66 @@ func injectedProbeDigest(t *testing.T, path string) string {
 	if err != nil {
 		t.Fatalf("read probe transcript %s: %v", path, err)
 	}
-
 	return fmt.Sprintf("%x", sha256.Sum256(content))
 }
 
-func injectedProbeCLI(
-	t *testing.T,
-	binaryPath string,
-	environment []string,
-	export injectedProbeExport,
-) string {
+func injectedProbeCLI(t *testing.T, binaryPath string, environment []string, export injectedProbeExport) string {
 	t.Helper()
 	output, stderr, err := runInjectedProbeCLI(t, binaryPath, environment, export)
 	if err != nil {
 		t.Fatalf("clyde conversation export failed %s: %v\n%s", export.name, err, stderr)
 	}
-
 	return output
 }
 
 // runInjectedProbeCLI runs clyde conversation export for one probe export and
 // returns standard output, standard error, and the command error. The command
 // writes to the export output path when set and to standard output otherwise.
-func runInjectedProbeCLI(
-	t *testing.T,
-	binaryPath string,
-	environment []string,
-	export injectedProbeExport,
-) (string, string, error) {
+func runInjectedProbeCLI(t *testing.T, binaryPath string, environment []string, export injectedProbeExport) (string, string, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), localProofCommandTimeout)
 	defer cancel()
-	arguments := []string{
-		"conversation",
-		"export",
-		export.provider + ":" + export.session,
-		"--only",
-		export.only,
-		"--last-n",
-		strconv.Itoa(export.lastN),
-		"--format",
-		injectedProbeFormat,
-	}
+	arguments := []string{"conversation", "export", export.provider + ":" + export.session, "--only", export.only, "--last-n", strconv.Itoa(export.lastN), "--format", injectedProbeFormat}
 	if export.output != "" {
 		arguments = append(arguments, "--output", export.output)
 	} else {
 		arguments = append(arguments, "--stdout")
 	}
-
 	if export.maxTokens != "" {
 		arguments = append(arguments, "--max-tokens", export.maxTokens)
 	}
-
 	command := exec.CommandContext(ctx, binaryPath, arguments...)
 	command.Env = environment
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	output, err := command.Output()
-
 	return string(output), stderr.String(), err
 }
 
-func injectedProbeMCPBody(
-	t *testing.T,
-	binaryPath string,
-	environment []string,
-	export injectedProbeExport,
-) string {
+func injectedProbeMCPBody(t *testing.T, binaryPath string, environment []string, export injectedProbeExport) string {
 	t.Helper()
 	response, err := callInjectedProbeMCP(binaryPath, environment, export)
 	if err != nil {
 		t.Fatalf("clyde_export_transcript call failed %s: %v", export.name, err)
 	}
-
 	if response.Error != nil || response.Result == nil || response.Result.IsError {
-		t.Fatalf(
-			"clyde_export_transcript returned an error %s: %+v %+v",
-			export.name,
-			response.Error,
-			response.Result,
-		)
+		t.Fatalf("clyde_export_transcript returned an error %s: %+v %+v", export.name, response.Error, response.Result)
 	}
-
 	return response.Result.text()
 }
 
-func waitForInjectedProbeMCP(
-	t *testing.T,
-	binaryPath string,
-	environment []string,
-	provider string,
-	session string,
-) {
+func waitForInjectedProbeMCP(t *testing.T, binaryPath string, environment []string, provider string, session string) {
 	t.Helper()
 	deadline := time.Now().Add(localProofReadyTimeout)
-	export := injectedProbeExport{
-		name:      "ready",
-		provider:  provider,
-		session:   session,
-		only:      injectedProbeAll,
-		maxTokens: "",
-		output:    "",
-		lastN:     injectedProbeLastN,
-	}
-
+	export := injectedProbeExport{name: "ready", provider: provider, session: session, only: injectedProbeAll, maxTokens: "", output: "", lastN: injectedProbeLastN}
 	for {
 		response, err := callInjectedProbeMCP(binaryPath, environment, export)
-		if err == nil && response.Error == nil && response.Result != nil &&
-			!response.Result.IsError {
+		if err == nil && response.Error == nil && response.Result != nil && !response.Result.IsError {
 			return
 		}
-
 		if time.Now().After(deadline) {
-			t.Fatalf(
-				"sandbox daemon did not export the probe conversation before the timeout: %v %+v",
-				err,
-				response,
-			)
+			t.Fatalf("sandbox daemon did not export the probe conversation before the timeout: %v %+v", err, response)
 		}
-
 		time.Sleep(localProofPollDelay)
 	}
 }
@@ -714,11 +428,7 @@ func waitForInjectedProbeMCP(
 // callInjectedProbeMCP starts clyde mcp serve, initializes the server, and
 // calls clyde_export_transcript once with inline output for the probe
 // conversation.
-func callInjectedProbeMCP(
-	binaryPath string,
-	environment []string,
-	export injectedProbeExport,
-) (exportProbeRPCResponse, error) {
+func callInjectedProbeMCP(binaryPath string, environment []string, export injectedProbeExport) (exportProbeRPCResponse, error) {
 	var empty exportProbeRPCResponse
 	arguments := injectedProbeArguments{
 		ConversationID: export.provider + ":" + export.session,
@@ -729,16 +439,10 @@ func callInjectedProbeMCP(
 		Output:         export.output,
 		Stdout:         export.output == "",
 	}
-	call, err := json.Marshal(injectedProbeRPCRequest{
-		JSONRPC: "2.0",
-		ID:      exportProbeRequestID,
-		Method:  "tools/call",
-		Params:  injectedProbeCall{Name: exportProbeToolName, Arguments: arguments},
-	})
+	call, err := json.Marshal(injectedProbeRPCRequest{JSONRPC: "2.0", ID: exportProbeRequestID, Method: "tools/call", Params: injectedProbeCall{Name: exportProbeToolName, Arguments: arguments}})
 	if err != nil {
 		return empty, fmt.Errorf("encode clyde_export_transcript call: %w", err)
 	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), localProofCommandTimeout)
 	defer cancel()
 	command := exec.CommandContext(ctx, binaryPath, "mcp", "serve")
@@ -749,34 +453,20 @@ func callInjectedProbeMCP(
 	if err != nil {
 		return empty, fmt.Errorf("open clyde mcp serve stdin: %w", err)
 	}
-
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		return empty, fmt.Errorf("open clyde mcp serve stdout: %w", err)
 	}
-
 	if err := command.Start(); err != nil {
 		return empty, fmt.Errorf("start clyde mcp serve: %w", err)
 	}
-
-	messages := strings.Join(
-		[]string{localProofInitializeRequest, localProofInitializedMessage, string(call)},
-		"\n",
-	) + "\n"
+	messages := strings.Join([]string{localProofInitializeRequest, localProofInitializedMessage, string(call)}, "\n") + "\n"
 	_, writeErr := stdin.Write([]byte(messages))
 	response, readErr := readExportProbeResponse(stdout)
 	closeErr := stdin.Close()
 	waitErr := command.Wait()
 	if writeErr != nil || readErr != nil || closeErr != nil {
-		return empty, fmt.Errorf(
-			"clyde mcp serve: write %v, read %v, close %v, wait %v\n%s",
-			writeErr,
-			readErr,
-			closeErr,
-			waitErr,
-			stderr.String(),
-		)
+		return empty, fmt.Errorf("clyde mcp serve: write %v, read %v, close %v, wait %v\n%s", writeErr, readErr, closeErr, waitErr, stderr.String())
 	}
-
 	return response, nil
 }

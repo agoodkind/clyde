@@ -8,12 +8,9 @@ import (
 )
 
 func TestObserveRawResponsesCompactionV2ResponseAcceptsStandaloneCarriageReturns(t *testing.T) {
-	body := []byte(
-		"event: response.output_item.done\rdata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"compaction\",\"encrypted_content\":\"cipher\"}}\r\r" +
-			"event: response.completed\rdata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\"}}\r\r",
-	)
-	if encrypted, ok := rawResponsesCompactionV2SSEEncryptedContent(body); !ok ||
-		encrypted != "cipher" {
+	body := []byte("event: response.output_item.done\rdata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"compaction\",\"encrypted_content\":\"cipher\"}}\r\r" +
+		"event: response.completed\rdata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\"}}\r\r")
+	if encrypted, ok := rawResponsesCompactionV2SSEEncryptedContent(body); !ok || encrypted != "cipher" {
 		t.Fatalf("standalone carriage return encrypted=%q matched=%t", encrypted, ok)
 	}
 
@@ -32,13 +29,8 @@ func TestObserveRawResponsesCompactionV2ResponseAcceptsStandaloneCarriageReturns
 	if err != nil || !bytes.Equal(got, body) {
 		t.Fatalf("client body changed: err=%v body=%q", err, got)
 	}
-
 	ArmRawResponsesCompactionV2Response(observed)
 	if transcript, ok := registry.Match("session-1", "cipher"); !ok || transcript != "transcript" {
-		t.Fatalf(
-			"standalone carriage return did not arm recovery: transcript=%q matched=%t",
-			transcript,
-			ok,
-		)
+		t.Fatalf("standalone carriage return did not arm recovery: transcript=%q matched=%t", transcript, ok)
 	}
 }

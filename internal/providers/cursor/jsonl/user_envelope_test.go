@@ -9,7 +9,6 @@ import (
 // using text taken from real transcripts.
 func TestUnwrapUserEnvelopeKeepsWhatTheUserTyped(t *testing.T) {
 	t.Parallel()
-
 	cases := []struct {
 		name    string
 		stored  string
@@ -63,32 +62,22 @@ func TestUnwrapUserEnvelopeKeepsWhatTheUserTyped(t *testing.T) {
 		},
 	}
 	for _, testCase := range cases {
-		t.Run(
-			testCase.name,
-			func(t *testing.T) {
-				t.Parallel()
-				got, stamped := UnwrapUserEnvelope(testCase.stored)
-				if got != testCase.want {
-					t.Fatalf("text = %q, want %q", got, testCase.want)
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			got, stamped := UnwrapUserEnvelope(testCase.stored)
+			if got != testCase.want {
+				t.Fatalf("text = %q, want %q", got, testCase.want)
+			}
+			if testCase.wantUTC == "" {
+				if !stamped.IsZero() {
+					t.Fatalf("timestamp = %v, want zero", stamped)
 				}
-
-				if testCase.wantUTC == "" {
-					if !stamped.IsZero() {
-						t.Fatalf("timestamp = %v, want zero", stamped)
-					}
-
-					return
-				}
-
-				if stamped.UTC().Format(time.RFC3339) != testCase.wantUTC {
-					t.Fatalf(
-						"timestamp = %v, want %s",
-						stamped.UTC().Format(time.RFC3339),
-						testCase.wantUTC,
-					)
-				}
-			},
-		)
+				return
+			}
+			if stamped.UTC().Format(time.RFC3339) != testCase.wantUTC {
+				t.Fatalf("timestamp = %v, want %s", stamped.UTC().Format(time.RFC3339), testCase.wantUTC)
+			}
+		})
 	}
 }
 
@@ -102,7 +91,6 @@ func TestUnwrapUserEnvelopeLeavesUnpairedMarkersAlone(t *testing.T) {
 	if got != stored {
 		t.Fatalf("text = %q, want it unchanged", got)
 	}
-
 	if !stamped.IsZero() {
 		t.Fatalf("timestamp = %v, want zero", stamped)
 	}
@@ -116,16 +104,13 @@ func TestUnwrapUserEnvelopeMakesRepeatedInjectionsIdentical(t *testing.T) {
 	t.Parallel()
 	first, firstStamp := UnwrapUserEnvelope(
 		"<timestamp>Sunday, Jul 26, 2026, 2:00 PM (UTC+2)</timestamp>\n\n" +
-			"<user_query>Briefly inform the user about the task result and perform any follow-up actions (if needed).</user_query>",
-	)
+			"<user_query>Briefly inform the user about the task result and perform any follow-up actions (if needed).</user_query>")
 	second, secondStamp := UnwrapUserEnvelope(
 		"<timestamp>Sunday, Jul 26, 2026, 4:39 PM (UTC+2)</timestamp>\n\n" +
-			"<user_query>Briefly inform the user about the task result and perform any follow-up actions (if needed).</user_query>",
-	)
+			"<user_query>Briefly inform the user about the task result and perform any follow-up actions (if needed).</user_query>")
 	if first != second {
 		t.Fatalf("two injections of one prompt differ:\n  %q\n  %q", first, second)
 	}
-
 	if firstStamp.Equal(secondStamp) {
 		t.Fatalf("both timestamps = %v, want the two turn times preserved apart", firstStamp)
 	}

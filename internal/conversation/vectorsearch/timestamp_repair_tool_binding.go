@@ -33,12 +33,7 @@ const (
 	historicalToolSummaryBytes = 2000
 )
 
-var toolComponentSegments = []string{
-	toolComponentTokens,
-	toolComponentCommand,
-	toolComponentInput,
-	"out",
-}
+var toolComponentSegments = []string{toolComponentTokens, toolComponentCommand, toolComponentInput, "out"}
 
 type storedUserMessage struct {
 	message int
@@ -77,63 +72,42 @@ func (lookup sourceTimeLookup) bindToolFamilies(families map[string][]collection
 	if !lookup.toolCallsComplete {
 		lookup.bindUnavailable(base, false)
 		lookup.bindUnavailable(components, true)
-
 		return
 	}
-
 	mixed := len(components) > 0
 	users := lookup.storedUserMessages(families)
 	grouped, actual := lookup.toolProjections(mixed)
-	lookup.bindBaseFamilies(
-		base,
-		lookup.transcriptProjection(),
-		[]toolProjection{grouped, actual},
-		users,
-		families,
-	)
+	lookup.bindBaseFamilies(base, lookup.transcriptProjection(), []toolProjection{grouped, actual}, users, families)
 	lookup.bindComponentFamilies(components, actual, users, families)
 }
 
 func (lookup sourceTimeLookup) bindUnavailable(keys []string, component bool) {
 	for _, key := range keys {
-		lookup.toolBindings[key] = toolBinding{
-			call:       emptySourceToolTime(),
-			reason:     SourceOutcomeIdentityUnavailable,
-			component:  component,
-			projection: "",
-		}
+		lookup.toolBindings[key] = toolBinding{call: emptySourceToolTime(), reason: SourceOutcomeIdentityUnavailable, component: component, projection: ""}
 	}
 }
 
 func toolFamilyKeys(families map[string][]collection.StoredRow) ([]string, []string) {
 	base := make([]string, 0)
 	components := make([]string, 0)
-
 	for key, rows := range families {
 		if !strings.HasPrefix(key, conversationToolFamily+familyPartSeparator) {
 			continue
 		}
-
-		isComponent := slices.ContainsFunc(
-			rows,
-			func(row collection.StoredRow) bool {
-				return isToolComponentPath(key, row.RelativePath)
-			},
-		)
+		isComponent := slices.ContainsFunc(rows, func(row collection.StoredRow) bool {
+			return isToolComponentPath(key, row.RelativePath)
+		})
 		if isComponent {
 			components = append(components, key)
 			continue
 		}
-
 		base = append(base, key)
 	}
-
 	byFamilyOrder := func(left string, right string) int {
 		return slices.Compare(familyOrder(left), familyOrder(right))
 	}
 	slices.SortFunc(base, byFamilyOrder)
 	slices.SortFunc(components, byFamilyOrder)
-
 	return base, components
 }
 
@@ -142,44 +116,23 @@ func isToolComponentPath(key string, relativePath string) bool {
 	if !found {
 		return false
 	}
-
 	segment, _, _ := strings.Cut(remainder, familyPartSeparator)
-
 	return slices.Contains(toolComponentSegments, segment)
 }
 
 func (lookup sourceTimeLookup) toolProjections(mixed bool) (toolProjection, toolProjection) {
 	grouped := make(map[[2]int]int, len(lookup.toolCalls))
-
 	actual := make(map[[2]int]int, len(lookup.toolCalls))
 	for position, call := range lookup.toolCalls {
 		grouped[[2]int{call.GroupedMessage, call.GroupedOrdinal}] = position
 		actual[[2]int{call.ActualMessage, call.ActualOrdinal}] = position
 	}
-
 	var groupedOther, actualOther []transcript.UserTurn
 	if mixed {
 		groupedOther, actualOther = lookup.actualUsers, lookup.groupedUsers
 	}
-
-	return toolProjection{
-			name:       toolProjectionGrouped,
-			calls:      lookup.toolCalls,
-			positions:  grouped,
-			users:      lookup.groupedUsers,
-			otherUsers: groupedOther,
-			known:      nil,
-			residual:   false,
-		},
-		toolProjection{
-			name:       toolProjectionActual,
-			calls:      lookup.toolCalls,
-			positions:  actual,
-			users:      lookup.actualUsers,
-			otherUsers: actualOther,
-			known:      nil,
-			residual:   false,
-		}
+	return toolProjection{name: toolProjectionGrouped, calls: lookup.toolCalls, positions: grouped, users: lookup.groupedUsers, otherUsers: groupedOther, known: nil, residual: false},
+		toolProjection{name: toolProjectionActual, calls: lookup.toolCalls, positions: actual, users: lookup.actualUsers, otherUsers: actualOther, known: nil, residual: false}
 }
 
 // transcriptProjection matches transcript calls to native calls by name and
@@ -190,17 +143,14 @@ func (lookup sourceTimeLookup) transcriptProjection() toolProjection {
 	for _, call := range lookup.transcript.Calls {
 		saved = append(saved, transcript.ToolIdentity{Name: call.Name, Input: call.Input})
 	}
-
 	native := make([]transcript.ToolIdentity, 0, len(lookup.toolCalls))
 	for _, call := range lookup.toolCalls {
 		native = append(native, transcript.ToolIdentity{Name: call.Name, Input: call.Input})
 	}
-
 	proven := transcript.ProvenToolPositions(saved, native)
 	positions := make(map[[2]int]int, len(saved))
 	known := make(map[[2]int]bool, len(saved))
 	unproven := 0
-
 	for index, call := range lookup.transcript.Calls {
 		coordinate := [2]int{call.Message, call.Ordinal}
 		known[coordinate] = true
@@ -208,63 +158,32 @@ func (lookup sourceTimeLookup) transcriptProjection() toolProjection {
 			unproven++
 			continue
 		}
-
 		positions[coordinate] = proven[index]
 	}
-
 	if unproven > 0 {
-		slog.Warn(
-			"conversation.vectorsearch.transcript_tool_occurrence_unproven",
-			"concern",
-			"conversation.semantic",
-			"component",
-			"conversation",
-			"transcript_tools",
-			len(saved),
-			"native_tools",
-			len(native),
-			"unproven",
-			unproven,
-		)
+		slog.Warn("conversation.vectorsearch.transcript_tool_occurrence_unproven",
+			"concern", "conversation.semantic", "component", "conversation",
+			"transcript_tools", len(saved), "native_tools", len(native), "unproven", unproven)
 	}
-
-	return toolProjection{
-		name:       toolProjectionTranscript,
-		calls:      lookup.toolCalls,
-		positions:  positions,
-		users:      lookup.transcript.Users,
-		otherUsers: lookup.actualUsers,
-		known:      known,
-		residual:   false,
-	}
+	return toolProjection{name: toolProjectionTranscript, calls: lookup.toolCalls, positions: positions, users: lookup.transcript.Users, otherUsers: lookup.actualUsers, known: known, residual: false}
 }
 
-func (lookup sourceTimeLookup) bindBaseFamilies(
-	keys []string,
-	stored toolProjection,
-	projections []toolProjection,
-	storedUsers []storedUserMessage,
-	families map[string][]collection.StoredRow,
-) {
+func (lookup sourceTimeLookup) bindBaseFamilies(keys []string, stored toolProjection, projections []toolProjection, storedUsers []storedUserMessage, families map[string][]collection.StoredRow) {
 	storedVerified, storedDifference := stored.verifiedPrefix(keys, storedUsers, families)
 	if storedDifference.check != "" {
 		logToolSequenceDifference(stored.name, storedDifference, keys, len(lookup.toolCalls))
 	}
-
 	candidates := make(map[string][]int, len(keys))
 	candidateProjection := make(map[string]string, len(keys))
 	contentMismatch := make(map[string]bool)
-
 	residual := make([]string, 0, len(keys))
 	for _, key := range keys {
 		if !stored.knows(key) {
 			residual = append(residual, key)
 		}
 	}
-
 	for _, projection := range projections {
 		projection.residual = len(stored.known) > 0
-
 		verified, difference := projection.verifiedPrefix(residual, storedUsers, families)
 		for key, position := range verified {
 			if !slices.Contains(candidates[key], position) {
@@ -272,25 +191,16 @@ func (lookup sourceTimeLookup) bindBaseFamilies(
 				candidateProjection[key] = projection.name
 			}
 		}
-
 		if difference.check == toolSequenceCheckContent {
 			contentMismatch[residual[difference.position]] = true
 		}
-
 		if difference.check != "" {
 			logToolSequenceDifference(projection.name, difference, residual, len(lookup.toolCalls))
 		}
 	}
-
 	olderRun := lookup.olderRunPositions(residual, candidates, families)
-
 	for _, key := range keys {
-		binding := toolBinding{
-			call:       emptySourceToolTime(),
-			reason:     SourceOutcomeSequenceMismatch,
-			component:  false,
-			projection: "",
-		}
+		binding := toolBinding{call: emptySourceToolTime(), reason: SourceOutcomeSequenceMismatch, component: false, projection: ""}
 		position, verified := storedVerified[key]
 		switch {
 		case verified:
@@ -298,8 +208,7 @@ func (lookup sourceTimeLookup) bindBaseFamilies(
 			binding.reason = ""
 			binding.projection = stored.name
 		case stored.knows(key):
-			if storedDifference.check == toolSequenceCheckContent &&
-				keys[storedDifference.position] == key {
+			if storedDifference.check == toolSequenceCheckContent && keys[storedDifference.position] == key {
 				binding.reason = SourceOutcomeContentMismatch
 			}
 		case len(candidates[key]) == 1:
@@ -313,55 +222,41 @@ func (lookup sourceTimeLookup) bindBaseFamilies(
 		case len(candidates[key]) == 0 && contentMismatch[key]:
 			binding.reason = SourceOutcomeContentMismatch
 		}
-
 		lookup.toolBindings[key] = binding
 	}
 }
 
-func (lookup sourceTimeLookup) olderRunPositions(
-	keys []string,
-	candidates map[string][]int,
-	families map[string][]collection.StoredRow,
-) map[string]int {
+func (lookup sourceTimeLookup) olderRunPositions(keys []string, candidates map[string][]int, families map[string][]collection.StoredRow) map[string]int {
 	native := make([]string, 0, len(lookup.toolCalls))
 	for _, call := range lookup.toolCalls {
 		native = append(native, toolCallContent(call))
 	}
-
 	stored := make([]string, 0, len(keys))
 	suffixStart := 0
-
 	for index, key := range keys {
 		text, complete := familyText(key, conversationToolFamily, families[key])
 		if !complete || strings.TrimSpace(text) == "" {
 			suffixStart = index + 1
 		}
-
 		stored = append(stored, text)
 	}
-
 	for from := suffixStart; len(keys)-from >= minimumOlderRunRows; from++ {
 		start, unique := uniqueContiguousStart(stored[from:], native)
 		if !unique {
 			continue
 		}
-
 		positions := make(map[string]int, len(keys)-from)
 		for index, key := range keys[from:] {
 			position := start + index
-
 			for _, candidate := range candidates[key] {
 				if candidate != position {
 					return nil
 				}
 			}
-
 			positions[key] = position
 		}
-
 		return positions
 	}
-
 	return nil
 }
 
@@ -372,38 +267,23 @@ func hasOlderRunPosition(positions map[string]int, key string) bool {
 
 func uniqueContiguousStart(stored []string, native []string) (int, bool) {
 	found := -1
-
 	for start := 0; start+len(stored) <= len(native); start++ {
 		if !slices.Equal(stored, native[start:start+len(stored)]) {
 			continue
 		}
-
 		if found >= 0 {
 			return -1, false
 		}
-
 		found = start
 	}
-
 	return found, found >= 0
 }
 
-func (lookup sourceTimeLookup) bindComponentFamilies(
-	keys []string,
-	projection toolProjection,
-	storedUsers []storedUserMessage,
-	families map[string][]collection.StoredRow,
-) {
+func (lookup sourceTimeLookup) bindComponentFamilies(keys []string, projection toolProjection, storedUsers []storedUserMessage, families map[string][]collection.StoredRow) {
 	stopped := false
 	previous := emptySourceToolTime()
-
 	for index, key := range keys {
-		binding := toolBinding{
-			call:       emptySourceToolTime(),
-			reason:     SourceOutcomeSequenceMismatch,
-			component:  true,
-			projection: "",
-		}
+		binding := toolBinding{call: emptySourceToolTime(), reason: SourceOutcomeSequenceMismatch, component: true, projection: ""}
 		if !stopped {
 			position, found := projection.position(key)
 			native := emptySourceToolTime()
@@ -412,26 +292,13 @@ func (lookup sourceTimeLookup) bindComponentFamilies(
 				native = lookup.toolCalls[position]
 				check = projection.unmatchedUserCheck(index, keys, storedUsers)
 			}
-
 			if found && check == "" {
 				check, verified = componentCheck(key, families[key], native)
 			}
-
 			switch {
 			case check != "":
 				stopped = true
-				logToolSequenceDifference(
-					projection.name,
-					toolSequenceDifference{
-						check:      check,
-						position:   index,
-						storedName: storedToolName(families[key]),
-						native:     native,
-						previous:   previous,
-					},
-					keys,
-					len(lookup.toolCalls),
-				)
+				logToolSequenceDifference(projection.name, toolSequenceDifference{check: check, position: index, storedName: storedToolName(families[key]), native: native, previous: previous}, keys, len(lookup.toolCalls))
 			case verified:
 				binding.call = native
 				binding.reason = ""
@@ -439,10 +306,8 @@ func (lookup sourceTimeLookup) bindComponentFamilies(
 			default:
 				binding.reason = SourceOutcomeComponentUnevaluated
 			}
-
 			previous = native
 		}
-
 		lookup.toolBindings[key] = binding
 	}
 }
@@ -453,7 +318,6 @@ func (lookup sourceTimeLookup) bindComponentFamilies(
 // comparison.
 func componentCheck(key string, rows []collection.StoredRow, call SourceToolTime) (string, bool) {
 	var tokenRows, commandRows, inputRows []collection.StoredRow
-
 	for _, row := range rows {
 		remainder, _ := strings.CutPrefix(row.RelativePath, key+familyPartSeparator)
 		switch {
@@ -469,31 +333,23 @@ func componentCheck(key string, rows []collection.StoredRow, call SourceToolTime
 			return "", false
 		}
 	}
-
-	if len(tokenRows) != 1 || len(inputRows) != 1 ||
-		inputRows[0].RelativePath != key+familyPartSeparator+toolComponentInput+"/0" {
+	if len(tokenRows) != 1 || len(inputRows) != 1 || inputRows[0].RelativePath != key+familyPartSeparator+toolComponentInput+"/0" {
 		return "", false
 	}
-
 	command := historicalToolCommand(call)
 	switch {
 	case command == "" && len(commandRows) != 0:
 		return toolSequenceCheckComponents, false
-	case command != "" && (len(
-		commandRows,
-	) != 1 || strings.TrimSpace(commandRows[0].Content) != command):
+	case command != "" && (len(commandRows) != 1 || strings.TrimSpace(commandRows[0].Content) != command):
 		return toolSequenceCheckComponents, false
 	}
-
 	input := inputRows[0].Content
 	if !json.Valid([]byte(input)) || !transcript.SameToolInput(json.RawMessage(input), call.Input) {
 		return toolSequenceCheckComponents, false
 	}
-
 	if tokenRows[0].Content != historicalToolTokens(call.Name, command, input) {
 		return toolSequenceCheckComponents, false
 	}
-
 	return "", true
 }
 
@@ -502,7 +358,6 @@ func historicalToolCommand(call SourceToolTime) string {
 	if call.LangHint != bashLangHint {
 		return ""
 	}
-
 	return strings.TrimSpace(call.Display)
 }
 
@@ -519,11 +374,9 @@ func historicalToolTokens(name string, command string, input string) string {
 	if command != "" {
 		addHistoricalShellTokens(add, command)
 	}
-
 	if input != "" {
 		add(truncateHistoricalSummary(input))
 	}
-
 	return strings.Join(tokens, toolContinuationBreak)
 }
 
@@ -533,40 +386,32 @@ func addHistoricalShellTokens(add func(string), command string) {
 		add(truncateHistoricalSummary(command))
 		return
 	}
-
 	added := 0
 	addCounted := func(value string) {
 		if strings.TrimSpace(value) != "" {
 			added++
 		}
-
 		add(value)
 	}
-
 	for _, shellCommand := range decomposition.Commands() {
 		addCounted(shellCommand.Argv0)
 	}
-
 	addTarget := func(resolvable bool, path string, raw string) {
 		if !resolvable {
 			addCounted(raw)
 			return
 		}
-
 		addCounted(path)
 		if strings.TrimSpace(raw) != "" && strings.TrimSpace(raw) != strings.TrimSpace(path) {
 			addCounted(raw)
 		}
 	}
-
 	for _, target := range decomposition.ReadTargets() {
 		addTarget(target.Resolvable, target.Path, target.Raw)
 	}
-
 	for _, target := range decomposition.WriteTargets() {
 		addTarget(target.Resolvable, target.Path, target.Raw)
 	}
-
 	if added == 0 {
 		add(truncateHistoricalSummary(command))
 	}
@@ -576,12 +421,10 @@ func truncateHistoricalSummary(value string) string {
 	if len(value) <= historicalToolSummaryBytes {
 		return value
 	}
-
 	end := historicalToolSummaryBytes
 	for end > 0 && !utf8.RuneStart(value[end]) {
 		end--
 	}
-
 	return value[:end]
 }
 
@@ -595,78 +438,47 @@ func (projection toolProjection) knows(key string) bool {
 func (projection toolProjection) position(key string) (int, bool) {
 	order := familyOrder(key)
 	position, found := projection.positions[[2]int{order[0], order[2]}]
-
 	return position, found
 }
 
 // verifiedPrefix returns matching family positions up to the first name,
 // content, or user turn difference and skips families without a mapped
 // position.
-func (projection toolProjection) verifiedPrefix(
-	keys []string,
-	storedUsers []storedUserMessage,
-	families map[string][]collection.StoredRow,
-) (map[string]int, toolSequenceDifference) {
+func (projection toolProjection) verifiedPrefix(keys []string, storedUsers []storedUserMessage, families map[string][]collection.StoredRow) (map[string]int, toolSequenceDifference) {
 	verified := make(map[string]int, len(keys))
 	previous := emptySourceToolTime()
 	previousKey := ""
-
 	for index, key := range keys {
 		position, found := projection.position(key)
 		if !found {
 			continue
 		}
-
 		native := projection.calls[position]
 		check := projection.familyCheck(index, keys, storedUsers, native, families[key])
 		if check == "" && projection.name == toolProjectionTranscript && previousKey != "" {
 			check = projection.transcriptUserCheck(previousKey, key, previous, native, storedUsers)
 		}
-
 		if check != "" {
-			return verified, toolSequenceDifference{
-				check:      check,
-				position:   index,
-				storedName: storedToolName(families[key]),
-				native:     native,
-				previous:   previous,
-			}
+			return verified, toolSequenceDifference{check: check, position: index, storedName: storedToolName(families[key]), native: native, previous: previous}
 		}
-
 		verified[key] = position
 		previous = native
 		previousKey = key
 	}
-
-	return verified, toolSequenceDifference{
-		check:      "",
-		position:   len(keys),
-		storedName: "",
-		native:     emptySourceToolTime(),
-		previous:   previous,
-	}
+	return verified, toolSequenceDifference{check: "", position: len(keys), storedName: "", native: emptySourceToolTime(), previous: previous}
 }
 
-func (projection toolProjection) familyCheck(
-	index int,
-	keys []string,
-	storedUsers []storedUserMessage,
-	call SourceToolTime,
-	rows []collection.StoredRow,
-) string {
+func (projection toolProjection) familyCheck(index int, keys []string, storedUsers []storedUserMessage, call SourceToolTime, rows []collection.StoredRow) string {
 	if check := projection.unmatchedUserCheck(index, keys, storedUsers); check != "" {
 		return check
 	}
-
 	if storedToolName(rows) != strings.TrimSpace(call.Name) {
 		return toolSequenceCheckName
 	}
-
 	text, complete := familyText(keys[index], conversationToolFamily, rows)
 	if complete && strings.TrimSpace(text) != "" && text != toolCallContent(call) {
 		return toolSequenceCheckContent
 	}
-
 	return ""
 }
 
@@ -675,77 +487,50 @@ func (projection toolProjection) familyCheck(
 // another projection matches both its position and text. It does not check the
 // transcript projection or projections that check only rows without transcript
 // coordinates.
-func (projection toolProjection) unmatchedUserCheck(
-	index int,
-	keys []string,
-	storedUsers []storedUserMessage,
-) string {
+func (projection toolProjection) unmatchedUserCheck(index int, keys []string, storedUsers []storedUserMessage) string {
 	if index == 0 || projection.name == toolProjectionTranscript || projection.residual {
 		return ""
 	}
-
 	previous := familyOrder(keys[index-1])[0]
 	current := familyOrder(keys[index])[0]
-
 	for _, stored := range storedUsers {
 		if stored.message <= previous || stored.message >= current {
 			continue
 		}
-
 		matches := func(turn transcript.UserTurn) bool { return turn.Message == stored.message }
 		associated := func(turn transcript.UserTurn) bool {
-			return turn.Message == stored.message &&
-				slices.Contains(stored.texts, strings.TrimSpace(turn.Text))
+			return turn.Message == stored.message && slices.Contains(stored.texts, strings.TrimSpace(turn.Text))
 		}
-		if !slices.ContainsFunc(projection.users, matches) &&
-			!slices.ContainsFunc(projection.otherUsers, associated) {
+		if !slices.ContainsFunc(projection.users, matches) && !slices.ContainsFunc(projection.otherUsers, associated) {
 			return toolSequenceCheckStoredUser
 		}
 	}
-
 	return ""
 }
 
 // transcriptUserCheck requires a native user turn between the calls only for an
 // intervening stored user row that matches a transcript user turn in both
 // message position and text.
-func (projection toolProjection) transcriptUserCheck(
-	previousKey string,
-	key string,
-	previous SourceToolTime,
-	current SourceToolTime,
-	storedUsers []storedUserMessage,
-) string {
+func (projection toolProjection) transcriptUserCheck(previousKey string, key string, previous SourceToolTime, current SourceToolTime, storedUsers []storedUserMessage) string {
 	low := familyOrder(previousKey)[0]
 	high := familyOrder(key)[0]
-
 	for _, stored := range storedUsers {
 		if stored.message <= low || stored.message >= high {
 			continue
 		}
-
-		associated := slices.ContainsFunc(
-			projection.users,
-			func(turn transcript.UserTurn) bool {
-				return turn.Message == stored.message &&
-					slices.Contains(stored.texts, strings.TrimSpace(turn.Text))
-			},
-		)
+		associated := slices.ContainsFunc(projection.users, func(turn transcript.UserTurn) bool {
+			return turn.Message == stored.message && slices.Contains(stored.texts, strings.TrimSpace(turn.Text))
+		})
 		if !associated {
 			continue
 		}
-
-		between := slices.ContainsFunc(
-			projection.otherUsers,
-			func(turn transcript.UserTurn) bool {
-				return turn.Message > previous.ActualMessage && turn.Message < current.ActualMessage
-			},
-		)
+		between := slices.ContainsFunc(projection.otherUsers, func(turn transcript.UserTurn) bool {
+			return turn.Message > previous.ActualMessage && turn.Message < current.ActualMessage
+		})
 		if !between {
 			return toolSequenceCheckStoredUser
 		}
 	}
-
 	return ""
 }
 
@@ -756,33 +541,19 @@ func storedToolName(rows []collection.StoredRow) string {
 			return strings.TrimSpace(name)
 		}
 	}
-
 	name, _, _ := strings.Cut(rows[0].Content, toolContinuationBreak)
-
 	return strings.TrimSpace(name)
 }
 
 // storedUserMessages returns stored user text families and their matching texts.
-func (lookup sourceTimeLookup) storedUserMessages(
-	families map[string][]collection.StoredRow,
-) []storedUserMessage {
+func (lookup sourceTimeLookup) storedUserMessages(families map[string][]collection.StoredRow) []storedUserMessage {
 	users := make([]storedUserMessage, 0)
-
 	for key, rows := range families {
-		if !strings.HasPrefix(key, conversationTextFamily+familyPartSeparator) ||
-			!strings.EqualFold(rowRole(rows), storedUserRole) {
+		if !strings.HasPrefix(key, conversationTextFamily+familyPartSeparator) || !strings.EqualFold(rowRole(rows), storedUserRole) {
 			continue
 		}
-
-		users = append(
-			users,
-			storedUserMessage{
-				message: familyOrder(key)[0],
-				texts:   lookup.storedUserTexts(key, rows),
-			},
-		)
+		users = append(users, storedUserMessage{message: familyOrder(key)[0], texts: lookup.storedUserTexts(key, rows)})
 	}
-
 	return users
 }
 
@@ -798,124 +569,61 @@ func (lookup sourceTimeLookup) storedUserTexts(key string, rows []collection.Sto
 			contents = append(contents, row.Content)
 		}
 	}
-
 	texts := make([]string, 0, len(contents))
 	for _, content := range contents {
 		if lookup.matchText != nil {
 			content = lookup.matchText(storedUserRole, content)
 		}
-
 		texts = append(texts, strings.TrimSpace(content))
 	}
-
 	return texts
 }
 
 // storedUserRole identifies stored text rows with the user role.
 const storedUserRole = "user"
 
-func logToolSequenceDifference(
-	projection string,
-	difference toolSequenceDifference,
-	keys []string,
-	nativeTools int,
-) {
+func logToolSequenceDifference(projection string, difference toolSequenceDifference, keys []string, nativeTools int) {
 	previousFamily, storedFamily := "", ""
 	if difference.position > 0 && difference.position <= len(keys) {
 		previousFamily = keys[difference.position-1]
 	}
-
 	if difference.position < len(keys) {
 		storedFamily = keys[difference.position]
 	}
-
-	slog.Warn(
-		"conversation.vectorsearch.tool_sequence_mismatch",
-		"concern",
-		"conversation.semantic",
-		"component",
-		"conversation",
-		"projection",
-		projection,
-		"check",
-		difference.check,
-		"position",
-		difference.position,
-		"stored_tools",
-		len(keys),
-		"native_tools",
-		nativeTools,
-		"previous_family",
-		previousFamily,
-		"stored_family",
-		storedFamily,
-		"stored_name",
-		difference.storedName,
-		"native_name",
-		difference.native.Name,
-		"previous_call_id",
-		difference.previous.CallID,
-		"native_call_id",
-		difference.native.CallID,
-		"previous_message_start",
-		difference.previous.MessageStart,
-		"previous_after_user",
-		difference.previous.AfterUser,
-		"message_start",
-		difference.native.MessageStart,
-		"after_user",
-		difference.native.AfterUser,
-	)
+	slog.Warn("conversation.vectorsearch.tool_sequence_mismatch",
+		"concern", "conversation.semantic", "component", "conversation",
+		"projection", projection, "check", difference.check, "position", difference.position,
+		"stored_tools", len(keys), "native_tools", nativeTools,
+		"previous_family", previousFamily, "stored_family", storedFamily,
+		"stored_name", difference.storedName, "native_name", difference.native.Name,
+		"previous_call_id", difference.previous.CallID, "native_call_id", difference.native.CallID,
+		"previous_message_start", difference.previous.MessageStart, "previous_after_user", difference.previous.AfterUser,
+		"message_start", difference.native.MessageStart, "after_user", difference.native.AfterUser)
 }
 
 func emptySourceToolTime() SourceToolTime {
-	return SourceToolTime{
-		CallID:         "",
-		Input:          nil,
-		Name:           "",
-		Display:        "",
-		LangHint:       "",
-		TimestampUnix:  missingTimestampUnix,
-		Reason:         "",
-		MessageStart:   false,
-		AfterUser:      false,
-		GroupedMessage: 0,
-		GroupedOrdinal: 0,
-		ActualMessage:  0,
-		ActualOrdinal:  0,
-	}
+	return SourceToolTime{CallID: "", Input: nil, Name: "", Display: "", LangHint: "", TimestampUnix: missingTimestampUnix, Reason: "", MessageStart: false, AfterUser: false, GroupedMessage: 0, GroupedOrdinal: 0, ActualMessage: 0, ActualOrdinal: 0}
 }
 
 // toolCallContent renders the stored content of one native tool call.
 func toolCallContent(call SourceToolTime) string {
 	return toolContent(semsearch.SemToolCall{
-		Name:             strings.ToValidUTF8(call.Name, ""),
-		Display:          strings.ToValidUTF8(call.Display, ""),
-		LangHint:         strings.ToValidUTF8(call.LangHint, ""),
-		Output:           "",
-		IsError:          false,
-		TimestampUnix:    nil,
-		TimestampUnknown: false,
+		Name: strings.ToValidUTF8(call.Name, ""), Display: strings.ToValidUTF8(call.Display, ""),
+		LangHint: strings.ToValidUTF8(call.LangHint, ""), Output: "", IsError: false, TimestampUnix: nil, TimestampUnknown: false,
 	})
 }
 
 // toolFamilyOutcome checks a tool family's binding, content, and timestamp reason.
-func (lookup sourceTimeLookup) toolFamilyOutcome(
-	key string,
-	text string,
-	evidence *SourceRepairEvidence,
-) {
+func (lookup sourceTimeLookup) toolFamilyOutcome(key string, text string, evidence *SourceRepairEvidence) {
 	binding, found := lookup.toolBindings[key]
 	if !found {
 		evidence.Outcome = SourceOutcomeSequenceMismatch
 		return
 	}
-
 	if binding.reason == "" && toolCallContent(binding.call) != text {
 		evidence.Outcome = SourceOutcomeContentMismatch
 		return
 	}
-
 	bindingOutcome(binding, evidence)
 }
 
@@ -925,14 +633,12 @@ func bindingOutcome(binding toolBinding, evidence *SourceRepairEvidence) {
 		evidence.Outcome = binding.reason
 		return
 	}
-
 	evidence.ToolCallID = binding.call.CallID
 	evidence.ToolProjection = binding.projection
 	if binding.call.Reason != "" {
 		evidence.Outcome = binding.call.Reason
 		return
 	}
-
 	evidence.Outcome = SourceOutcomeMatched
 	evidence.Candidates = []int64{binding.call.TimestampUnix}
 	evidence.Chosen = binding.call.TimestampUnix

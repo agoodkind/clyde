@@ -22,23 +22,18 @@ func HasRawResponsesNativeContinuationItem(request RawResponsesRequest) bool {
 	)
 }
 
-func hasRawResponsesNativeContinuationItem(
-	request RawResponsesRequest,
-	wanted ...transcript.CompactedContextItemKind,
-) bool {
+func hasRawResponsesNativeContinuationItem(request RawResponsesRequest, wanted ...transcript.CompactedContextItemKind) bool {
 	var body struct {
 		Input []json.RawMessage `json:"input"`
 	}
 	if json.Unmarshal(request.Body, &body) != nil {
 		return false
 	}
-
 	for _, item := range codexstore.NormalizeResponseInputItems(body.Input) {
 		if slices.Contains(wanted, item.Kind) {
 			return true
 		}
 	}
-
 	return false
 }
 
@@ -85,19 +80,15 @@ func PrepareRawResponsesCompaction(
 	raw RawResponsesRequest,
 	splitter CompactionSplitter,
 ) (RawResponsesRequest, *RawResponsesCompactionTransformer) {
-	if splitter == nil ||
-		DetectRawResponsesCompactionProtocol(raw.Header) != RawResponsesCompactionV1 {
+	if splitter == nil || DetectRawResponsesCompactionProtocol(raw.Header) != RawResponsesCompactionV1 {
 		return raw, nil
 	}
-
 	split, ok := splitter.Plan(raw.Body)
 	if !ok {
 		return raw, nil
 	}
-
 	transformed := raw
 	transformed.Body = split.Forwarded
-
 	return transformed, &RawResponsesCompactionTransformer{
 		injection:         split.Injection,
 		stream:            raw.Stream,
@@ -113,21 +104,17 @@ func IsRawResponsesV1CompactionRequest(request RawResponsesRequest) bool {
 }
 
 func rawCompactionPromptIsValid(item transcript.CompactedContextItem) bool {
-	if item.Kind != transcript.CompactedContextItemKindMessage || item.Message == nil ||
-		item.Message.Role != "user" {
+	if item.Kind != transcript.CompactedContextItemKindMessage || item.Message == nil || item.Message.Role != "user" {
 		return false
 	}
-
 	if len(item.Message.Content) == 0 {
 		return false
 	}
-
 	for _, content := range item.Message.Content {
 		if content.Type != "input_text" || strings.TrimSpace(content.Text) == "" {
 			return false
 		}
 	}
-
 	return true
 }
 
@@ -137,25 +124,21 @@ func rawCompactionCall(item transcript.CompactedContextItem) (string, rawCompact
 		if item.FunctionCall == nil {
 			return "", "", false
 		}
-
 		return item.FunctionCall.CallID, rawCompactionCallFunction, true
 	case transcript.CompactedContextItemKindCustomToolCall:
 		if item.CustomToolCall == nil {
 			return "", "", false
 		}
-
 		return item.CustomToolCall.CallID, rawCompactionCallCustom, true
 	case transcript.CompactedContextItemKindLocalShellCall:
 		if item.LocalShellCall == nil {
 			return "", "", false
 		}
-
 		return item.LocalShellCall.CallID, rawCompactionCallLocalShell, true
 	case transcript.CompactedContextItemKindToolSearchCall:
 		if item.ToolSearchCall == nil {
 			return "", "", false
 		}
-
 		return item.ToolSearchCall.CallID, rawCompactionCallToolSearch, true
 	case transcript.CompactedContextItemKindMessage,
 		transcript.CompactedContextItemKindReasoning,
@@ -174,9 +157,7 @@ func rawCompactionCall(item transcript.CompactedContextItem) (string, rawCompact
 	}
 }
 
-func rawCompactionOutput(
-	item transcript.CompactedContextItem,
-) (string, rawCompactionCallKind, bool) {
+func rawCompactionOutput(item transcript.CompactedContextItem) (string, rawCompactionCallKind, bool) {
 	switch item.Kind {
 	case transcript.CompactedContextItemKindFunctionCallOutput:
 		if item.FunctionCallOutput == nil || item.FunctionCallOutput.CallID == "" ||
@@ -184,7 +165,6 @@ func rawCompactionOutput(
 			bytes.Equal(bytes.TrimSpace(item.FunctionCallOutput.OutputRaw), []byte("null")) {
 			return "", "", false
 		}
-
 		return item.FunctionCallOutput.CallID, rawCompactionCallFunction, true
 	case transcript.CompactedContextItemKindCustomToolCallOutput:
 		if item.CustomToolCallOutput == nil || item.CustomToolCallOutput.CallID == "" ||
@@ -192,7 +172,6 @@ func rawCompactionOutput(
 			bytes.Equal(bytes.TrimSpace(item.CustomToolCallOutput.OutputRaw), []byte("null")) {
 			return "", "", false
 		}
-
 		return item.CustomToolCallOutput.CallID, rawCompactionCallCustom, true
 	case transcript.CompactedContextItemKindToolSearchOutput:
 		// Codex answers an aborted tool search with an empty tools array, so
@@ -200,7 +179,6 @@ func rawCompactionOutput(
 		if item.ToolSearchOutput == nil || item.ToolSearchOutput.CallID == "" {
 			return "", "", false
 		}
-
 		return item.ToolSearchOutput.CallID, rawCompactionCallToolSearch, true
 	case transcript.CompactedContextItemKindMessage,
 		transcript.CompactedContextItemKindReasoning,
@@ -224,50 +202,40 @@ func rawCompactionKindsPair(callKind, outputKind rawCompactionCallKind) bool {
 	if outputKind == rawCompactionCallFunction {
 		return callKind == rawCompactionCallFunction || callKind == rawCompactionCallLocalShell
 	}
-
 	return callKind == outputKind
 }
 
 func rawCompactionPairsAreComplete(items []transcript.CompactedContextItem) bool {
 	calls := make(map[string]rawCompactionCallKind)
 	outputs := make(map[string]rawCompactionCallKind)
-
 	for _, item := range items {
 		if callID, callKind, call := rawCompactionCall(item); call {
 			if callID == "" {
 				return false
 			}
-
 			if _, duplicate := calls[callID]; duplicate {
 				return false
 			}
-
 			calls[callID] = callKind
 		}
-
 		if callID, outputKind, output := rawCompactionOutput(item); output {
 			if callID == "" {
 				return false
 			}
-
 			if _, duplicate := outputs[callID]; duplicate {
 				return false
 			}
-
 			outputs[callID] = outputKind
 		}
 	}
-
 	if len(calls) != len(outputs) {
 		return false
 	}
-
 	for callID, callKind := range calls {
 		outputKind, exists := outputs[callID]
 		if !exists || !rawCompactionKindsPair(callKind, outputKind) {
 			return false
 		}
 	}
-
 	return true
 }

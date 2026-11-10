@@ -19,27 +19,14 @@ func TestProxyApplyConfigSwapsRouting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-
 	t.Cleanup(func() { _ = listener.Close() })
 	caDir := t.TempDir()
 	cfgA := config.MITMConfig{
-		CA: config.MITMCAConfig{
-			CertPath: filepath.Join(caDir, "ca.crt"),
-			KeyPath:  filepath.Join(caDir, "ca.key"),
-		},
+		CA:         config.MITMCAConfig{CertPath: filepath.Join(caDir, "ca.crt"), KeyPath: filepath.Join(caDir, "ca.key")},
 		CaptureDir: t.TempDir(),
 		Providers:  []string{"anthropic"},
 	}
-	proxy, err := NewProxy(
-		cfgA,
-		config.LoggingRequest{},
-		nil,
-		[]net.Listener{listener},
-		nil,
-		nil,
-		"test",
-		livetrack.NewGroup(livetrack.GroupOptions{Log: nil}),
-	)
+	proxy, err := NewProxy(cfgA, config.LoggingRequest{}, nil, []net.Listener{listener}, nil, nil, "test", livetrack.NewGroup(livetrack.GroupOptions{Log: nil}))
 	if err != nil {
 		t.Fatalf("NewProxy: %v", err)
 	}
@@ -49,7 +36,6 @@ func TestProxyApplyConfigSwapsRouting(t *testing.T) {
 	if err := proxy.ApplyConfig(cfgB); err != nil {
 		t.Fatalf("ApplyConfig: %v", err)
 	}
-
 	if got := proxy.config().Providers; !reflect.DeepEqual(got, cfgB.Providers) {
 		t.Fatalf("proxy routing not swapped: got %v, want %v", got, cfgB.Providers)
 	}

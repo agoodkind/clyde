@@ -55,50 +55,32 @@ func resolveCursorChatRequest(
 	cursorReq := adaptercursor.TranslateRequest(req)
 	resolved, err := adapterresolver.Resolve(surface, cursorReq, registry)
 	if err != nil {
-		slog.Warn(
-			"adapter: resolve cursor chat request failed",
+		slog.Warn("adapter: resolve cursor chat request failed",
 			slog.String("concern", "adapter.chat.preflight"),
 			slog.String("model", cursorReq.OpenAI.Model),
 			slog.String("normalized_model", cursorReq.NormalizedModel),
 			slog.String("err", err.Error()),
 		)
-
 		return resolved, fmt.Errorf("adapter: resolve cursor chat request: %w", err)
 	}
-
 	return resolved, nil
 }
 
 // resolveResponsesRequest leaves generic OpenAI Responses requests untouched.
 // Cursor translation is applied only when the listener explicitly selected
 // Cursor ingress; generic OpenAI metadata must not mutate model identity.
-func resolveResponsesRequest(
-	surface adapterresolver.IngressSurface,
-	req ChatRequest,
-	registry adapterresolver.ModelRegistry,
-) (adapterresolver.ResolvedRequest, error) {
+func resolveResponsesRequest(surface adapterresolver.IngressSurface, req ChatRequest, registry adapterresolver.ModelRegistry) (adapterresolver.ResolvedRequest, error) {
 	if surface == adapterresolver.IngressCursor {
 		return resolveCursorChatRequest(surface, req, registry)
 	}
-
-	resolved, err := adapterresolver.Resolve(
-		surface,
-		adaptercursor.NewUntranslatedRequest(req),
-		registry,
-	)
+	resolved, err := adapterresolver.Resolve(surface, adaptercursor.NewUntranslatedRequest(req), registry)
 	if err != nil {
-		slog.Warn(
-			"adapter: resolve generic OpenAI Responses request failed",
+		slog.Warn("adapter: resolve generic OpenAI Responses request failed",
 			slog.String("concern", "adapter.chat.preflight"),
 			slog.String("model", req.Model),
 			slog.String("err", err.Error()),
 		)
-
-		return adapterresolver.ResolvedRequest{}, fmt.Errorf(
-			"resolve generic OpenAI Responses request: %w",
-			err,
-		)
+		return adapterresolver.ResolvedRequest{}, fmt.Errorf("resolve generic OpenAI Responses request: %w", err)
 	}
-
 	return resolved, nil
 }

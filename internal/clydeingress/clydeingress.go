@@ -88,24 +88,19 @@ func FromHTTPHeader(header http.Header, requestID string) correlation.Context {
 		copyIfPresent(rebuilt, header, HeaderSpanID, correlation.HeaderSpanID)
 		copyIfPresent(rebuilt, header, HeaderParentSpanID, correlation.HeaderParentSpanID)
 	}
-
 	corr := correlation.FromHTTPHeader(rebuilt, requestID)
 	if header == nil {
 		return corr
 	}
-
 	if upstreamReq := strings.TrimSpace(header.Get(HeaderUpstreamRequestID)); upstreamReq != "" {
 		corr = WithUpstreamRequestID(corr, upstreamReq)
 	}
-
 	if upstreamResp := strings.TrimSpace(header.Get(HeaderUpstreamResponseID)); upstreamResp != "" {
 		corr = WithUpstreamResponseID(corr, upstreamResp)
 	}
-
 	if sess := strings.TrimSpace(header.Get(HeaderClaudeCodeSessionID)); sess != "" {
 		corr = WithChatIdentity(corr, sess, "native", sess, "")
 	}
-
 	return corr
 }
 
@@ -118,23 +113,18 @@ func SetHTTPHeaders(corr correlation.Context, header http.Header) {
 	if header == nil {
 		return
 	}
-
 	if corr.RequestID != "" {
 		header.Set(HeaderRequestID, corr.RequestID)
 	}
-
 	if corr.TraceID != "" {
 		header.Set(HeaderTraceID, string(corr.TraceID))
 	}
-
 	if corr.SpanID != "" {
 		header.Set(HeaderSpanID, string(corr.SpanID))
 	}
-
 	if corr.ParentSpanID != "" {
 		header.Set(HeaderParentSpanID, string(corr.ParentSpanID))
 	}
-
 	if traceparent := corr.Traceparent(); traceparent != "" {
 		header.Set(HeaderTraceparent, traceparent)
 	}
@@ -149,11 +139,9 @@ func HTTPHeaders(corr correlation.Context) http.Header {
 	if id := UpstreamRequestID(corr); id != "" {
 		header.Set(HeaderUpstreamRequestID, id)
 	}
-
 	if id := UpstreamResponseID(corr); id != "" {
 		header.Set(HeaderUpstreamResponseID, id)
 	}
-
 	return header
 }
 
@@ -196,11 +184,9 @@ func WithChatKey(corr correlation.Context, key string) correlation.Context {
 	if key == "" {
 		return corr
 	}
-
 	if existing := ChatKey(corr); existing != "" {
 		return corr
 	}
-
 	return corr.WithIdentityAttributes(correlation.IdentityAttribute{
 		Key:   AttrKeyChatKey,
 		Value: key,
@@ -211,18 +197,11 @@ func WithChatKey(corr correlation.Context, key string) correlation.Context {
 // partition identity. It overwrites the chat-key, source, root, and
 // branch fields as a unit after ingress resolution has chosen the
 // native or derived path. Empty values clear the corresponding key.
-func WithChatIdentity(
-	corr correlation.Context,
-	key string,
-	source string,
-	rootKey string,
-	branchKey string,
-) correlation.Context {
+func WithChatIdentity(corr correlation.Context, key, source, rootKey, branchKey string) correlation.Context {
 	corr = setOrClear(corr, AttrKeyChatKey, key)
 	corr = setOrClear(corr, AttrKeyChatKeySource, source)
 	corr = setOrClear(corr, AttrKeyChatRootKey, rootKey)
 	corr = setOrClear(corr, AttrKeyChatBranchKey, branchKey)
-
 	return corr
 }
 
@@ -247,12 +226,8 @@ func WithUpstreamResponseID(corr correlation.Context, responseID string) correla
 func setOrClear(corr correlation.Context, key, value string) correlation.Context {
 	trimmed := strings.TrimSpace(value)
 	if trimmed != "" {
-		return corr.WithIdentityAttributes(correlation.IdentityAttribute{
-			Key:   key,
-			Value: trimmed,
-		})
+		return corr.WithIdentityAttributes(correlation.IdentityAttribute{Key: key, Value: trimmed})
 	}
-
 	return removeIdentityAttribute(corr, key)
 }
 
@@ -264,25 +239,19 @@ func removeIdentityAttribute(corr correlation.Context, key string) correlation.C
 	if len(corr.IdentityAttributes) == 0 {
 		return corr
 	}
-
 	filtered := make([]correlation.IdentityAttribute, 0, len(corr.IdentityAttributes))
 	removed := false
-
 	for _, attr := range corr.IdentityAttributes {
 		if attr.Key == key {
 			removed = true
 			continue
 		}
-
 		filtered = append(filtered, attr)
 	}
-
 	if !removed {
 		return corr
 	}
-
 	corr.IdentityAttributes = filtered
-
 	return corr
 }
 

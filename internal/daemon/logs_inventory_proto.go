@@ -18,34 +18,26 @@ func protoLogsInventory(current loginventory.Inventory) *clydev1.LogsInventoryRe
 	}
 }
 
-func protoLogsInventoryCategories(
-	categories []loginventory.CategorySummary,
-) []*clydev1.LogsInventoryCategory {
+func protoLogsInventoryCategories(categories []loginventory.CategorySummary) []*clydev1.LogsInventoryCategory {
 	wireCategories := make([]*clydev1.LogsInventoryCategory, 0, len(categories))
 	for _, category := range categories {
-		wireCategories = append(
-			wireCategories,
-			&clydev1.LogsInventoryCategory{
-				Category:               string(category.Category),
-				Sink:                   category.Sink,
-				Source:                 string(category.Source),
-				Count:                  int64(category.Count),
-				TotalBytes:             category.TotalBytes,
-				LatestModifiedUnix:     unixSecondsOrZero(category.LatestModified),
-				RepresentativePath:     category.RepresentativePath,
-				LastEventTimestampUnix: unixSecondsOrZero(category.LastEventTimestamp),
-				LastEventRequestId:     optionalString(category.LastEventRequestID),
-				CleanupEnabled:         category.CleanupEnabled,
-				Rotation:               protoLogsInventoryRotation(category.Rotation),
-				Cleanup:                protoLogsInventoryCleanup(category.Cleanup),
-				LargestFiles:           protoLogsInventoryFiles(category.LargestFiles),
-				LastCleanupResult: protoLogsInventoryCleanupSummary(
-					category.LastCleanupResult,
-				),
-			},
-		)
+		wireCategories = append(wireCategories, &clydev1.LogsInventoryCategory{
+			Category:               string(category.Category),
+			Sink:                   category.Sink,
+			Source:                 string(category.Source),
+			Count:                  int64(category.Count),
+			TotalBytes:             category.TotalBytes,
+			LatestModifiedUnix:     unixSecondsOrZero(category.LatestModified),
+			RepresentativePath:     category.RepresentativePath,
+			LastEventTimestampUnix: unixSecondsOrZero(category.LastEventTimestamp),
+			LastEventRequestId:     optionalString(category.LastEventRequestID),
+			CleanupEnabled:         category.CleanupEnabled,
+			Rotation:               protoLogsInventoryRotation(category.Rotation),
+			Cleanup:                protoLogsInventoryCleanup(category.Cleanup),
+			LargestFiles:           protoLogsInventoryFiles(category.LargestFiles),
+			LastCleanupResult:      protoLogsInventoryCleanupSummary(category.LastCleanupResult),
+		})
 	}
-
 	return wireCategories
 }
 
@@ -65,19 +57,16 @@ func protoLogsInventoryCleanup(cleanup config.LoggingCleanup) *clydev1.LogsInven
 		value := int64(*cleanup.MaxAgeDays)
 		maxAgeDays = &value
 	}
-
 	var maxBackups *int64
 	if cleanup.MaxBackups != nil {
 		value := int64(*cleanup.MaxBackups)
 		maxBackups = &value
 	}
-
 	var maxTotalMB *int64
 	if cleanup.MaxTotalMB != nil {
 		value := int64(*cleanup.MaxTotalMB)
 		maxTotalMB = &value
 	}
-
 	return &clydev1.LogsInventoryCleanup{
 		Enabled:    cleanup.Enabled,
 		MaxAgeDays: maxAgeDays,
@@ -89,26 +78,19 @@ func protoLogsInventoryCleanup(cleanup config.LoggingCleanup) *clydev1.LogsInven
 func protoLogsInventoryFiles(files []loginventory.FileSummary) []*clydev1.LogsInventoryFileSummary {
 	wireFiles := make([]*clydev1.LogsInventoryFileSummary, 0, len(files))
 	for _, file := range files {
-		wireFiles = append(
-			wireFiles,
-			&clydev1.LogsInventoryFileSummary{
-				RelativePath: file.RelativePath,
-				SizeBytes:    file.SizeBytes,
-				ModifiedUnix: unixSecondsOrZero(file.Modified),
-			},
-		)
+		wireFiles = append(wireFiles, &clydev1.LogsInventoryFileSummary{
+			RelativePath: file.RelativePath,
+			SizeBytes:    file.SizeBytes,
+			ModifiedUnix: unixSecondsOrZero(file.Modified),
+		})
 	}
-
 	return wireFiles
 }
 
-func protoLogsInventoryCleanupSummary(
-	summary *loginventory.InventoryCleanupSummary,
-) *clydev1.LogsInventoryCleanupSummary {
+func protoLogsInventoryCleanupSummary(summary *loginventory.InventoryCleanupSummary) *clydev1.LogsInventoryCleanupSummary {
 	if summary == nil {
 		return nil
 	}
-
 	return &clydev1.LogsInventoryCleanupSummary{
 		TimestampUnix: unixSecondsOrZero(summary.Timestamp),
 		Root:          summary.Root,
@@ -126,6 +108,5 @@ func unixSecondsOrZero(value time.Time) int64 {
 	if value.IsZero() {
 		return 0
 	}
-
 	return value.Unix()
 }

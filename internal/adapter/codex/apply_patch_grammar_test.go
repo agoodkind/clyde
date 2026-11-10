@@ -26,30 +26,23 @@ var grammarLiteralRe = regexp.MustCompile(`"([^"]*)"`)
 // missing, which guards against silent grammar drift on a codex sync.
 func grammarRuleLiterals(t *testing.T, rule string) []string {
 	t.Helper()
-
 	for _, line := range strings.Split(vendoredApplyPatchGrammar, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "//") {
 			continue
 		}
-
 		name, body, ok := strings.Cut(trimmed, ":")
 		if !ok || strings.TrimSpace(name) != rule {
 			continue
 		}
-
 		matches := grammarLiteralRe.FindAllStringSubmatch(body, -1)
-
 		out := make([]string, 0, len(matches))
 		for _, m := range matches {
 			out = append(out, m[1])
 		}
-
 		return out
 	}
-
 	t.Fatalf("rule %q not found in vendored apply_patch.lark", rule)
-
 	return nil
 }
 
@@ -60,7 +53,6 @@ func firstLiteral(t *testing.T, rule string) string {
 	if len(literals) == 0 {
 		t.Fatalf("rule %q has no string literal", rule)
 	}
-
 	return literals[0]
 }
 
@@ -97,18 +89,15 @@ func TestRepairApplyPatchOutputMatchesVendoredGrammarStructure(t *testing.T) {
 	if len(lines) < 2 {
 		t.Fatalf("repaired patch too short: %q", repaired)
 	}
-
 	if strings.TrimSpace(lines[0]) != beginPatch {
 		t.Fatalf("repaired patch first line=%q want begin_patch %q", lines[0], beginPatch)
 	}
-
 	if strings.TrimSpace(lines[len(lines)-1]) != endPatch {
 		t.Fatalf("repaired patch last line=%q want end_patch %q", lines[len(lines)-1], endPatch)
 	}
 
 	// Collect the hunk-header line indices using the grammar terminals.
 	var headerIndices []int
-
 	for i, line := range lines {
 		for _, header := range hunkHeaders {
 			if strings.HasPrefix(line, header) {
@@ -117,7 +106,6 @@ func TestRepairApplyPatchOutputMatchesVendoredGrammarStructure(t *testing.T) {
 			}
 		}
 	}
-
 	if len(headerIndices) == 0 {
 		t.Fatalf("repaired patch has no grammar hunk header: %q", repaired)
 	}
@@ -130,20 +118,13 @@ func TestRepairApplyPatchOutputMatchesVendoredGrammarStructure(t *testing.T) {
 		if !strings.HasPrefix(lines[idx], updateHunk) {
 			continue
 		}
-
 		if idx+1 >= len(lines) {
 			continue
 		}
-
 		next := lines[idx+1]
-
 		for _, header := range hunkHeaders {
 			if strings.HasPrefix(next, header) {
-				t.Fatalf(
-					"repaired patch keeps orphaned update header before another hunk: %q then %q",
-					lines[idx],
-					next,
-				)
+				t.Fatalf("repaired patch keeps orphaned update header before another hunk: %q then %q", lines[idx], next)
 			}
 		}
 	}
@@ -152,13 +133,8 @@ func TestRepairApplyPatchOutputMatchesVendoredGrammarStructure(t *testing.T) {
 	if !strings.HasPrefix(lines[headerIndices[0]], addHunk) {
 		t.Fatalf("repaired patch first hunk=%q want add_hunk %q", lines[headerIndices[0]], addHunk)
 	}
-
 	addLinePrefix := firstLiteral(t, "add_line")
 	if !strings.HasPrefix(lines[headerIndices[0]+1], addLinePrefix) {
-		t.Fatalf(
-			"repaired add_hunk body=%q want add_line prefix %q",
-			lines[headerIndices[0]+1],
-			addLinePrefix,
-		)
+		t.Fatalf("repaired add_hunk body=%q want add_line prefix %q", lines[headerIndices[0]+1], addLinePrefix)
 	}
 }

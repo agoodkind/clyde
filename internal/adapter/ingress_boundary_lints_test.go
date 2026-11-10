@@ -49,51 +49,37 @@ func TestIngressBoundaryNoCursorImportOutsideRegistration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read adapter directory: %v", err)
 	}
-
 	fset := token.NewFileSet()
 	violations := 0
-
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
-
 		name := entry.Name()
 		if !strings.HasSuffix(name, ".go") {
 			continue
 		}
-
 		if strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-
 		if allowlist[name] {
 			continue
 		}
-
 		path := filepath.Join(".", name)
 		file, parseErr := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
 		if parseErr != nil {
 			t.Fatalf("parse %s: %v", path, parseErr)
 		}
-
 		for _, imp := range file.Imports {
 			pathLiteral := strings.Trim(imp.Path.Value, `"`)
 			if pathLiteral != cursorIngressImportPath {
 				continue
 			}
-
 			pos := fset.Position(imp.Pos())
-			t.Errorf(
-				"%s:%d: cursor ingress package %q imported outside ingress boundary allowlist",
-				pos.Filename,
-				pos.Line,
-				pathLiteral,
-			)
+			t.Errorf("%s:%d: cursor ingress package %q imported outside ingress boundary allowlist", pos.Filename, pos.Line, pathLiteral)
 			violations++
 		}
 	}
-
 	if violations > 0 {
 		t.Fatalf("ingress boundary self-test found %d violations", violations)
 	}

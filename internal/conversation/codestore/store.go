@@ -42,18 +42,10 @@ func Open(root string, model string) (*Store, error) {
 	if strings.TrimSpace(root) == "" {
 		return nil, errors.New("code store root is required")
 	}
-
 	if err := os.MkdirAll(root, directoryMode); err != nil {
 		return nil, failed("create code store root "+root, err)
 	}
-
-	return &Store{
-		root:        root,
-		model:       model,
-		mutex:       sync.Mutex{},
-		closed:      false,
-		collections: make(map[string]*codeCollection),
-	}, nil
+	return &Store{root: root, model: model, mutex: sync.Mutex{}, closed: false, collections: make(map[string]*codeCollection)}, nil
 }
 
 // Close marks the store and each cached collection handle closed. It closes each
@@ -62,7 +54,6 @@ func Open(root string, model string) (*Store, error) {
 func (store *Store) Close() {
 	store.mutex.Lock()
 	defer store.mutex.Unlock()
-
 	store.closed = true
 	for name, stored := range store.collections {
 		stored.mutex.Lock()
@@ -78,41 +69,30 @@ func (store *Store) directory(name string) (string, error) {
 	if trimmed == "" || trimmed != filepath.Base(trimmed) || trimmed == "." || trimmed == ".." {
 		return "", fmt.Errorf("invalid collection name %q", name)
 	}
-
 	return filepath.Join(store.root, trimmed), nil
 }
 
-func (store *Store) readLockedCollection(
-	ctx context.Context,
-	name string,
-) (*codeCollection, func(), error) {
+func (store *Store) readLockedCollection(ctx context.Context, name string) (*codeCollection, func(), error) {
 	stored, err := store.openedCollection(ctx, name)
 	if err != nil {
 		return nil, nil, err
 	}
-
 	unlock, err := stored.lockForRead(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-
 	return stored, unlock, nil
 }
 
-func (store *Store) lockedCollection(
-	ctx context.Context,
-	name string,
-) (*codeCollection, func(), error) {
+func (store *Store) lockedCollection(ctx context.Context, name string) (*codeCollection, func(), error) {
 	stored, err := store.openedCollection(ctx, name)
 	if err != nil {
 		return nil, nil, err
 	}
-
 	unlock, err := stored.lockForWrite(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-
 	return stored, unlock, nil
 }
 
@@ -122,7 +102,6 @@ func (store *Store) cachedCollection(name string) (*codeCollection, error) {
 	if store.closed {
 		return nil, ErrStoreClosed
 	}
-
 	return store.collections[name], nil
 }
 
@@ -135,35 +114,28 @@ func (store *Store) openedCollection(ctx context.Context, name string) (*codeCol
 	if err != nil {
 		return nil, err
 	}
-
 	if cached != nil {
 		return cached, nil
 	}
-
 	dir, err := store.directory(name)
 	if err != nil {
 		return nil, err
 	}
-
 	opened, err := openCollection(ctx, dir)
 	if err != nil {
 		return nil, err
 	}
-
 	store.mutex.Lock()
 	defer store.mutex.Unlock()
 	if store.closed {
 		opened.closeFiles()
 		return nil, ErrStoreClosed
 	}
-
 	if existing, found := store.collections[name]; found {
 		opened.closeFiles()
 		return existing, nil
 	}
-
 	store.collections[name] = opened
-
 	return opened, nil
 }
 
@@ -175,7 +147,6 @@ func (store *Store) Load(ctx context.Context, name string) (int, error) {
 		return 0, err
 	}
 	defer unlock()
-
 	return len(stored.rows), nil
 }
 
@@ -183,58 +154,40 @@ func (store *Store) Load(ctx context.Context, name string) (int, error) {
 // It rejects dimensions that differ from [staticembed.Dimensions].
 func (store *Store) EnsureCollection(ctx context.Context, request collection.EnsureRequest) error {
 	if request.Dimension != staticembed.Dimensions {
-		return fmt.Errorf(
-			"ensure %s: dimension %d, the code store needs %d",
-			request.Collection,
-			request.Dimension,
-			staticembed.Dimensions,
-		)
+		return fmt.Errorf("ensure %s: dimension %d, the code store needs %d", request.Collection, request.Dimension, staticembed.Dimensions)
 	}
-
 	stored, unlock, err := store.lockedCollection(ctx, request.Collection)
 	if errors.Is(err, collection.ErrCollectionMissing) {
 		if err := store.createCollection(ctx, request); err != nil {
 			return err
 		}
-
 		stored, unlock, err = store.lockedCollection(ctx, request.Collection)
 	}
-
 	if err != nil {
 		return err
 	}
-
 	defer unlock()
 	declaration := stored.header.Declaration
 	added := false
-
 	for _, column := range request.Declaration.Scalars {
 		if _, found := stored.columnIndex[column.Name]; !found {
 			declaration.Scalars = append(declaration.Scalars, column)
 			added = true
 		}
 	}
-
 	if !added {
 		return nil
 	}
-
 	header := stored.header
 	header.Declaration = declaration
 	if err := writeHeader(stored.dir, header); err != nil {
 		return err
 	}
-
 	stored.setDeclaration(declaration)
-
 	for position := range stored.rows {
 		missing := len(declaration.Scalars) - len(stored.rows[position].cells)
-		stored.rows[position].cells = append(
-			stored.rows[position].cells,
-			make([]uint32, missing)...,
-		)
+		stored.rows[position].cells = append(stored.rows[position].cells, make([]uint32, missing)...)
 	}
-
 	return stored.recordHeaderIdentity()
 }
 
@@ -243,7 +196,6 @@ func (store *Store) createCollection(ctx context.Context, request collection.Ens
 	if err != nil {
 		return err
 	}
-
 	// createCollection acquires the exclusive kernel lock, then the store mutex.
 	// If Close has marked the store closed, createCollection returns ErrStoreClosed
 	// without creating collection files. If the request context ended during either
@@ -254,133 +206,84 @@ func (store *Store) createCollection(ctx context.Context, request collection.Ens
 	if err != nil {
 		return err
 	}
-
 	defer func() { _ = lock.Close() }()
 	store.mutex.Lock()
 	defer store.mutex.Unlock()
 	if store.closed {
 		return ErrStoreClosed
 	}
-
 	if err := ctx.Err(); err != nil {
 		return failed("create collection "+request.Collection, err)
 	}
-
 	_, _, err = readHeader(dir)
 	if !errors.Is(err, collection.ErrCollectionMissing) {
 		return err
 	}
-
 	if err := os.MkdirAll(dir, directoryMode); err != nil {
 		return failed("create collection "+request.Collection, err)
 	}
-
 	if err := initializeGenerationFiles(dir, 0); err != nil {
 		return err
 	}
-
-	header := collectionHeader{
-		Declaration: request.Declaration,
-		Dimension:   request.Dimension,
-		Model:       store.model,
-		Generation:  0,
-		FrameFormat: frameFormatLengthCRC,
-	}
-
+	header := collectionHeader{Declaration: request.Declaration, Dimension: request.Dimension, Model: store.model, Generation: 0, FrameFormat: frameFormatLengthCRC}
 	return writeHeader(dir, header)
 }
 
 // Upsert replaces rows by ID and stores their vector sign bits.
 // It checks scalar column names against the saved collection declaration.
 // The declaration argument does not change that schema.
-func (store *Store) Upsert(
-	ctx context.Context,
-	name string,
-	_ collection.Declaration,
-	rows []collection.Row,
-) error {
+func (store *Store) Upsert(ctx context.Context, name string, _ collection.Declaration, rows []collection.Row) error {
 	if err := ctx.Err(); err != nil {
 		return failed("upsert "+name, err)
 	}
-
 	stored, unlock, err := store.lockedCollection(ctx, name)
 	if err != nil {
 		return err
 	}
 	defer unlock()
 	records := make([]rowRecord, 0, len(rows))
-
 	blobs := make([][]byte, 0, len(rows))
 	for _, candidate := range rows {
 		if strings.TrimSpace(candidate.ID) == "" {
 			return fmt.Errorf("upsert %s: row ID is required", name)
 		}
-
 		if len(candidate.Vector) != staticembed.Dimensions {
-			return fmt.Errorf(
-				"upsert %s: row %s has %d dimensions, want %d",
-				name,
-				candidate.ID,
-				len(candidate.Vector),
-				staticembed.Dimensions,
-			)
+			return fmt.Errorf("upsert %s: row %s has %d dimensions, want %d", name, candidate.ID, len(candidate.Vector), staticembed.Dimensions)
 		}
-
 		cells := make([]storedCell, 0, len(candidate.Scalars))
 		for columnName, value := range candidate.Scalars {
 			column, declared := stored.columnIndex[columnName]
 			if !declared {
 				return fmt.Errorf("upsert %s: column %q is not declared", name, columnName)
 			}
-
 			value.Type = stored.header.Declaration.Scalars[column].Type
 			if value.Null {
-				value = collection.ScalarValue{
-					Type:   value.Type,
-					Null:   true,
-					String: "",
-					Bool:   false,
-					Int64:  0,
-				}
+				value = collection.ScalarValue{Type: value.Type, Null: true, String: "", Bool: false, Int64: 0}
 			}
-
 			cells = append(cells, storedCell{column: column, value: value})
 		}
-
-		slices.SortFunc(
-			cells,
-			func(left, right storedCell) int { return cmp.Compare(left.column, right.column) },
-		)
-		records = append(
-			records,
-			rowRecord{
-				kind:          recordUpsert,
-				id:            candidate.ID,
-				code:          staticembed.CodeOf(candidate.Vector),
-				relativePath:  candidate.RelativePath,
-				splitPart:     candidate.SplitPart,
-				splitRecorded: candidate.SplitPartRecorded,
-				dataOffset:    0,
-				dataLength:    0,
-				cells:         cells,
-			},
-		)
+		slices.SortFunc(cells, func(left, right storedCell) int { return cmp.Compare(left.column, right.column) })
+		records = append(records, rowRecord{
+			kind:          recordUpsert,
+			id:            candidate.ID,
+			code:          staticembed.CodeOf(candidate.Vector),
+			relativePath:  candidate.RelativePath,
+			splitPart:     candidate.SplitPart,
+			splitRecorded: candidate.SplitPartRecorded,
+			dataOffset:    0,
+			dataLength:    0,
+			cells:         cells,
+		})
 		blobs = append(blobs, encodeBlob(candidate.Content, candidate.Metadata))
 	}
-
 	return stored.write(records, blobs)
 }
 
 // Delete removes the rows a filter selects.
-func (store *Store) Delete(
-	ctx context.Context,
-	name string,
-	filter collection.Filter,
-) (int64, error) {
+func (store *Store) Delete(ctx context.Context, name string, filter collection.Filter) (int64, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, failed("delete from "+name, err)
 	}
-
 	stored, unlock, err := store.lockedCollection(ctx, name)
 	if err != nil {
 		return 0, err
@@ -390,44 +293,32 @@ func (store *Store) Delete(
 	if err != nil {
 		return 0, err
 	}
-
 	return stored.deleteWhere(func(position int) bool { return matches(position) == truthTrue })
 }
 
 func (stored *codeCollection) deleteWhere(selected func(position int) bool) (int64, error) {
 	records := make([]rowRecord, 0)
-
 	for position := range stored.rows {
 		if !selected(position) {
 			continue
 		}
-
 		records = append(records, emptyRecord(recordDelete, stored.rows[position].id))
 	}
-
 	if len(records) == 0 {
 		return 0, nil
 	}
-
 	if err := stored.write(records, make([][]byte, len(records))); err != nil {
 		return 0, err
 	}
-
 	return int64(len(records)), nil
 }
 
-func (stored *codeCollection) hit(
-	position int,
-	score float64,
-	columns []collection.ScalarColumn,
-) (collection.Hit, error) {
+func (stored *codeCollection) hit(position int, score float64, columns []collection.ScalarColumn) (collection.Hit, error) {
 	content, metadata, err := stored.readBlob(position)
 	if err != nil {
 		return collection.Hit{}, err
 	}
-
 	current := stored.rows[position]
-
 	return collection.Hit{
 		ID:                current.id,
 		Content:           content,
@@ -444,14 +335,10 @@ func (stored *codeCollection) hit(
 }
 
 // Query returns the rows a filter selects in ascending ID order.
-func (store *Store) Query(
-	ctx context.Context,
-	request collection.QueryRequest,
-) ([]collection.Hit, error) {
+func (store *Store) Query(ctx context.Context, request collection.QueryRequest) ([]collection.Hit, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, failed("query "+request.Collection, err)
 	}
-
 	stored, unlock, err := store.readLockedCollection(ctx, request.Collection)
 	if err != nil {
 		return nil, err
@@ -461,58 +348,38 @@ func (store *Store) Query(
 	if err != nil {
 		return nil, err
 	}
-
-	positions := stored.selectSorted(
-		func(position int) bool { return matches(position) == truthTrue },
-	)
+	positions := stored.selectSorted(func(position int) bool { return matches(position) == truthTrue })
 	if request.Limit > 0 && len(positions) > request.Limit {
 		positions = positions[:request.Limit]
 	}
-
 	hits := make([]collection.Hit, 0, len(positions))
 	for _, position := range positions {
 		hit, err := stored.hit(position, 0, request.Declaration.Scalars)
 		if err != nil {
 			return nil, err
 		}
-
 		hits = append(hits, hit)
 	}
-
 	return hits, nil
 }
 
 func (stored *codeCollection) selectSorted(selected func(position int) bool) []int {
 	positions := make([]int, 0)
-
 	for position := range stored.rows {
 		if selected(position) {
 			positions = append(positions, position)
 		}
 	}
-
-	slices.SortFunc(
-		positions,
-		func(left, right int) int {
-			return strings.Compare(stored.rows[left].id, stored.rows[right].id)
-		},
-	)
-
+	slices.SortFunc(positions, func(left, right int) int { return strings.Compare(stored.rows[left].id, stored.rows[right].id) })
 	return positions
 }
 
-func (stored *codeCollection) itemSelector(
-	itemColumn string,
-	itemIDs []string,
-	prefixes []string,
-) func(position int) bool {
+func (stored *codeCollection) itemSelector(itemColumn string, itemIDs []string, prefixes []string) func(position int) bool {
 	wanted := make(map[string]struct{}, len(itemIDs))
 	for _, id := range itemIDs {
 		wanted[id] = struct{}{}
 	}
-
 	column, declared := stored.columnIndex[itemColumn]
-
 	return func(position int) bool {
 		current := stored.rows[position]
 		if declared {
@@ -523,118 +390,81 @@ func (stored *codeCollection) itemSelector(
 				}
 			}
 		}
-
 		for _, prefix := range prefixes {
 			if prefix != "" && strings.HasPrefix(current.relativePath, prefix) {
 				return true
 			}
 		}
-
 		return false
 	}
 }
 
 // QueryRows returns matching items in ascending row ID order.
 // The store persists sign codes and returns nil Vector fields.
-func (store *Store) QueryRows(
-	ctx context.Context,
-	request collection.RowsRequest,
-) ([]collection.StoredRow, error) {
+func (store *Store) QueryRows(ctx context.Context, request collection.RowsRequest) ([]collection.StoredRow, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, failed("query rows of "+request.Collection, err)
 	}
-
 	stored, unlock, err := store.readLockedCollection(ctx, request.Collection)
 	if err != nil {
 		return nil, err
 	}
 	defer unlock()
-	positions := stored.selectSorted(
-		stored.itemSelector(
-			request.Declaration.ItemIDColumn,
-			request.ItemIDs,
-			request.PathPrefixes,
-		),
-	)
-
+	positions := stored.selectSorted(stored.itemSelector(request.Declaration.ItemIDColumn, request.ItemIDs, request.PathPrefixes))
 	rows := make([]collection.StoredRow, 0, len(positions))
 	for _, position := range positions {
 		content, _, err := stored.readBlob(position)
 		if err != nil {
 			return nil, err
 		}
-
 		sum := sha256.Sum256([]byte(content))
 		current := stored.rows[position]
-		rows = append(
-			rows,
-			collection.StoredRow{
-				ID:                current.id,
-				RelativePath:      current.relativePath,
-				Content:           content,
-				SplitPart:         current.splitPart,
-				SplitPartRecorded: current.splitRecorded,
-				EmbeddingModel:    stored.header.Model,
-				ContentHash:       hex.EncodeToString(sum[:]),
-				Vector:            nil,
-				Scalars:           stored.cells(position, request.Declaration.Scalars),
-			},
-		)
+		rows = append(rows, collection.StoredRow{
+			ID:                current.id,
+			RelativePath:      current.relativePath,
+			Content:           content,
+			SplitPart:         current.splitPart,
+			SplitPartRecorded: current.splitRecorded,
+			EmbeddingModel:    stored.header.Model,
+			ContentHash:       hex.EncodeToString(sum[:]),
+			Vector:            nil,
+			Scalars:           stored.cells(position, request.Declaration.Scalars),
+		})
 	}
-
 	return rows, nil
 }
 
 // DeleteItems removes rows selected by item IDs or nonempty path prefixes.
-func (store *Store) DeleteItems(
-	ctx context.Context,
-	request collection.DeleteItemsRequest,
-) (int64, error) {
+func (store *Store) DeleteItems(ctx context.Context, request collection.DeleteItemsRequest) (int64, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, failed("delete items from "+request.Collection, err)
 	}
-
 	stored, unlock, err := store.lockedCollection(ctx, request.Collection)
 	if err != nil {
 		return 0, err
 	}
 	defer unlock()
-
-	return stored.deleteWhere(
-		stored.itemSelector(
-			request.Declaration.ItemIDColumn,
-			request.ItemIDs,
-			request.PathPrefixes,
-		),
-	)
+	return stored.deleteWhere(stored.itemSelector(request.Declaration.ItemIDColumn, request.ItemIDs, request.PathPrefixes))
 }
 
 // BackfillScalars applies the supplied backfill rules to stored rows.
 // It returns counts of changed rows and unmatched rows that need a backfill.
-func (store *Store) BackfillScalars(
-	ctx context.Context,
-	name string,
-	backfill collection.ScalarBackfill,
-) (int, int, error) {
+func (store *Store) BackfillScalars(ctx context.Context, name string, backfill collection.ScalarBackfill) (int, int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, 0, failed("backfill "+name, err)
 	}
-
 	stored, unlock, err := store.lockedCollection(ctx, name)
 	if err != nil {
 		return 0, 0, err
 	}
 	defer unlock()
-
 	for _, column := range backfill.Columns {
 		if _, declared := stored.columnIndex[column.Name]; !declared {
 			return 0, 0, fmt.Errorf("backfill %s: column %q is not declared", name, column.Name)
 		}
 	}
-
 	changed, orphans := 0, 0
 	records := make([]rowRecord, 0)
-
 	for position := range stored.rows {
 		record, outcome := stored.backfillRow(position, backfill)
 		switch outcome {
@@ -648,13 +478,11 @@ func (store *Store) BackfillScalars(
 		case backfillUnchanged:
 		}
 	}
-
 	if len(records) > 0 {
 		if err := stored.write(records, make([][]byte, len(records))); err != nil {
 			return 0, 0, err
 		}
 	}
-
 	return changed, orphans, nil
 }
 
@@ -666,71 +494,47 @@ const (
 	backfillOrphan
 )
 
-func (stored *codeCollection) backfillRow(
-	position int,
-	backfill collection.ScalarBackfill,
-) (rowRecord, backfillOutcome) {
+func (stored *codeCollection) backfillRow(position int, backfill collection.ScalarBackfill) (rowRecord, backfillOutcome) {
 	current := make(map[string]collection.ScalarValue, len(backfill.Columns))
 	for _, column := range backfill.Columns {
 		cell := stored.cell(position, column)
 		value := cell.Value
 		if cell.State != collection.ScalarCellValue {
-			value = collection.ScalarValue{
-				Type:   column.Type,
-				Null:   true,
-				String: "",
-				Bool:   false,
-				Int64:  0,
-			}
+			value = collection.ScalarValue{Type: column.Type, Null: true, String: "", Bool: false, Int64: 0}
 		}
-
 		current[column.Name] = value
 	}
-
 	unchanged := emptyRecord(recordUpsert, "")
 	if !backfill.Needs(current) {
 		return unchanged, backfillUnchanged
 	}
-
-	itemColumn := collection.ScalarColumn{
-		Name:      backfill.ItemColumn,
-		Type:      collection.ScalarTypeString,
-		Nullable:  true,
-		MaxLength: 0,
-	}
+	itemColumn := collection.ScalarColumn{Name: backfill.ItemColumn, Type: collection.ScalarTypeString, Nullable: true, MaxLength: 0}
 	itemID := ""
 	if cell := stored.cell(position, itemColumn); cell.State == collection.ScalarCellValue {
 		itemID = cell.Value.String
 	}
-
 	values, streamed := backfill.ItemValues(itemID, stored.rows[position].relativePath)
 	if !streamed {
 		return unchanged, backfillOrphan
 	}
-
 	filled, changed := backfill.Filled(current, values)
 	if !changed {
 		return unchanged, backfillUnchanged
 	}
-
 	record := stored.recordOf(position)
-
 	for columnName, value := range filled {
 		column := stored.columnIndex[columnName]
 		replaced := false
-
 		for index := range record.cells {
 			if record.cells[index].column == column {
 				record.cells[index].value = value
 				replaced = true
 			}
 		}
-
 		if !replaced {
 			record.cells = append(record.cells, storedCell{column: column, value: value})
 		}
 	}
-
 	return record, backfillChanged
 }
 
@@ -741,23 +545,13 @@ func Score(distance int) float64 {
 
 // Search filters rows before ranking their sign codes by Hamming distance.
 // Row IDs break ties between equal distances.
-func (store *Store) Search(
-	ctx context.Context,
-	request collection.SearchRequest,
-) ([]collection.Hit, error) {
+func (store *Store) Search(ctx context.Context, request collection.SearchRequest) ([]collection.Hit, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, failed("search "+request.Collection, err)
 	}
-
 	if len(request.Vector) != staticembed.Dimensions {
-		return nil, fmt.Errorf(
-			"search %s: query has %d dimensions, want %d",
-			request.Collection,
-			len(request.Vector),
-			staticembed.Dimensions,
-		)
+		return nil, fmt.Errorf("search %s: query has %d dimensions, want %d", request.Collection, len(request.Vector), staticembed.Dimensions)
 	}
-
 	stored, unlock, err := store.readLockedCollection(ctx, request.Collection)
 	if err != nil {
 		return nil, err
@@ -767,17 +561,14 @@ func (store *Store) Search(
 	if err != nil {
 		return nil, err
 	}
-
 	groupColumn, grouped := -1, false
 	if request.GroupBy != "" && request.PerGroupLimit > 0 {
 		groupColumn, grouped = stored.columnIndex[request.GroupBy]
 	}
-
 	limit := int(request.Limit)
 	if limit <= 0 {
 		limit = defaultSearchLimit
 	}
-
 	walk := rankingWalk{
 		window:      limit,
 		maxDistance: maxDistanceFor(request.MinScore),
@@ -789,20 +580,13 @@ func (store *Store) Search(
 	if err != nil {
 		return nil, err
 	}
-
 	hits := make([]collection.Hit, 0, len(ranked))
 	for _, ranking := range ranked {
-		hit, err := stored.hit(
-			ranking.position,
-			Score(ranking.distance),
-			request.Declaration.Scalars,
-		)
+		hit, err := stored.hit(ranking.position, Score(ranking.distance), request.Declaration.Scalars)
 		if err != nil {
 			return nil, err
 		}
-
 		hits = append(hits, hit)
 	}
-
 	return hits, nil
 }

@@ -21,9 +21,7 @@ func TestIsInjectedUserPromptIgnoresTextStillInItsEnvelope(t *testing.T) {
 	t.Parallel()
 	stored := "<user_query>Briefly inform the user about the task result and perform any follow-up actions (if needed).</user_query>"
 	if IsInjectedUserPrompt(stored) {
-		t.Fatal(
-			"text still inside its envelope matched, so the check no longer depends on unwrapping first",
-		)
+		t.Fatal("text still inside its envelope matched, so the check no longer depends on unwrapping first")
 	}
 }
 
@@ -32,7 +30,6 @@ func TestIsInjectedUserPromptIgnoresTextStillInItsEnvelope(t *testing.T) {
 // must keep every word.
 func TestIsInjectedUserPromptKeepsWhatAPersonWrote(t *testing.T) {
 	t.Parallel()
-
 	written := []string{
 		"Briefly inform the user about the task result and perform any follow-up actions (if needed). Also run the tests.",
 		"why does cursor send \"Briefly inform the user about the task result and perform any follow-up actions (if needed).\" every time?",

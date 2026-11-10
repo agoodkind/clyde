@@ -155,13 +155,8 @@ func daemonStatusOp() Operation[daemonStatusInput, daemonStatusPayload] {
 		Examples:   []string{"clyde daemon status", "clyde daemon status --since 1h"},
 		Args:       nil,
 		Params: []Param[daemonStatusInput]{
-			StringParam(
-				"since",
-				"Report retained daemon metrics for this duration.",
-				"",
-				false,
-				func(in *daemonStatusInput, value string) { in.Since = value },
-			),
+			StringParam("since", "Report retained daemon metrics for this duration.", "", false,
+				func(in *daemonStatusInput, value string) { in.Since = value }),
 		},
 		New: func() daemonStatusInput {
 			return daemonStatusInput{TimeoutSeconds: 3, Since: ""}
@@ -170,22 +165,16 @@ func daemonStatusOp() Operation[daemonStatusInput, daemonStatusPayload] {
 		MCPTaskSupport: "",
 		MCPTaskRun:     nil,
 		mcpTaskResult:  nil,
-		Prepare: func(input daemonStatusInput) (daemonStatusPayload, error) {
-			payload := daemonStatusPayload{
-				Timeout: time.Duration(input.TimeoutSeconds) * time.Second,
-				Since:   0,
-			}
-			if input.Since == "" {
+		Prepare: func(in daemonStatusInput) (daemonStatusPayload, error) {
+			payload := daemonStatusPayload{Timeout: time.Duration(in.TimeoutSeconds) * time.Second, Since: 0}
+			if in.Since == "" {
 				return payload, nil
 			}
-
-			since, err := time.ParseDuration(input.Since)
+			since, err := time.ParseDuration(in.Since)
 			if err != nil || since <= 0 {
 				return daemonStatusPayload{}, fmt.Errorf("since must be a positive duration")
 			}
-
 			payload.Since = since
-
 			return payload, nil
 		},
 		Run: nil,
@@ -195,24 +184,39 @@ func daemonStatusOp() Operation[daemonStatusInput, daemonStatusPayload] {
 			report := daemonsvc.InspectStatus(statusCtx)
 			var body bytes.Buffer
 			daemoncmd.WriteStatusReport(&body, report)
-			output := statusOutputFromReport(report)
+			output := daemonStatusOutput{
+				LaunchdTarget:          report.LaunchdTarget,
+				LaunchdError:           report.LaunchdError,
+				SupervisorPID:          report.SupervisorPID,
+				DaemonSocketPath:       report.DaemonSocketPath,
+				DaemonSocketExists:     report.DaemonSocketExists,
+				DaemonResponding:       report.DaemonResponding,
+				DaemonError:            report.DaemonError,
+				SupervisorSocketPath:   report.SupervisorSocketPath,
+				SupervisorSocketExists: report.SupervisorSocketExists,
+				SupervisorResponding:   report.SupervisorResponding,
+				SupervisorError:        report.SupervisorError,
+				SupervisorFingerprint:  report.SupervisorFingerprint,
+				WorkerPIDs:             report.WorkerPIDs,
+				WorkerError:            report.WorkerError,
+				Runtime:                report.Runtime,
+				Window:                 nil,
+				Coverage:               nil,
+				Metrics:                nil,
+				TimeBreakdown:          nil,
+				UnattributedDurationMS: nil,
+				Warnings:               nil,
+				Windows:                nil,
+			}
 			if payload.Since > 0 {
 				metrics := daemonsvc.MetricsHistoryFromConfig(payload.Since, clock.Now())
 				snapshot, err := daemonsvc.CurrentProviderStats(statusCtx)
 				if err != nil {
 					metrics.Coverage.Complete = false
-					metrics.Warnings = append(
-						metrics.Warnings,
-						"live provider statistics unavailable",
-					)
+					metrics.Warnings = append(metrics.Warnings, "live provider statistics unavailable")
 				} else {
-					daemonsvc.ApplyCurrentProviderSnapshot(
-						&metrics,
-						snapshot.Providers,
-						time.Unix(snapshot.LoadedAtUnix, 0),
-					)
+					daemonsvc.ApplyCurrentProviderSnapshot(&metrics, snapshot.Providers, time.Unix(snapshot.LoadedAtUnix, 0))
 				}
-
 				output.Window = &metrics.Window
 				output.Coverage = &metrics.Coverage
 				output.Metrics = &metrics.Metrics
@@ -220,20 +224,12 @@ func daemonStatusOp() Operation[daemonStatusInput, daemonStatusPayload] {
 				output.UnattributedDurationMS = metrics.UnattributedDurationMS
 				output.Warnings = metrics.Warnings
 				daemoncmd.WriteMetricsHistoryReport(&body, metrics)
-
-				return valueResult{
-					Payload: daemonMetricsStatusOutput{
-						Window:                 metrics.Window,
-						Coverage:               metrics.Coverage,
-						Metrics:                metrics.Metrics,
-						TimeBreakdown:          metrics.TimeBreakdown,
-						UnattributedDurationMS: metrics.UnattributedDurationMS,
-						Warnings:               metrics.Warnings,
-					},
-					Text: body.String(),
-				}, nil
+				return valueResult{Payload: daemonMetricsStatusOutput{
+					Window: metrics.Window, Coverage: metrics.Coverage, Metrics: metrics.Metrics,
+					TimeBreakdown: metrics.TimeBreakdown, UnattributedDurationMS: metrics.UnattributedDurationMS,
+					Warnings: metrics.Warnings,
+				}, Text: body.String()}, nil
 			}
-
 			// Without an explicit window the command reports the default
 			// windows from the distilled rollup. That store is pre-aggregated,
 			// so this stays fast enough to run on every status invocation,
@@ -242,7 +238,6 @@ func daemonStatusOp() Operation[daemonStatusInput, daemonStatusPayload] {
 			windows := daemonsvc.MetricsWindowsFromRollup(clock.Now())
 			daemoncmd.WriteMetricsWindowsReport(&body, windows)
 			output.Windows = windows
-
 			return valueResult{Payload: output, Text: body.String()}, nil
 		},
 	}
@@ -259,12 +254,8 @@ func daemonFingerprintOp() Operation[daemonFingerprintInput, daemonFingerprintPa
 		Examples:   []string{"clyde daemon fingerprint"},
 		Args:       nil,
 		Params: []Param[daemonFingerprintInput]{
-			BoolParam(
-				"built",
-				"Print the compiled supervisor fingerprint.",
-				false,
-				func(in *daemonFingerprintInput, v bool) { in.Built = v },
-			),
+			BoolParam("built", "Print the compiled supervisor fingerprint.", false,
+				func(in *daemonFingerprintInput, v bool) { in.Built = v }),
 		},
 		New:            func() daemonFingerprintInput { return daemonFingerprintInput{Built: false} },
 		Children:       nil,
@@ -278,31 +269,18 @@ func daemonFingerprintOp() Operation[daemonFingerprintInput, daemonFingerprintPa
 		runResult: func(ctx context.Context, p daemonFingerprintPayload) (Result, error) {
 			if p.Built {
 				fingerprint := daemonsvc.CompiledSupervisorFingerprint()
-
 				return valueResult{
 					Payload: daemonFingerprintOutput{Built: true, Fingerprint: fingerprint},
 					Text:    fingerprint + "\n",
 				}, nil
 			}
-
 			statusCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 			defer cancel()
 			fingerprint, err := daemonsvc.RunningSupervisorFingerprint(statusCtx)
 			if err != nil {
-				slog.WarnContext(
-					ctx,
-					"cli.daemon.fingerprint.failed",
-					"concern",
-					"cli.daemon",
-					"component",
-					"clispec",
-					"err",
-					err,
-				)
-
+				slog.WarnContext(ctx, "cli.daemon.fingerprint.failed", "concern", "cli.daemon", "component", "clispec", "err", err)
 				return nil, fmt.Errorf("daemon fingerprint: %w", err)
 			}
-
 			return valueResult{
 				Payload: daemonFingerprintOutput{Built: false, Fingerprint: fingerprint},
 				Text:    fingerprint + "\n",
@@ -323,9 +301,7 @@ func daemonReloadOp() Operation[daemonReloadInput, daemonReloadPayload] {
 		Args:       nil,
 		Params:     nil,
 		New: func() daemonReloadInput {
-			return daemonReloadInput{
-				TimeoutSeconds: int(daemoncmd.ReloadCommandTimeout / time.Second),
-			}
+			return daemonReloadInput{TimeoutSeconds: int(daemoncmd.ReloadCommandTimeout / time.Second)}
 		},
 		Children:       nil,
 		MCPTaskSupport: "",
@@ -342,12 +318,10 @@ func daemonReloadOp() Operation[daemonReloadInput, daemonReloadPayload] {
 			if err != nil {
 				return nil, daemoncmd.ReloadCommandError(err)
 			}
-
 			status := "unchanged"
 			if resp.GetBinaryReloaded() {
 				status = "reloaded"
 			}
-
 			return valueResult{
 				Payload: daemonReloadOutput{
 					Status:         status,
@@ -355,12 +329,7 @@ func daemonReloadOp() Operation[daemonReloadInput, daemonReloadPayload] {
 					ActiveSurfaces: resp.GetActiveSurfaces(),
 					NewPID:         resp.GetNewPid(),
 				},
-				Text: fmt.Sprintf(
-					"daemon binary %s: active_surfaces=%d new_pid=%d\n",
-					status,
-					resp.GetActiveSurfaces(),
-					resp.GetNewPid(),
-				),
+				Text: fmt.Sprintf("daemon binary %s: active_surfaces=%d new_pid=%d\n", status, resp.GetActiveSurfaces(), resp.GetNewPid()),
 			}, nil
 		},
 	}
@@ -377,81 +346,36 @@ func daemonDeployOp() Operation[daemonDeployInput, daemonDeployPayload] {
 		Examples:   []string{"clyde daemon deploy"},
 		Args:       nil,
 		Params: []Param[daemonDeployInput]{
-			BoolParam(
-				"reload_only",
-				"Refuse service config changes and only perform the runtime reload-or-restart decision.",
-				false,
-				func(in *daemonDeployInput, v bool) { in.ReloadOnly = v },
-			),
+			BoolParam("reload_only", "Refuse service config changes and only perform the runtime reload-or-restart decision.", false,
+				func(in *daemonDeployInput, v bool) { in.ReloadOnly = v }),
 		},
 		New:            func() daemonDeployInput { return daemonDeployInput{ReloadOnly: false} },
 		Children:       nil,
 		MCPTaskSupport: "",
 		MCPTaskRun:     nil,
 		mcpTaskResult:  nil,
-		Prepare: func(in daemonDeployInput) (daemonDeployPayload, error) {
-			return daemonDeployPayload(in), nil
-		},
+		Prepare:        func(in daemonDeployInput) (daemonDeployPayload, error) { return daemonDeployPayload(in), nil },
 		Run: func(ctx context.Context, p daemonDeployPayload, _ Surface, sink ResultSink) error {
 			outputSink, ok := sink.(*CLISink)
 			if !ok {
 				return fmt.Errorf("daemon deploy: cli sink required")
 			}
-
 			fingerprints := deploy.Fingerprints{
 				Compiled: daemonsvc.CompiledSupervisorFingerprint,
 				Running:  daemonsvc.RunningSupervisorFingerprint,
 			}
 			if !p.ReloadOnly {
-				if err := daemonsvc.RunInitialConversationIndex(
-					ctx,
-					outputSink.out,
-					func(completed int, total int) {
-						_, _ = fmt.Fprintf(
-							outputSink.out,
-							"Initial indexing: %d/%d conversations\n",
-							completed,
-							total,
-						)
-					},
-				); err != nil {
-					slog.WarnContext(
-						ctx,
-						"cli.daemon.deploy.initial_index_failed",
-						"concern",
-						"cli.daemon",
-						"component",
-						"clispec",
-						"err",
-						err,
-					)
-
+				if err := daemonsvc.RunInitialConversationIndex(ctx, outputSink.out, func(completed int, total int) {
+					_, _ = fmt.Fprintf(outputSink.out, "Initial indexing: %d/%d conversations\n", completed, total)
+				}); err != nil {
+					slog.WarnContext(ctx, "cli.daemon.deploy.initial_index_failed", "concern", "cli.daemon", "component", "clispec", "err", err)
 					return fmt.Errorf("daemon deploy: initial conversation index: %w", err)
 				}
 			}
-
-			if err := deploy.RunFromEnv(
-				ctx,
-				os.LookupEnv,
-				p.ReloadOnly,
-				outputSink.out,
-				outputSink.out,
-				fingerprints,
-			); err != nil {
-				slog.WarnContext(
-					ctx,
-					"cli.daemon.deploy.failed",
-					"concern",
-					"cli.daemon",
-					"component",
-					"clispec",
-					"err",
-					err,
-				)
-
+			if err := deploy.RunFromEnv(ctx, os.LookupEnv, p.ReloadOnly, outputSink.out, outputSink.out, fingerprints); err != nil {
+				slog.WarnContext(ctx, "cli.daemon.deploy.failed", "concern", "cli.daemon", "component", "clispec", "err", err)
 				return fmt.Errorf("daemon deploy: %w", err)
 			}
-
 			return nil
 		},
 		runResult: nil,
@@ -478,7 +402,6 @@ func daemonRunOp() Operation[daemonRunInput, daemonRunPayload] {
 		Run: func(ctx context.Context, _ daemonRunPayload, _ Surface, _ ResultSink) error {
 			slog.Info("cli.daemon.invoked", "concern", "cli.daemon", "component", "clispec")
 			log := slog.Default().With("component", "daemon")
-
 			return daemonsvc.RunCommandContext(ctx, log)
 		},
 		runResult: nil,
@@ -505,36 +428,8 @@ func daemonWorkerOp() Operation[daemonWorkerInput, daemonWorkerPayload] {
 		Run: func(ctx context.Context, _ daemonWorkerPayload, _ Surface, _ ResultSink) error {
 			slog.Info("cli.daemon.worker.invoked", "concern", "cli.daemon", "component", "clispec")
 			log := slog.Default().With("component", "daemon")
-
 			return daemonsvc.RunContext(ctx, log)
 		},
 		runResult: nil,
-	}
-}
-
-func statusOutputFromReport(report daemonsvc.StatusReport) daemonStatusOutput {
-	return daemonStatusOutput{
-		LaunchdTarget:          report.LaunchdTarget,
-		LaunchdError:           report.LaunchdError,
-		SupervisorPID:          report.SupervisorPID,
-		DaemonSocketPath:       report.DaemonSocketPath,
-		DaemonSocketExists:     report.DaemonSocketExists,
-		DaemonResponding:       report.DaemonResponding,
-		DaemonError:            report.DaemonError,
-		SupervisorSocketPath:   report.SupervisorSocketPath,
-		SupervisorSocketExists: report.SupervisorSocketExists,
-		SupervisorResponding:   report.SupervisorResponding,
-		SupervisorError:        report.SupervisorError,
-		SupervisorFingerprint:  report.SupervisorFingerprint,
-		WorkerPIDs:             report.WorkerPIDs,
-		WorkerError:            report.WorkerError,
-		Runtime:                report.Runtime,
-		Window:                 nil,
-		Coverage:               nil,
-		Metrics:                nil,
-		TimeBreakdown:          nil,
-		UnattributedDurationMS: nil,
-		Warnings:               nil,
-		Windows:                nil,
 	}
 }

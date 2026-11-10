@@ -38,7 +38,6 @@ func (b *CappedBuffer) Write(p []byte) (int, error) {
 	default:
 		b.buf = append(b.buf, p...)
 	}
-
 	return len(p), nil
 }
 
@@ -90,7 +89,6 @@ func (s *Store) RecordExchange(corr correlation.Context, ex Exchange) {
 	if s == nil {
 		return
 	}
-
 	s.Record(Record{
 		Timestamp:          clock.Now(),
 		Client:             ex.Client,
@@ -119,43 +117,24 @@ func (s *Store) RecordExchange(corr correlation.Context, ex Exchange) {
 
 // RecordCappedExchange records an exchange whose response body was bounded by
 // the caller while it streamed. responseBytes is the full byte count observed.
-func (s *Store) RecordCappedExchange(
-	corr correlation.Context,
-	ex Exchange,
-	responseBytes int,
-	responseTruncated bool,
-) {
+func (s *Store) RecordCappedExchange(corr correlation.Context, ex Exchange, responseBytes int, responseTruncated bool) {
 	if s == nil {
 		return
 	}
-
 	record := exchangeRecord(corr, ex)
 	s.recordWithMetadata(record, len(ex.RequestBody), responseBytes, false, responseTruncated)
 }
 
 func exchangeRecord(corr correlation.Context, ex Exchange) Record {
 	return Record{
-		Timestamp:          clock.Now(),
-		Client:             ex.Client,
-		Provider:           ex.Provider,
-		Concern:            ex.Concern,
-		Host:               ex.Host,
-		Method:             ex.Method,
-		Path:               ex.Path,
-		Status:             ex.Status,
-		RequestID:          corr.RequestID,
-		UpstreamRequestID:  ex.UpstreamRequestID,
-		SessionID:          ex.SessionID,
-		ConversationID:     ex.ConversationID,
-		ConversationSource: ex.ConversationSource,
-		TraceID:            string(corr.TraceID),
-		RequestHeaders:     ex.RequestHeaders,
-		ResponseHeaders:    ex.ResponseHeaders,
-		RequestBody:        ex.RequestBody,
-		ResponseBody:       ex.ResponseBody,
-		RequestType:        ex.RequestType,
-		ResponseType:       ex.ResponseType,
-		DecodedRequest:     nil,
-		Duration:           clock.Since(ex.Started),
+		Timestamp: clock.Now(), Client: ex.Client, Provider: ex.Provider, Concern: ex.Concern,
+		Host: ex.Host, Method: ex.Method, Path: ex.Path, Status: ex.Status, RequestID: corr.RequestID,
+		UpstreamRequestID: ex.UpstreamRequestID, SessionID: ex.SessionID,
+		ConversationID: ex.ConversationID, ConversationSource: ex.ConversationSource,
+		TraceID:        string(corr.TraceID),
+		RequestHeaders: ex.RequestHeaders, ResponseHeaders: ex.ResponseHeaders, RequestBody: ex.RequestBody,
+		ResponseBody: ex.ResponseBody, RequestType: ex.RequestType, ResponseType: ex.ResponseType,
+		DecodedRequest: nil,
+		Duration:       clock.Since(ex.Started),
 	}
 }

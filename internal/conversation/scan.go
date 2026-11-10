@@ -41,83 +41,49 @@ func scan(ctx context.Context, registry *Registry, prior scanCache) (scanResult,
 	out := make([]Record, 0, len(prior.records))
 	stamps := make(map[string]FileStamp, len(prior.stamps))
 	multiStates := copySkippedMultiStates(prior)
-
 	for _, provider := range registry.Providers() {
 		if prior.skipProviders[provider] {
 			out, stamps = appendSkippedProviderRecords(out, stamps, provider, prior)
 			continue
 		}
-
 		parser, err := registry.Lookup(provider)
 		if err != nil {
 			return scanResult{}, fmt.Errorf("lookup parser for %s: %w", provider.String(), err)
 		}
-
 		candidates, err := discoverCandidates(ctx, parser, provider, prior)
 		if err != nil {
 			return scanResult{}, err
 		}
-
 		for _, candidate := range candidates {
 			if ctx.Err() != nil {
-				slog.WarnContext(
-					ctx,
-					"conversation.scan.canceled",
-					"concern",
-					"conversation.scan",
-					"component",
-					"conversation",
-					"provider",
-					provider.String(),
-					"err",
-					ctx.Err(),
-				)
-
-				return scanResult{}, fmt.Errorf(
-					"scan %s conversations canceled: %w",
-					provider.String(),
-					ctx.Err(),
-				)
+				slog.WarnContext(ctx, "conversation.scan.canceled", "concern", "conversation.scan", "component", "conversation", "provider", provider.String(), "err", ctx.Err())
+				return scanResult{}, fmt.Errorf("scan %s conversations canceled: %w", provider.String(), ctx.Err())
 			}
-
 			result := scanCandidate(ctx, parser, candidate, prior)
 			out = append(out, result.records...)
 			if result.multiState != nil {
 				multiStates[candidate.Path] = *result.multiState
 			}
-
 			if result.stampRecorded {
 				if len(result.records) == 0 {
 					stamps[recordKey(candidate.Path, candidate.Selector)] = candidate.Stamp
 					continue
 				}
-
 				for _, record := range result.records {
 					stamps[recordKey(record.ArtifactPath, record.Selector)] = candidate.Stamp
 				}
 			}
 		}
 	}
-
 	if err := ctx.Err(); err != nil {
 		return scanResult{}, fmt.Errorf("scan conversations: %w", err)
 	}
-
 	changed := prior.stamps == nil ||
-		!maps.EqualFunc(
-			prior.records,
-			recordsByPath(out),
-			func(a, b Record) bool { return reflect.DeepEqual(a, b) },
-		) ||
+		!maps.EqualFunc(prior.records, recordsByPath(out), func(a, b Record) bool { return reflect.DeepEqual(a, b) }) ||
 		!maps.EqualFunc(prior.stamps, stamps, FileStamp.Equal) ||
-		!maps.EqualFunc(
-			prior.multiStates,
-			multiStates,
-			func(a, b MultiConversationScanState) bool {
-				return a.Stamp.Equal(b.Stamp) && a.CompleteOffset == b.CompleteOffset
-			},
-		)
-
+		!maps.EqualFunc(prior.multiStates, multiStates, func(a, b MultiConversationScanState) bool {
+			return a.Stamp.Equal(b.Stamp) && a.CompleteOffset == b.CompleteOffset
+		})
 	return scanResult{changed: changed, records: out, stamps: stamps, multiStates: multiStates}, nil
 }
 
@@ -126,9 +92,7 @@ func copySkippedMultiStates(prior scanCache) map[string]MultiConversationScanSta
 	if !prior.skipProviders[providerid.ProviderCursor] {
 		return multiStates
 	}
-
 	maps.Copy(multiStates, prior.multiStates)
-
 	return multiStates
 }
 
@@ -142,13 +106,11 @@ func appendSkippedProviderRecords(
 		if record.Provider != provider {
 			continue
 		}
-
 		out = append(out, record)
 		if stamp, found := prior.stamps[key]; found {
 			stamps[key] = stamp
 		}
 	}
-
 	return out, stamps
 }
 
@@ -167,28 +129,13 @@ func discoverCandidates(
 	} else {
 		candidates, err = parser.Discover(ctx, prior.records)
 	}
-
 	if err == nil {
 		return candidates, nil
 	}
-
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
-
-	slog.WarnContext(
-		ctx,
-		"conversation.scan.discover_failed",
-		"concern",
-		"conversation.scan",
-		"component",
-		"conversation",
-		"provider",
-		provider.String(),
-		"err",
-		err,
-	)
-
+	slog.WarnContext(ctx, "conversation.scan.discover_failed", "concern", "conversation.scan", "component", "conversation", "provider", provider.String(), "err", err)
 	return nil, fmt.Errorf("discover %s conversations: %w", provider.String(), err)
 }
 
@@ -198,39 +145,24 @@ type scanCandidateResult struct {
 	multiState    *MultiConversationScanState
 }
 
-func scanCandidate(
-	ctx context.Context,
-	parser Parser,
-	candidate ScanCandidate,
-	prior scanCache,
-) scanCandidateResult {
+func scanCandidate(ctx context.Context, parser Parser, candidate ScanCandidate, prior scanCache) scanCandidateResult {
 	if multi, ok := parser.(MultiConversationParser); ok {
 		return scanMultiConversationCandidate(ctx, multi, candidate, prior)
 	}
-
 	key := recordKey(candidate.Path, candidate.Selector)
-	if previous, ok := prior.stamps[key]; ok && previous.Equal(candidate.Stamp) &&
-		!candidate.MetadataChanged {
+	if previous, ok := prior.stamps[key]; ok && previous.Equal(candidate.Stamp) && !candidate.MetadataChanged {
 		record, found := prior.records[key]
 		if found {
-			return scanCandidateResult{
-				records:       []Record{record},
-				stampRecorded: true,
-				multiState:    nil,
-			}
+			return scanCandidateResult{records: []Record{record}, stampRecorded: true, multiState: nil}
 		}
-
 		return scanCandidateResult{records: nil, stampRecorded: true, multiState: nil}
 	}
-
 	if record, found := parser.ScanRecord(candidate.Path, candidate.Stamp); found {
 		return scanCandidateResult{records: []Record{record}, stampRecorded: true, multiState: nil}
 	}
-
 	if record, found := prior.records[key]; found {
 		return scanCandidateResult{records: []Record{record}, stampRecorded: false, multiState: nil}
 	}
-
 	return scanCandidateResult{records: nil, stampRecorded: true, multiState: nil}
 }
 
@@ -260,21 +192,18 @@ func scanMultiConversationCandidate(
 		input.PriorRecords = priorRecords
 		input.StartOffset = state.CompleteOffset
 	}
-
 	result, found := parser.ScanRecords(ctx, input)
 	if found {
 		currentState := MultiConversationScanState{
 			Stamp:          candidate.Stamp,
 			CompleteOffset: result.CompleteOffset,
 		}
-
 		return scanCandidateResult{
 			records:       result.Records,
 			stampRecorded: true,
 			multiState:    &currentState,
 		}
 	}
-
 	if len(priorRecords) > 0 {
 		return scanCandidateResult{
 			records:       priorRecords,
@@ -282,30 +211,22 @@ func scanMultiConversationCandidate(
 			multiState:    nil,
 		}
 	}
-
 	return scanCandidateResult{records: nil, stampRecorded: true, multiState: nil}
 }
 
 func recordsForArtifact(records map[string]Record, path string) []Record {
 	grouped := make([]Record, 0)
-
 	for _, record := range records {
 		if record.ArtifactPath == path {
 			grouped = append(grouped, record)
 		}
 	}
-
-	sort.SliceStable(
-		grouped,
-		func(i int, j int) bool {
-			if grouped[i].Selector != grouped[j].Selector {
-				return grouped[i].Selector < grouped[j].Selector
-			}
-
-			return grouped[i].ID < grouped[j].ID
-		},
-	)
-
+	sort.SliceStable(grouped, func(i int, j int) bool {
+		if grouped[i].Selector != grouped[j].Selector {
+			return grouped[i].Selector < grouped[j].Selector
+		}
+		return grouped[i].ID < grouped[j].ID
+	})
 	return grouped
 }
 
@@ -313,6 +234,5 @@ func recordKey(path string, selector string) string {
 	if selector == "" {
 		return path
 	}
-
 	return path + "\x00" + selector
 }

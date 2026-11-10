@@ -12,9 +12,7 @@ import (
 
 // DecodeCaptureRequest implements mitm.CaptureDecoder for Cursor BidiAppend
 // transport bodies.
-func (routeProvider) DecodeCaptureRequest(
-	exchange mitm.ExchangeDiagnostic,
-) (capture.DecodedBody, bool) {
+func (routeProvider) DecodeCaptureRequest(exchange mitm.ExchangeDiagnostic) (capture.DecodedBody, bool) {
 	return DecodeCaptureRequest(RequestCapture{
 		Path:    exchange.Path,
 		Headers: exchange.RequestHeader,
@@ -31,72 +29,42 @@ func (routeProvider) DecodeCaptureRequest(
 // protobuf decode is a cursor-only diagnostic, so it stays out of the
 // shared leg facet. The decode never logs raw prompt bytes; only
 // request id, append seqno, and content-length/hash summaries surface.
-func (routeProvider) DiagnoseExchange(
-	ctx context.Context,
-	log *slog.Logger,
-	exchange mitm.ExchangeDiagnostic,
-) {
+func (routeProvider) DiagnoseExchange(ctx context.Context, log *slog.Logger, exchange mitm.ExchangeDiagnostic) {
 	if log == nil {
 		return
 	}
-
 	if exchange.HookName != "" {
 		return
 	}
-
-	diag, diagnosed := DiagnoseRequest(
-		RequestCapture{
-			Path:    exchange.Path,
-			Headers: exchange.RequestHeader,
-			Body:    exchange.DecodedRequestBody,
-		},
-		nil,
-	)
-	if !diagnosed {
+	diag, ok := DiagnoseRequest(RequestCapture{
+		Path:    exchange.Path,
+		Headers: exchange.RequestHeader,
+		Body:    exchange.DecodedRequestBody,
+	}, nil)
+	if !ok {
 		return
 	}
-
 	headers := ExtractCaptureHeaders(exchange.RequestHeader)
 	traceID, _, hasTraceparent := correlation.ParseTraceparent(headers.Traceparent)
-	log.InfoContext(
-		ctx,
-		"mitm.cursor.bidi_append.diagnostic",
-		"component",
-		"mitm",
-		"concern",
-		"providers.mitm.wire",
-		"provider",
-		ProviderName,
-		"host",
-		exchange.Host,
-		"path",
-		exchange.Path,
-		"concern_bucket",
-		resolveConcernBucket(exchange.Concern),
-		"request_id",
-		headers.RequestID,
-		"original_request_id",
-		headers.OriginalRequestID,
-		"session_id",
-		headers.SessionID,
-		"trace_id",
-		captureTraceID(traceID, hasTraceparent),
-		"bidi_request_id",
-		diag.RequestID,
-		"bidi_append_seqno",
-		diag.AppendSeqno,
-		"bidi_decoded_bytes",
-		diag.DecodedBytes,
-		"bidi_decoded_sha256",
-		diag.DecodedSHA256,
-		"bidi_payload_bytes",
-		diag.PayloadBytes,
-		"bidi_payload_sha256",
-		diag.PayloadSHA256,
-		"bidi_sentinel_found",
-		diag.SentinelFound,
-		"bidi_sentinel_requested",
-		diag.SentinelRequested,
+	log.InfoContext(ctx, "mitm.cursor.bidi_append.diagnostic",
+		"component", "mitm",
+		"concern", "providers.mitm.wire",
+		"provider", ProviderName,
+		"host", exchange.Host,
+		"path", exchange.Path,
+		"concern_bucket", resolveConcernBucket(exchange.Concern),
+		"request_id", headers.RequestID,
+		"original_request_id", headers.OriginalRequestID,
+		"session_id", headers.SessionID,
+		"trace_id", captureTraceID(traceID, hasTraceparent),
+		"bidi_request_id", diag.RequestID,
+		"bidi_append_seqno", diag.AppendSeqno,
+		"bidi_decoded_bytes", diag.DecodedBytes,
+		"bidi_decoded_sha256", diag.DecodedSHA256,
+		"bidi_payload_bytes", diag.PayloadBytes,
+		"bidi_payload_sha256", diag.PayloadSHA256,
+		"bidi_sentinel_found", diag.SentinelFound,
+		"bidi_sentinel_requested", diag.SentinelRequested,
 	)
 }
 
@@ -105,7 +73,6 @@ func resolveConcernBucket(concern string) string {
 	if concern == "" {
 		return "unknown"
 	}
-
 	return concern
 }
 
@@ -113,6 +80,5 @@ func captureTraceID(traceID correlation.TraceID, ok bool) string {
 	if !ok {
 		return ""
 	}
-
 	return string(traceID)
 }

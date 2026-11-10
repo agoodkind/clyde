@@ -41,7 +41,6 @@ func (s splitter) Plan(body []byte) (codex.CompactionSplit, bool) {
 	if !ok {
 		return codex.CompactionSplit{Forwarded: nil, Injection: ""}, false
 	}
-
 	return codex.CompactionSplit{Forwarded: result.Forwarded, Injection: result.Injection}, true
 }
 
@@ -52,18 +51,13 @@ func (Provider) ParseCompaction(body []byte) (reorientinject.ParsedRequest, bool
 	if !ok {
 		return noRequest(), false
 	}
-
 	messages := make([]reorientinject.Message, 0, len(decoded.Messages))
 	for _, message := range decoded.Messages {
-		messages = append(
-			messages,
-			reorientinject.Message{
-				Role:     role(message.Role),
-				Segments: segments(message.Segments),
-			},
-		)
+		messages = append(messages, reorientinject.Message{
+			Role:     role(message.Role),
+			Segments: segments(message.Segments),
+		})
 	}
-
 	// The Codex compaction prompt is a fixed client string with no argument
 	// block, and the adapter reads the session id from the turn metadata
 	// header for the registry.
@@ -86,37 +80,22 @@ func (Provider) Truncate(
 	if !ok {
 		return nil, errNotCompaction
 	}
-
-	truncated, err := codex.TruncateCompactionInput(
-		body,
-		codex.CompactionCut{
-			MessageIndex: cut.MessageIndex,
-			SegmentIndex: cut.SegmentIndex,
-			HeadRunes:    cut.HeadRunes,
-		},
-		decoded.RetainStart,
-		instructionStart,
-	)
+	truncated, err := codex.TruncateCompactionInput(body, codex.CompactionCut{
+		MessageIndex: cut.MessageIndex,
+		SegmentIndex: cut.SegmentIndex,
+		HeadRunes:    cut.HeadRunes,
+	}, decoded.RetainStart, instructionStart)
 	if err != nil {
-		slog.Warn(
-			"providers.codex.compaction_truncate_failed",
-			"concern",
-			logConcern,
-			"component",
-			logComponent,
-			"message_index",
-			cut.MessageIndex,
-			"segment_index",
-			cut.SegmentIndex,
-			"head_runes",
-			cut.HeadRunes,
-			"err",
-			err,
+		slog.Warn("providers.codex.compaction_truncate_failed",
+			"concern", logConcern,
+			"component", logComponent,
+			"message_index", cut.MessageIndex,
+			"segment_index", cut.SegmentIndex,
+			"head_runes", cut.HeadRunes,
+			"err", err,
 		)
-
 		return nil, fmt.Errorf("truncate codex compaction request: %w", err)
 	}
-
 	return truncated, nil
 }
 
@@ -148,23 +127,18 @@ func role(wire codex.CompactionRole) reorientinject.Role {
 	case codex.CompactionRoleDeveloper:
 		return reorientinject.RoleSystem
 	}
-
 	return reorientinject.RoleOther
 }
 
 func segments(wire []codex.CompactionSegment) []reorientinject.Segment {
 	out := make([]reorientinject.Segment, 0, len(wire))
 	for _, segment := range wire {
-		out = append(
-			out,
-			reorientinject.Segment{
-				Kind:   segmentKind(segment.Kind),
-				Text:   segment.Text,
-				Atomic: segment.Atomic,
-			},
-		)
+		out = append(out, reorientinject.Segment{
+			Kind:   segmentKind(segment.Kind),
+			Text:   segment.Text,
+			Atomic: segment.Atomic,
+		})
 	}
-
 	return out
 }
 
@@ -183,6 +157,5 @@ func segmentKind(kind codex.CompactionSegmentKind) reorientinject.SegmentKind {
 	case codex.CompactionSegmentOther:
 		return reorientinject.KindOther
 	}
-
 	return reorientinject.KindOther
 }

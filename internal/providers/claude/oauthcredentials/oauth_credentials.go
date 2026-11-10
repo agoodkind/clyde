@@ -45,10 +45,8 @@ func (t *Tokens) Clone() *Tokens {
 	if t == nil {
 		return nil
 	}
-
 	clone := *t
 	clone.Scopes = append([]string(nil), t.Scopes...)
-
 	return &clone
 }
 
@@ -103,37 +101,19 @@ type Document struct {
 func ReadCandidates(ctx context.Context, options ReadOptions) []ReadResult {
 	options = normalizeReadOptions(options)
 	stores := credentialStores(options)
-
 	results := make([]ReadResult, 0, len(stores))
 	for _, store := range stores {
 		select {
 		case <-ctx.Done():
-			results = append(
-				results,
-				ReadResult{
-					Source:  store.Source(),
-					Err:     ctx.Err(),
-					Tokens:  nil,
-					Present: false,
-					Metadata: Metadata{
-						AccessTokenPresent:  false,
-						RefreshTokenPresent: false,
-						ExpiresAtPresent:    false,
-						ExpiresAt:           0,
-						Expired:             false,
-						Scopes:              nil,
-						Fingerprint:         "",
-						FileMtime:           0,
-					},
-				},
-			)
+			results = append(results, ReadResult{
+				Source: store.Source(),
+				Err:    ctx.Err(), Tokens: nil, Present: false, Metadata: Metadata{AccessTokenPresent: false, RefreshTokenPresent: false, ExpiresAtPresent: false, ExpiresAt: 0, Expired: false, Scopes: nil, Fingerprint: "", FileMtime: 0},
+			})
 			continue
 		default:
 		}
-
 		results = append(results, store.Read(ctx))
 	}
-
 	return results
 }
 
@@ -142,30 +122,14 @@ func NewMetadata(tokens *Tokens, now time.Time, fileMtime int64) Metadata {
 	return newMetadata(tokens, now, fileMtime, time.Now)
 }
 
-func newMetadata(
-	tokens *Tokens,
-	now time.Time,
-	fileMtime int64,
-	nowFunc func() time.Time,
-) Metadata {
+func newMetadata(tokens *Tokens, now time.Time, fileMtime int64, nowFunc func() time.Time) Metadata {
 	if now.IsZero() {
 		now = nowFunc()
 	}
-
-	metadata := Metadata{
-		FileMtime:           fileMtime,
-		AccessTokenPresent:  false,
-		RefreshTokenPresent: false,
-		ExpiresAtPresent:    false,
-		ExpiresAt:           0,
-		Expired:             false,
-		Scopes:              nil,
-		Fingerprint:         "",
-	}
+	metadata := Metadata{FileMtime: fileMtime, AccessTokenPresent: false, RefreshTokenPresent: false, ExpiresAtPresent: false, ExpiresAt: 0, Expired: false, Scopes: nil, Fingerprint: ""}
 	if tokens == nil {
 		return metadata
 	}
-
 	metadata.AccessTokenPresent = tokens.AccessToken != ""
 	metadata.RefreshTokenPresent = tokens.RefreshToken != ""
 	metadata.ExpiresAtPresent = tokens.ExpiresAt != 0
@@ -173,7 +137,6 @@ func newMetadata(
 	metadata.Expired = tokensExpiredAt(tokens, now)
 	metadata.Scopes = append([]string(nil), tokens.Scopes...)
 	metadata.Fingerprint = Fingerprint(tokens)
-
 	return metadata
 }
 
@@ -182,7 +145,6 @@ func Fingerprint(tokens *Tokens) string {
 	if tokens == nil {
 		return ""
 	}
-
 	scopes := append([]string(nil), tokens.Scopes...)
 	sort.Strings(scopes)
 	hash := sha256.New()
@@ -192,7 +154,6 @@ func Fingerprint(tokens *Tokens) string {
 	writeHashPart(hash, strings.Join(scopes, " "))
 	writeHashPart(hash, tokens.SubscriptionType)
 	writeHashPart(hash, tokens.RateLimitTier)
-
 	return hex.EncodeToString(hash.Sum(nil))[:16]
 }
 
@@ -207,15 +168,12 @@ func ResolveDirectory(home, configured string) string {
 	if configured == "" {
 		return filepath.Join(home, ".claude")
 	}
-
 	if configured == "~" {
 		return filepath.Clean(home)
 	}
-
 	if relative, ok := strings.CutPrefix(configured, "~/"); ok {
 		return filepath.Join(home, relative)
 	}
-
 	return filepath.Clean(configured)
 }
 
@@ -225,15 +183,12 @@ func normalizeReadOptionsWithClock(options ReadOptions, nowFunc func() time.Time
 			options.CredentialsDir = ResolveDirectory(home, "")
 		}
 	}
-
 	if options.Platform == "" {
 		options.Platform = runtime.GOOS
 	}
-
 	if options.Now.IsZero() {
 		options.Now = nowFunc()
 	}
-
 	return options
 }
 
@@ -246,7 +201,6 @@ func credentialStores(options ReadOptions) []Store {
 			},
 		}
 	}
-
 	return []Store{
 		fileStore{
 			credentialsDir: options.CredentialsDir,
@@ -258,42 +212,14 @@ func credentialStores(options ReadOptions) []Store {
 func parseBlob(data []byte, now time.Time, fileMtime int64) (*Tokens, Metadata, error) {
 	var document credentialsDocument
 	if err := json.Unmarshal(data, &document); err != nil {
-		slog.Warn(
-			"providers.claude.oauth.parse_blob_failed",
-			"concern",
-			"providers.claude.oauth",
-			"err",
-			err,
-		)
-
-		return nil, Metadata{
-			FileMtime:           fileMtime,
-			AccessTokenPresent:  false,
-			RefreshTokenPresent: false,
-			ExpiresAtPresent:    false,
-			ExpiresAt:           0,
-			Expired:             false,
-			Scopes:              nil,
-			Fingerprint:         "",
-		}, fmt.Errorf("unmarshal credentials: %w", err)
+		slog.Warn("providers.claude.oauth.parse_blob_failed", "concern", "providers.claude.oauth", "err", err)
+		return nil, Metadata{FileMtime: fileMtime, AccessTokenPresent: false, RefreshTokenPresent: false, ExpiresAtPresent: false, ExpiresAt: 0, Expired: false, Scopes: nil, Fingerprint: ""}, fmt.Errorf("unmarshal credentials: %w", err)
 	}
-
 	if document.ClaudeAIOauth == nil {
-		return nil, Metadata{
-			FileMtime:           fileMtime,
-			AccessTokenPresent:  false,
-			RefreshTokenPresent: false,
-			ExpiresAtPresent:    false,
-			ExpiresAt:           0,
-			Expired:             false,
-			Scopes:              nil,
-			Fingerprint:         "",
-		}, nil
+		return nil, Metadata{FileMtime: fileMtime, AccessTokenPresent: false, RefreshTokenPresent: false, ExpiresAtPresent: false, ExpiresAt: 0, Expired: false, Scopes: nil, Fingerprint: ""}, nil
 	}
-
 	tokens := document.ClaudeAIOauth.Clone()
 	metadata := NewMetadata(tokens, now, fileMtime)
-
 	return tokens, metadata, nil
 }
 
@@ -301,11 +227,9 @@ func tokensExpiredAt(tokens *Tokens, now time.Time) bool {
 	if tokens == nil || tokens.AccessToken == "" {
 		return true
 	}
-
 	if tokens.ExpiresAt == 0 {
 		return false
 	}
-
 	return !now.Before(time.UnixMilli(tokens.ExpiresAt))
 }
 

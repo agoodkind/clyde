@@ -231,80 +231,44 @@ func NewEventRenderer(reqID, modelAlias, backend string, log *slog.Logger) *Even
 		modelAlias,
 		backend,
 		log,
-		EventRendererOptions{
-			ReasoningRenderMode:       ReasoningRenderModeDualSurface,
-			NativePatchRepresentation: "",
-		},
+		EventRendererOptions{ReasoningRenderMode: ReasoningRenderModeDualSurface, NativePatchRepresentation: ""},
 	)
 }
 
 // NewEventRendererWithOptions constructs a renderer with a detached
 // diagnostic context and explicit render options.
-func NewEventRendererWithOptions(
-	reqID string,
-	modelAlias string,
-	backend string,
-	log *slog.Logger,
-	options EventRendererOptions,
-) *EventRenderer {
-	return NewEventRendererWithContextAndOptions(
-		context.Background(),
-		reqID,
-		modelAlias,
-		backend,
-		log,
-		options,
-	)
+func NewEventRendererWithOptions(reqID, modelAlias, backend string, log *slog.Logger, options EventRendererOptions) *EventRenderer {
+	return NewEventRendererWithContextAndOptions(context.Background(), reqID, modelAlias, backend, log, options)
 }
 
 // NewEventRendererWithContext constructs a renderer with correlation-aware
 // logging context attached to each diagnostic log event.
-func NewEventRendererWithContext(
-	ctx context.Context,
-	reqID string,
-	modelAlias string,
-	backend string,
-	log *slog.Logger,
-) *EventRenderer {
+func NewEventRendererWithContext(ctx context.Context, reqID, modelAlias, backend string, log *slog.Logger) *EventRenderer {
 	return NewEventRendererWithContextAndOptions(
 		ctx,
 		reqID,
 		modelAlias,
 		backend,
 		log,
-		EventRendererOptions{
-			ReasoningRenderMode:       ReasoningRenderModeDualSurface,
-			NativePatchRepresentation: "",
-		},
+		EventRendererOptions{ReasoningRenderMode: ReasoningRenderModeDualSurface, NativePatchRepresentation: ""},
 	)
 }
 
 // NewEventRendererWithContextAndOptions constructs a renderer with
 // correlation-aware logging context attached to each diagnostic log event
 // and explicit render options.
-func NewEventRendererWithContextAndOptions(
-	ctx context.Context,
-	reqID string,
-	modelAlias string,
-	backend string,
-	log *slog.Logger,
-	options EventRendererOptions,
-) *EventRenderer {
+func NewEventRendererWithContextAndOptions(ctx context.Context, reqID, modelAlias, backend string, log *slog.Logger, options EventRendererOptions) *EventRenderer {
 	if log == nil {
 		log = slog.Default()
 	}
-
 	log = slogger.WithConcern(log, slogger.ConcernAdapterChatRender)
-
 	return &EventRenderer{
-		createdUnix:         clock.Now().Unix(),
-		modelAlias:          modelAlias,
-		reqID:               reqID,
-		backend:             backend,
-		reasoningRenderMode: normalizeReasoningRenderMode(options.ReasoningRenderMode),
-		nativePatchRepresentation: normalizeNativePatchRepresentation(
-			options.NativePatchRepresentation,
-		),
+		createdUnix:               clock.Now().Unix(),
+		modelAlias:                modelAlias,
+		reqID:                     reqID,
+		backend:                   backend,
+		reasoningRenderMode:       normalizeReasoningRenderMode(options.ReasoningRenderMode),
+		nativePatchRepresentation: normalizeNativePatchRepresentation(options.NativePatchRepresentation),
 		nativePatchJSONOpen:       nil,
 		contextFunc:               func() context.Context { return ctx },
 		log:                       log,
@@ -323,23 +287,16 @@ func NewEventRendererWithContextAndOptions(
 		lastReasoningSignature:    "",
 		lastReasoningRedactedData: "",
 		upstreamResponseID:        "",
-		assistantText: assistantTextAggregate{
-			deltaCount: 0,
-			chars:      0,
-			text:       strings.Builder{},
-		},
-		assistantTextLogged: false,
-		toolCallNames:       nil,
-		hasSubagentToolCall: false,
+		assistantText:             assistantTextAggregate{deltaCount: 0, chars: 0, text: strings.Builder{}},
+		assistantTextLogged:       false,
+		toolCallNames:             nil,
+		hasSubagentToolCall:       false,
 	}
 }
 
 // State returns whether this renderer observed or displayed reasoning.
 func (r *EventRenderer) State() RendererState {
-	return RendererState{
-		ReasoningSignaled: r.reasoningSignaled,
-		ReasoningVisible:  r.reasoningVisible,
-	}
+	return RendererState{ReasoningSignaled: r.reasoningSignaled, ReasoningVisible: r.reasoningVisible}
 }
 
 // RequestID returns the stream chunk id used by this renderer.
@@ -356,7 +313,6 @@ func (r *EventRenderer) HasEmittedRole() bool {
 	if r == nil {
 		return false
 	}
-
 	return r.seenRole
 }
 
@@ -365,7 +321,6 @@ func (r *EventRenderer) SetContext(ctx context.Context) {
 	if r == nil {
 		return
 	}
-
 	r.contextFunc = func() context.Context { return ctx }
 }
 
@@ -376,7 +331,6 @@ func (r *EventRenderer) HandleEvent(ev Event) []adapteropenai.StreamChunk {
 	if td, ok := ev.(ToolCallDelta); ok {
 		r.recordToolCallNames(td.ToolCalls)
 	}
-
 	logEvent := r.handleEventDiagnostics(ev)
 	out := r.dispatchEvent(ev)
 	if logEvent {
@@ -384,7 +338,6 @@ func (r *EventRenderer) HandleEvent(ev Event) []adapteropenai.StreamChunk {
 			r.logRender(ev, ch)
 		}
 	}
-
 	return out
 }
 
@@ -397,12 +350,9 @@ func (r *EventRenderer) handleEventDiagnostics(ev Event) bool {
 	if logEvent {
 		r.flushSuppressedEventSummaries(r.logContext())
 		r.logNormalized(ev)
-
 		return true
 	}
-
 	r.recordSuppressedEvent(ev)
-
 	return false
 }
 
@@ -423,7 +373,6 @@ func (r *EventRenderer) dispatchEvent(ev Event) []adapteropenai.StreamChunk {
 	case ToolCallDelta:
 		return r.handleToolCallDelta(e)
 	}
-
 	return nil
 }
 
@@ -439,24 +388,19 @@ func (r *EventRenderer) handleReasoningSignaled(ev ReasoningSignaled) []adaptero
 	if kind := strings.TrimSpace(ev.ReasoningKind); kind != "" {
 		r.lastReasoningKind = kind
 	}
-
 	if r.reasoningRenderMode == ReasoningRenderModeReasoningContentOnly {
 		return nil
 	}
-
 	// Open the synthetic content block that makes reasoning visible in Cursor BYOK.
 	// Later reasoning deltas fill it; otherwise finish closes an empty block.
 	if r.reasoningVisible || r.reasoningOpen {
 		return nil
 	}
-
 	chunk := r.renderReasoningOpen()
 	if chunk == nil {
 		return nil
 	}
-
 	r.reasoningVisible = true
-
 	return []adapteropenai.StreamChunk{*chunk}
 }
 
@@ -474,16 +418,13 @@ func (r *EventRenderer) handleReasoningDelta(ev ReasoningDelta) []adapteropenai.
 	if sig := strings.TrimSpace(ev.Signature); sig != "" {
 		r.lastReasoningSignature = sig
 	}
-
 	if data := strings.TrimSpace(ev.RedactedData); data != "" {
 		r.lastReasoningRedactedData = data
 	}
-
 	chunk := r.renderReasoningFromDelta(ev)
 	if chunk == nil {
 		return nil
 	}
-
 	return []adapteropenai.StreamChunk{*chunk}
 }
 
@@ -495,11 +436,9 @@ func (r *EventRenderer) handleReasoningFinished(ev ReasoningFinished) []adaptero
 	if enc := strings.TrimSpace(ev.EncryptedContent); enc != "" {
 		r.lastReasoningEncrypted = enc
 	}
-
 	if sig := strings.TrimSpace(ev.Signature); sig != "" {
 		r.lastReasoningSignature = sig
 	}
-
 	if r.reasoningRenderMode == ReasoningRenderModeReasoningContentOnly {
 		r.lastReasoningEncrypted = ""
 		r.lastReasoningSignature = ""
@@ -507,15 +446,12 @@ func (r *EventRenderer) handleReasoningFinished(ev ReasoningFinished) []adaptero
 		r.lastReasoningKind = ""
 		r.reasoningBodyEmitted = false
 		r.reasoningOpen = false
-
 		return nil
 	}
-
 	chunk := r.renderReasoningClose()
 	if chunk == nil {
 		return nil
 	}
-
 	return []adapteropenai.StreamChunk{*chunk}
 }
 
@@ -538,26 +474,19 @@ func (r *EventRenderer) handleToolCallDelta(ev ToolCallDelta) []adapteropenai.St
 	if ev.NativePatchInput != nil {
 		toolCalls = r.renderNativePatchToolCalls(toolCalls, *ev.NativePatchInput)
 	}
-
 	return r.appendReasoningCloseAnd(r.renderToolCalls(toolCalls))
 }
 
-func (r *EventRenderer) renderNativePatchToolCalls(
-	toolCalls []adapteropenai.ToolCall,
-	patch NativePatchInput,
-) []adapteropenai.ToolCall {
+func (r *EventRenderer) renderNativePatchToolCalls(toolCalls []adapteropenai.ToolCall, patch NativePatchInput) []adapteropenai.ToolCall {
 	if len(toolCalls) == 0 {
 		return nil
 	}
-
 	out := append([]adapteropenai.ToolCall(nil), toolCalls...)
 	arguments := patch.Input
 	if r.nativePatchRepresentation == NativePatchRepresentationJSON {
 		arguments = r.renderJSONPatchFragment(out[0].Index, patch)
 	}
-
 	out[0].Function.Arguments = arguments
-
 	return out
 }
 
@@ -565,45 +494,36 @@ func (r *EventRenderer) renderJSONPatchFragment(index int, patch NativePatchInpu
 	if r.nativePatchJSONOpen == nil {
 		r.nativePatchJSONOpen = make(map[int]bool)
 	}
-
 	arguments := ""
 	if !r.nativePatchJSONOpen[index] {
 		arguments = `{"input":"`
 		r.nativePatchJSONOpen[index] = true
 	}
-
 	if patch.Input != "" {
 		encoded, err := json.Marshal(patch.Input)
 		if err != nil {
 			return arguments
 		}
-
 		arguments += string(encoded[1 : len(encoded)-1])
 	}
-
 	if patch.Final {
 		arguments += `"}`
 		delete(r.nativePatchJSONOpen, index)
 	}
-
 	return arguments
 }
 
 // appendReasoningCloseAnd prepends a reasoning-close chunk (when one is
 // emitted) ahead of the supplied chunk, returning the ordered slice. Either
 // chunk may be nil.
-func (r *EventRenderer) appendReasoningCloseAnd(
-	chunk *adapteropenai.StreamChunk,
-) []adapteropenai.StreamChunk {
+func (r *EventRenderer) appendReasoningCloseAnd(chunk *adapteropenai.StreamChunk) []adapteropenai.StreamChunk {
 	var out []adapteropenai.StreamChunk
 	if closeChunk := r.renderReasoningClose(); closeChunk != nil {
 		out = append(out, *closeChunk)
 	}
-
 	if chunk != nil {
 		out = append(out, *chunk)
 	}
-
 	return out
 }
 
@@ -611,22 +531,12 @@ func (r *EventRenderer) renderText(text string) *adapteropenai.StreamChunk {
 	if strings.TrimSpace(text) == "" && text == "" {
 		return nil
 	}
-
-	delta := adapteropenai.StreamDelta{
-		Content:          text,
-		Role:             "",
-		Reasoning:        "",
-		ReasoningContent: "",
-		ToolCalls:        nil,
-		Refusal:          "",
-	}
+	delta := adapteropenai.StreamDelta{Content: text, Role: "", Reasoning: "", ReasoningContent: "", ToolCalls: nil, Refusal: ""}
 	if !r.seenRole {
 		delta.Role = "assistant"
 		r.seenRole = true
 	}
-
 	ch := r.baseChunk(delta)
-
 	return &ch
 }
 
@@ -634,47 +544,25 @@ func (r *EventRenderer) renderRefusal(text string) *adapteropenai.StreamChunk {
 	if strings.TrimSpace(text) == "" && text == "" {
 		return nil
 	}
-
-	delta := adapteropenai.StreamDelta{
-		Refusal:          text,
-		Role:             "",
-		Content:          "",
-		Reasoning:        "",
-		ReasoningContent: "",
-		ToolCalls:        nil,
-	}
+	delta := adapteropenai.StreamDelta{Refusal: text, Role: "", Content: "", Reasoning: "", ReasoningContent: "", ToolCalls: nil}
 	if !r.seenRole {
 		delta.Role = "assistant"
 		r.seenRole = true
 	}
-
 	ch := r.baseChunk(delta)
-
 	return &ch
 }
 
-func (r *EventRenderer) renderToolCalls(
-	toolCalls []adapteropenai.ToolCall,
-) *adapteropenai.StreamChunk {
+func (r *EventRenderer) renderToolCalls(toolCalls []adapteropenai.ToolCall) *adapteropenai.StreamChunk {
 	if len(toolCalls) == 0 {
 		return nil
 	}
-
-	delta := adapteropenai.StreamDelta{
-		ToolCalls:        toolCalls,
-		Role:             "",
-		Content:          "",
-		Reasoning:        "",
-		ReasoningContent: "",
-		Refusal:          "",
-	}
+	delta := adapteropenai.StreamDelta{ToolCalls: toolCalls, Role: "", Content: "", Reasoning: "", ReasoningContent: "", Refusal: ""}
 	if !r.seenRole {
 		delta.Role = "assistant"
 		r.seenRole = true
 	}
-
 	ch := r.baseChunk(delta)
-
 	return &ch
 }
 
@@ -684,10 +572,6 @@ func (r *EventRenderer) baseChunk(delta adapteropenai.StreamDelta) adapteropenai
 		Object:  "chat.completion.chunk",
 		Created: r.createdUnix,
 		Model:   r.modelAlias,
-		Choices: []adapteropenai.StreamChoice{
-			{Index: 0, Delta: delta, Logprobs: nil, FinishReason: nil},
-		},
-		Usage:             nil,
-		SystemFingerprint: "",
+		Choices: []adapteropenai.StreamChoice{{Index: 0, Delta: delta, Logprobs: nil, FinishReason: nil}}, Usage: nil, SystemFingerprint: "",
 	}
 }

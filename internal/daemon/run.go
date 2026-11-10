@@ -60,114 +60,54 @@ func RunCommandContext(ctx context.Context, log *slog.Logger, _ ...ExtraLoop) er
 	if log == nil {
 		log = slog.Default()
 	}
-
 	if err := config.EnsureRuntimeDir(); err != nil {
 		return fmt.Errorf("ensure runtime dir: %w", err)
 	}
-
 	stopUpdateScheduler := startSelfUpdateScheduler(ctx, log)
 	defer stopUpdateScheduler()
 	superviseErr := startSupervisorProcess(ctx, log)
 	select {
 	case err := <-superviseErr:
 		if err != nil {
-			log.WarnContext(
-				ctx,
-				"daemon.supervisor.failed",
-				"concern",
-				"process.daemon.lifecycle",
-				"component",
-				"daemon",
-				"err",
-				err,
-			)
-
+			log.WarnContext(ctx, "daemon.supervisor.failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
 			return fmt.Errorf("run daemon supervisor: %w", err)
 		}
-
 		return nil
 	case <-ctx.Done():
 		err := <-superviseErr
 		if err != nil {
-			log.WarnContext(
-				ctx,
-				"daemon.supervisor.failed",
-				"concern",
-				"process.daemon.lifecycle",
-				"component",
-				"daemon",
-				"err",
-				err,
-			)
-
+			log.WarnContext(ctx, "daemon.supervisor.failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
 			return fmt.Errorf("run daemon supervisor: %w", err)
 		}
-
 		return nil
 	}
 }
 
-func loadDaemonStartupConfig(
-	ctx context.Context,
-	log *slog.Logger,
-) (*config.Config, exportTokenConfig, error) {
+func loadDaemonStartupConfig(ctx context.Context, log *slog.Logger) (*config.Config, exportTokenConfig, error) {
 	var empty exportTokenConfig
 	cfg, err := config.LoadGlobalOrDefault()
 	if err != nil {
-		log.WarnContext(
-			ctx,
-			"daemon.config.load_failed",
-			"concern",
-			"process.daemon.lifecycle",
-			"component",
-			"daemon",
-			"err",
-			err,
-		)
-
+		log.WarnContext(ctx, "daemon.config.load_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
 		return nil, empty, fmt.Errorf("load daemon config: %w", err)
 	}
-
 	exportTokens, err := newExportTokenConfig(cfg)
 	if err != nil {
-		log.WarnContext(
-			ctx,
-			"daemon.export.api_keys_load_failed",
-			"concern",
-			"process.daemon.lifecycle",
-			"component",
-			"daemon",
-			"err",
-			err,
-		)
-
+		log.WarnContext(ctx, "daemon.export.api_keys_load_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
 		return nil, empty, fmt.Errorf("load export API keys: %w", err)
 	}
-
 	return cfg, exportTokens, nil
 }
 
-// RunContext starts the daemon worker process using parent as the parent
-// context for shutdown and child loops.
-//
-// It loads the configuration, starts the runtime and background workers, and
-// serves the control RPCs until cancellation or a runtime failure. It stops
-// extra loops and shuts down the runtime before returning. A nil logger selects
-// the default logger.
-//
-// A worker entry point can return the run result:
-//
-//	return RunContext(ctx, log)
+// RunContext starts the daemon worker process using ctx as the parent context
+// for shutdown and child loops.
 func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoop) (err error) {
 	if log == nil {
 		log = slog.Default()
 	}
-
 	cfg, exportTokens, err := loadDaemonStartupConfig(parent, log)
 	if err != nil {
 		return err
 	}
-
 	// Hash the config now, before any reload child could re-trigger on the
 	// content it just loaded. The watcher started below skips a change whose
 	// hash equals this baseline, so a touch or a reload-child sees no change.
@@ -182,7 +122,6 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 	if err != nil {
 		return fmt.Errorf("load inherited daemon runtime: %w", err)
 	}
-
 	stats := newProviderStatsRecorder(adapterruntime.NewPricingTable(cfg.Adapter.ModelPricing()))
 	runtime, err := startRuntime(ctx, cfg, log, stats, inherited)
 	if err != nil {
@@ -202,7 +141,12 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 	// while the distiller still reads the daemon log.
 	metricsWorker := startMetricsRollupWorker(ctx, log, runtime.group)
 
-	grpcServer := newDaemonGRPCServer(cfg, log, stats, conversationIndex, runtime, exportTokens)
+	grpcServer := grpc.NewServer(
+		grpc.MaxRecvMsgSize(controlMaxMessageBytes),
+		grpc.MaxSendMsgSize(controlMaxMessageBytes),
+	)
+	clydev1.RegisterClydeServiceServer(grpcServer, newControlServer(cfg, log, stats, conversationIndex, runtime.searchFreshness, grpcServer, runtime, exportTokens))
+	registerConversationContextService(grpcServer, conversationIndex)
 	grpcDone := make(chan error, 1)
 	go func() {
 		defer func() {
@@ -218,16 +162,7 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				log.ErrorContext(
-					ctx,
-					"daemon.mitm_drift.panic",
-					"concern",
-					"process.daemon.lifecycle",
-					"component",
-					"daemon",
-					"err",
-					fmt.Sprintf("panic: %v", recovered),
-				)
+				log.ErrorContext(ctx, "daemon.mitm_drift.panic", "concern", "process.daemon.lifecycle", "component", "daemon", "err", fmt.Sprintf("panic: %v", recovered))
 			}
 		}()
 		mitm.RunPeriodicDrift(ctx, runtime.captureStore, cfg.MITM, log)
@@ -237,8 +172,11 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 	if err := signalReady(); err != nil {
 		return fmt.Errorf("signal daemon readiness: %w", err)
 	}
-
-	logDaemonWorkerReady(ctx, log, cfg, runtime)
+	log.InfoContext(ctx, "daemon.worker.ready", "concern", "process.daemon.lifecycle", "component", "daemon",
+		"adapter_enabled", cfg.Adapter.Enabled,
+		"mitm_enabled", cfg.MITM.EnabledDefault,
+		"conversation_semantic_enabled", runtime.semantic != nil,
+	)
 	// Start the config watcher only after readiness so a config edit landing
 	// during boot cannot trigger a reload before this worker is the
 	// established generation.
@@ -254,67 +192,13 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 		if err != nil && !errors.Is(err, net.ErrClosed) {
 			return fmt.Errorf("daemon grpc failed: %w", err)
 		}
-
 		return nil
 	case err := <-runtime.errors:
 		if err != nil {
 			return fmt.Errorf("daemon runtime failed: %w", err)
 		}
-
 		return nil
 	}
-}
-
-func newDaemonGRPCServer(
-	cfg *config.Config,
-	log *slog.Logger,
-	stats *providerStatsRecorder,
-	conversationIndex *conversation.Index,
-	runtime *runtimeServices,
-	exportTokens exportTokenConfig,
-) *grpc.Server {
-	grpcServer := grpc.NewServer(
-		grpc.MaxRecvMsgSize(controlMaxMessageBytes),
-		grpc.MaxSendMsgSize(controlMaxMessageBytes),
-	)
-	clydev1.RegisterClydeServiceServer(
-		grpcServer,
-		newControlServer(
-			cfg,
-			log,
-			stats,
-			conversationIndex,
-			runtime.searchFreshness,
-			grpcServer,
-			runtime,
-			exportTokens,
-		),
-	)
-	registerConversationContextService(grpcServer, conversationIndex)
-
-	return grpcServer
-}
-
-func logDaemonWorkerReady(
-	ctx context.Context,
-	log *slog.Logger,
-	cfg *config.Config,
-	runtime *runtimeServices,
-) {
-	log.InfoContext(
-		ctx,
-		"daemon.worker.ready",
-		"concern",
-		"process.daemon.lifecycle",
-		"component",
-		"daemon",
-		"adapter_enabled",
-		cfg.Adapter.Enabled,
-		"mitm_enabled",
-		cfg.MITM.EnabledDefault,
-		"conversation_semantic_enabled",
-		runtime.semantic != nil,
-	)
 }
 
 func registerConversationContextService(grpcServer *grpc.Server, index *conversation.Index) {
@@ -331,7 +215,6 @@ func startSupervisorProcess(ctx context.Context, log *slog.Logger) <-chan error 
 		}()
 		superviseErr <- daemonsupervisor.SuperviseContext(ctx, log, config.RuntimeDir())
 	}()
-
 	return superviseErr
 }
 
@@ -342,16 +225,7 @@ func watchSignals(ctx context.Context, log *slog.Logger, cancel context.CancelFu
 		defer func() {
 			signal.Stop(signalCh)
 			if recovered := recover(); recovered != nil {
-				log.ErrorContext(
-					ctx,
-					"daemon.worker.signal_watch_panic",
-					"concern",
-					"process.daemon.lifecycle",
-					"component",
-					"daemon",
-					"err",
-					fmt.Sprintf("panic: %v", recovered),
-				)
+				log.ErrorContext(ctx, "daemon.worker.signal_watch_panic", "concern", "process.daemon.lifecycle", "component", "daemon", "err", fmt.Sprintf("panic: %v", recovered))
 			}
 		}()
 		select {
@@ -365,24 +239,10 @@ func watchSignals(ctx context.Context, log *slog.Logger, cancel context.CancelFu
 // startConfigWatcher constructs and starts the daemon's config-file watcher,
 // recording it on the runtime so reload and shutdown can drain it. A start
 // failure is non-fatal: the daemon keeps serving without auto-reload.
-func startConfigWatcher(
-	ctx context.Context,
-	log *slog.Logger,
-	runtime *runtimeServices,
-	baselineHash string,
-) {
+func startConfigWatcher(ctx context.Context, log *slog.Logger, runtime *runtimeServices, baselineHash string) {
 	runtime.configWatcher = newConfigWatcher(log, baselineHash, runtime)
 	if err := runtime.configWatcher.start(ctx); err != nil {
-		log.WarnContext(
-			ctx,
-			"daemon.config_watch.start_failed",
-			"concern",
-			"process.daemon.config",
-			"component",
-			"daemon",
-			"err",
-			err,
-		)
+		log.WarnContext(ctx, "daemon.config_watch.start_failed", "concern", "process.daemon.config", "component", "daemon", "err", err)
 		runtime.configWatcher = nil
 	}
 }
@@ -404,7 +264,6 @@ func newControlServer(
 		if !cfg.Conversation.Semantic.AnswersSearch() || runtime.semantic == nil {
 			return nil
 		}
-
 		return runtime.semantic.currentSearchClient()
 	}
 	searchSource := &rawTextFallbackSearchSource{
@@ -419,7 +278,6 @@ func newControlServer(
 		},
 		index: index,
 	}
-
 	return &controlServer{
 		UnimplementedClydeServiceServer: clydev1.UnimplementedClydeServiceServer{},
 		stats:                           stats,
@@ -430,32 +288,20 @@ func newControlServer(
 			return collectMITMStatus(cfg.MITM, runtime.mitmListeners)
 		},
 		runtimeStatus: runtime.statusSnapshot,
-		showCapture: func(showCtx context.Context, id string) (
-			mitmshow.ShowOutput,
-			error,
-		) {
+		showCapture: func(showCtx context.Context, id string) (mitmshow.ShowOutput, error) {
 			return mitmshow.Lookup(showCtx, cfg, id)
 		},
-		reload: func(ctx context.Context) (
-			*clydev1.ReloadDaemonResponse,
-			error,
-		) {
+		reload: func(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
 			return reloadDaemonWorker(ctx, log, grpcServer, runtime)
 		},
-		rebind: func(ctx context.Context) (
-			*clydev1.ReloadDaemonResponse,
-			error,
-		) {
+		rebind: func(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
 			return rebindDaemonWorker(ctx, log, grpcServer, runtime)
 		},
 		searchSource: &backendConversationSearchSource{
 			configured: searchSource,
 			index:      index,
 			settings:   func() config.ConversationSemanticConfig { return cfg.Conversation.Semantic },
-			client: func(backend config.ConversationSemanticBackend) (
-				conversationSemanticSearchClient,
-				bool,
-			) {
+			client: func(backend config.ConversationSemanticBackend) (conversationSemanticSearchClient, bool) {
 				backendRuntime, enabled := runtime.semanticBackends[backend]
 				return backendRuntime.runtime.currentSearchClient(), enabled
 			},
@@ -474,13 +320,11 @@ func startExtraLoops(log *slog.Logger, loops []ExtraLoop) []func() {
 		if loop == nil {
 			continue
 		}
-
 		stop := loop(log)
 		if stop != nil {
 			stops = append(stops, stop)
 		}
 	}
-
 	return stops
 }
 
@@ -495,46 +339,20 @@ func signalReady() error {
 	if fdText == "" {
 		return nil
 	}
-
 	fd, err := strconv.Atoi(fdText)
 	if err != nil {
-		slog.Warn(
-			"daemon.ready_fd.parse_failed",
-			"concern",
-			"process.daemon.lifecycle",
-			"component",
-			"daemon",
-			"fd",
-			fdText,
-			"err",
-			err,
-		)
-
+		slog.Warn("daemon.ready_fd.parse_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "fd", fdText, "err", err)
 		return fmt.Errorf("parse daemon ready fd %q: %w", fdText, err)
 	}
-
 	file := os.NewFile(uintptr(fd), "clyde-daemon-ready")
 	if file == nil {
 		return fmt.Errorf("open daemon ready fd %d", fd)
 	}
-
 	defer func() { _ = file.Close() }()
 	if _, err := file.WriteString("ready\n"); err != nil {
-		slog.Warn(
-			"daemon.ready_fd.write_failed",
-			"concern",
-			"process.daemon.lifecycle",
-			"component",
-			"daemon",
-			"fd",
-			fd,
-			"err",
-			err,
-		)
-
+		slog.Warn("daemon.ready_fd.write_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "fd", fd, "err", err)
 		return fmt.Errorf("write daemon ready fd: %w", err)
 	}
-
 	return nil
 }
 
@@ -543,7 +361,6 @@ func normalizeListenHost(host string) string {
 	if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
 		return strings.TrimSpace(trimmed[1 : len(trimmed)-1])
 	}
-
 	return trimmed
 }
 
@@ -555,9 +372,7 @@ func socketExists(path string) bool {
 	if path == "" {
 		return false
 	}
-
 	_, err := os.Stat(path)
-
 	return err == nil || !errors.Is(err, os.ErrNotExist)
 }
 
@@ -566,6 +381,5 @@ func ensureScratchDir() string {
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		return ""
 	}
-
 	return path
 }

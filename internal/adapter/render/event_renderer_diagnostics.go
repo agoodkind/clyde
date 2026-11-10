@@ -30,12 +30,10 @@ func (r *EventRenderer) SetUpstreamResponseID(ctx context.Context, responseID st
 	if r == nil {
 		return
 	}
-
 	responseID = strings.TrimSpace(responseID)
 	if responseID == "" {
 		return
 	}
-
 	r.upstreamResponseID = responseID
 	corr := clydeingress.WithUpstreamResponseID(correlation.FromContext(ctx), responseID)
 	newCtx := correlation.WithContext(ctx, corr)
@@ -51,15 +49,10 @@ func (r *EventRenderer) Flush(ctx context.Context) {
 // LogAssistantTextSummary emits the final assistant-text diagnostic
 // summary for this renderer, including delta counts, normalized text
 // hashes, preview snippets, and tool-call name attribution.
-func (r *EventRenderer) LogAssistantTextSummary(
-	ctx context.Context,
-	finishReason string,
-	usage *adapteropenai.Usage,
-) {
+func (r *EventRenderer) LogAssistantTextSummary(ctx context.Context, finishReason string, usage *adapteropenai.Usage) {
 	if r == nil || r.assistantTextLogged {
 		return
 	}
-
 	r.assistantTextLogged = true
 	summary := r.assistantText.summary()
 	attrs := []slog.Attr{
@@ -89,11 +82,9 @@ func (r *EventRenderer) LogAssistantTextSummary(
 	if r.upstreamResponseID != "" {
 		corr = clydeingress.WithUpstreamResponseID(corr, r.upstreamResponseID)
 	}
-
 	attrs = correlation.AppendAttrs(attrs, corr)
 	if usage != nil {
-		attrs = append(
-			attrs,
+		attrs = append(attrs,
 			slog.Int("usage_prompt_tokens", usage.PromptTokens),
 			slog.Int("usage_completion_tokens", usage.CompletionTokens),
 			slog.Int("usage_total_tokens", usage.TotalTokens),
@@ -103,30 +94,21 @@ func (r *EventRenderer) LogAssistantTextSummary(
 			slog.Int("usage_cache_write_tokens", usage.CacheWriteTokens),
 		)
 	}
-
-	r.log.LogAttrs(
-		ctx,
-		slog.LevelInfo,
-		"adapter.render.assistant_text_summary",
-		append([]slog.Attr{slog.String("concern", "adapter.chat.render")}, attrs...)...,
-	)
+	r.log.LogAttrs(ctx, slog.LevelInfo, "adapter.render.assistant_text_summary", append([]slog.Attr{slog.String("concern", "adapter.chat.render")}, attrs...)...)
 }
 
 func (r *EventRenderer) recordToolCallNames(toolCalls []adapteropenai.ToolCall) {
 	if r == nil {
 		return
 	}
-
 	for _, tc := range toolCalls {
 		name := strings.TrimSpace(tc.Function.Name)
 		if name == "" {
 			continue
 		}
-
 		if !slices.Contains(r.toolCallNames, name) {
 			r.toolCallNames = append(r.toolCallNames, name)
 		}
-
 		if isSubagentToolCallName(name) {
 			r.hasSubagentToolCall = true
 		}
@@ -159,7 +141,6 @@ func (r *EventRenderer) logNormalized(ev Event) {
 	if td, ok := ev.(ToolCallDelta); ok {
 		toolCalls = td.ToolCalls
 	}
-
 	attrs := []slog.Attr{
 		slog.String("component", "adapter"),
 		slog.String("subcomponent", "renderer"),
@@ -170,27 +151,16 @@ func (r *EventRenderer) logNormalized(ev Event) {
 		slog.String("event_kind", string(kind)),
 		slog.String("item_type", itemType),
 		slog.String("item_id", itemID),
-		slog.Bool(
-			"reasoning_signaled",
-			r.reasoningSignaled || kind == EventReasoningSignaled || kind == EventReasoningDelta,
-		),
+		slog.Bool("reasoning_signaled", r.reasoningSignaled || kind == EventReasoningSignaled || kind == EventReasoningDelta),
 		slog.Bool("reasoning_visible", r.reasoningVisible || kind == EventReasoningDelta),
 		slog.Int("delta_len", deltaLen),
 	}
 	attrs = append(attrs, toolCallLogAttrs(toolCalls)...)
-	r.log.LogAttrs(
-		r.logContext(),
-		slog.LevelDebug,
-		"adapter.event.normalized",
-		append(
-			[]slog.Attr{
-				// eventDiagnosticFields extracts the itemType, itemID, and delta length for
-				// the given event for use in diagnostic log attributes.
-				slog.String("concern", "adapter.chat.render"),
-			},
-			attrs...,
-		)...,
-	)
+	r.log.LogAttrs(r.logContext(), slog.LevelDebug, "adapter.event.normalized", append([]slog.Attr{
+		// eventDiagnosticFields extracts the itemType, itemID, and delta length for
+		// the given event for use in diagnostic log attributes.
+		slog.String("concern", "adapter.chat.render"),
+	}, attrs...)...)
 }
 
 func eventDiagnosticFields(ev Event) (itemType, itemID string, deltaLen int) {
@@ -212,20 +182,12 @@ func eventDiagnosticFields(ev Event) (itemType, itemID string, deltaLen int) {
 	}
 }
 
-func (r *EventRenderer) logRender(ev Event, chunk adapteropenai.StreamChunk) {
+func (r *EventRenderer) logRender(ev Event, ch adapteropenai.StreamChunk) {
 	kind := ev.eventKind()
-	delta := adapteropenai.StreamDelta{
-		Role:             "",
-		Content:          "",
-		Reasoning:        "",
-		ReasoningContent: "",
-		ToolCalls:        nil,
-		Refusal:          "",
+	delta := adapteropenai.StreamDelta{Role: "", Content: "", Reasoning: "", ReasoningContent: "", ToolCalls: nil, Refusal: ""}
+	if len(ch.Choices) > 0 {
+		delta = ch.Choices[0].Delta
 	}
-	if len(chunk.Choices) > 0 {
-		delta = chunk.Choices[0].Delta
-	}
-
 	attrs := []slog.Attr{
 		slog.String("component", "adapter"),
 		slog.String("subcomponent", "renderer"),
@@ -238,12 +200,7 @@ func (r *EventRenderer) logRender(ev Event, chunk adapteropenai.StreamChunk) {
 		slog.Int("delta_len", len(delta.Content)+len(delta.Reasoning)+len(delta.ReasoningContent)),
 	}
 	attrs = append(attrs, toolCallLogAttrs(delta.ToolCalls)...)
-	r.log.LogAttrs(
-		r.logContext(),
-		slog.LevelDebug,
-		"adapter.render.event",
-		append([]slog.Attr{slog.String("concern", "adapter.chat.render")}, attrs...)...,
-	)
+	r.log.LogAttrs(r.logContext(), slog.LevelDebug, "adapter.render.event", append([]slog.Attr{slog.String("concern", "adapter.chat.render")}, attrs...)...)
 }
 
 func shouldLogEvent(ev Event) bool {
@@ -263,7 +220,6 @@ func toolCallDeltaHasIdentity(toolCalls []adapteropenai.ToolCall) bool {
 			return true
 		}
 	}
-
 	return false
 }
 
@@ -271,17 +227,14 @@ func toolCallLogAttrs(toolCalls []adapteropenai.ToolCall) []slog.Attr {
 	if len(toolCalls) == 0 {
 		return nil
 	}
-
 	names := make([]string, 0, len(toolCalls))
 	ids := make([]string, 0, len(toolCalls))
 	argChars := 0
-
 	for _, tc := range toolCalls {
 		appendUniqueLogValue(&names, tc.Function.Name, 4)
 		appendUniqueLogValue(&ids, tc.ID, 4)
 		argChars += len(tc.Function.Arguments)
 	}
-
 	return []slog.Attr{
 		slog.Int("tool_call_count", len(toolCalls)),
 		slog.Any("tool_call_names", names),
@@ -295,11 +248,9 @@ func appendUniqueLogValue(values *[]string, value string, limit int) {
 	if value == "" || limit <= 0 || len(*values) >= limit {
 		return
 	}
-
 	if slices.Contains(*values, value) {
 		return
 	}
-
 	*values = append(*values, value)
 }
 
@@ -307,14 +258,12 @@ func (r *EventRenderer) recordSuppressedEvent(ev Event) {
 	if r.suppressed == nil {
 		r.suppressed = make(map[EventKind]*deltaSummary)
 	}
-
 	kind := ev.eventKind()
 	summary := r.suppressed[kind]
 	if summary == nil {
 		summary = &deltaSummary{Count: 0, Chars: 0, MaxChars: 0, ToolCalls: 0, ToolArgChars: 0}
 		r.suppressed[kind] = summary
 	}
-
 	summary.Count++
 	chars := eventTextLen(ev)
 	if td, ok := ev.(ToolCallDelta); ok {
@@ -324,7 +273,6 @@ func (r *EventRenderer) recordSuppressedEvent(ev Event) {
 			summary.ToolArgChars += len(tc.Function.Arguments)
 		}
 	}
-
 	summary.Chars += chars
 	if chars > summary.MaxChars {
 		summary.MaxChars = chars
@@ -350,23 +298,12 @@ func (r *EventRenderer) flushSuppressedEventSummaries(ctx context.Context) {
 	if len(r.suppressed) == 0 {
 		return
 	}
-
-	for _, kind := range []EventKind{
-		EventAssistantTextDelta,
-		EventReasoningDelta,
-		EventToolCallDelta,
-	} {
+	for _, kind := range []EventKind{EventAssistantTextDelta, EventReasoningDelta, EventToolCallDelta} {
 		summary := r.suppressed[kind]
 		if summary == nil || summary.Count == 0 {
 			continue
 		}
-
-		r.log.LogAttrs(
-			ctx,
-			slog.LevelDebug,
-			"adapter.event.delta_summary",
-			slog.String("concern", "adapter.chat.render"),
-			slog.String("component", "adapter"),
+		r.log.LogAttrs(ctx, slog.LevelDebug, "adapter.event.delta_summary", slog.String("concern", "adapter.chat.render"), slog.String("component", "adapter"),
 			slog.String("subcomponent", "renderer"),
 			slog.String("request_id", r.reqID),
 			slog.String("backend", r.backend),
@@ -381,7 +318,6 @@ func (r *EventRenderer) flushSuppressedEventSummaries(ctx context.Context) {
 		)
 		delete(r.suppressed, kind)
 	}
-
 	if len(r.suppressed) == 0 {
 		r.suppressed = nil
 	}
@@ -391,7 +327,6 @@ func (r *EventRenderer) logContext() context.Context {
 	if r == nil || r.contextFunc == nil {
 		return context.Background()
 	}
-
 	return r.contextFunc()
 }
 
@@ -404,6 +339,5 @@ func renderPolicyForEvent(kind EventKind) string {
 	case EventAssistantTextDelta, EventAssistantRefusalDelta:
 		return "content_delta"
 	}
-
 	return "content_delta"
 }

@@ -24,21 +24,17 @@ func (s *scriptedExact) Count(context.Context, string, string) (int, error) {
 	if s.errAt == i {
 		return 0, errors.New("count failed")
 	}
-
 	if i < len(s.counts) {
 		return s.counts[i], nil
 	}
-
 	return s.counts[len(s.counts)-1], nil
 }
 
 func lineBody(lines int) string {
 	var b strings.Builder
-
 	for range lines {
 		b.WriteString("xx\n") // 3 bytes -> 3 tokens at cpt=1
 	}
-
 	return b.String()
 }
 
@@ -61,7 +57,6 @@ func TestCapToLastTokensExactWithinBudgetKeepsCandidate(t *testing.T) {
 	if got != local {
 		t.Fatalf("within budget: got %q, want candidate %q", got, local)
 	}
-
 	if exact.calls != 1 {
 		t.Fatalf("within budget: exact called %d times, want 1", exact.calls)
 	}
@@ -86,15 +81,8 @@ func TestCapToLastTokensExactShrinksOnOvershoot(t *testing.T) {
 	got, _ := CapToLastTokensExact(context.Background(), body, 6, c, exact, "m")
 	local, _, _ := CapToLastTokens(body, 6, c)
 	if len(got) >= len(local) {
-		t.Fatalf(
-			"overshoot should shrink: got %q (len %d), local %q (len %d)",
-			got,
-			len(got),
-			local,
-			len(local),
-		)
+		t.Fatalf("overshoot should shrink: got %q (len %d), local %q (len %d)", got, len(got), local, len(local))
 	}
-
 	if exact.calls != 2 {
 		t.Fatalf("overshoot: exact called %d times, want 2", exact.calls)
 	}
@@ -113,17 +101,15 @@ func TestCapToLastTokensExactBoundedCalls(t *testing.T) {
 
 func TestAnthropicExactCounterUsesAPIKeyNotBearer(t *testing.T) {
 	var gotKey, gotAuth, gotVersion, gotBody string
-	srv := httptest.NewServer(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			gotKey = r.Header.Get("x-api-key")
-			gotAuth = r.Header.Get("Authorization")
-			gotVersion = r.Header.Get("anthropic-version")
-			raw, _ := io.ReadAll(r.Body)
-			gotBody = string(raw)
-			w.Header().Set("content-type", "application/json")
-			_, _ = w.Write([]byte(`{"input_tokens": 42}`))
-		}),
-	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotKey = r.Header.Get("x-api-key")
+		gotAuth = r.Header.Get("Authorization")
+		gotVersion = r.Header.Get("anthropic-version")
+		raw, _ := io.ReadAll(r.Body)
+		gotBody = string(raw)
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"input_tokens": 42}`))
+	}))
 	defer srv.Close()
 
 	counter := NewAnthropicExactCounter(srv.Client(), "secret-key", srv.URL, "2023-06-01")
@@ -131,23 +117,18 @@ func TestAnthropicExactCounterUsesAPIKeyNotBearer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Count error: %v", err)
 	}
-
 	if got != 42 {
 		t.Errorf("input_tokens = %d, want 42", got)
 	}
-
 	if gotKey != "secret-key" {
 		t.Errorf("x-api-key = %q, want %q", gotKey, "secret-key")
 	}
-
 	if gotAuth != "" {
 		t.Errorf("Authorization = %q, want empty (OAuth must not be used)", gotAuth)
 	}
-
 	if gotVersion != "2023-06-01" {
 		t.Errorf("anthropic-version = %q, want %q", gotVersion, "2023-06-01")
 	}
-
 	if !strings.Contains(gotBody, "claude-opus-4-8") || !strings.Contains(gotBody, "hello world") {
 		t.Errorf("request body missing model or content: %q", gotBody)
 	}
@@ -155,15 +136,13 @@ func TestAnthropicExactCounterUsesAPIKeyNotBearer(t *testing.T) {
 
 func TestOpenAIExactCounterUsesBearer(t *testing.T) {
 	var gotAuth, gotBody string
-	srv := httptest.NewServer(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			gotAuth = r.Header.Get("Authorization")
-			raw, _ := io.ReadAll(r.Body)
-			gotBody = string(raw)
-			w.Header().Set("content-type", "application/json")
-			_, _ = w.Write([]byte(`{"input_tokens": 7}`))
-		}),
-	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		raw, _ := io.ReadAll(r.Body)
+		gotBody = string(raw)
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"input_tokens": 7}`))
+	}))
 	defer srv.Close()
 
 	counter := NewOpenAIExactCounter(srv.Client(), "sk-test", srv.URL)
@@ -171,15 +150,12 @@ func TestOpenAIExactCounterUsesBearer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Count error: %v", err)
 	}
-
 	if got != 7 {
 		t.Errorf("input_tokens = %d, want 7", got)
 	}
-
 	if gotAuth != "Bearer sk-test" {
 		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer sk-test")
 	}
-
 	if !strings.Contains(gotBody, "gpt-4o") || !strings.Contains(gotBody, "count me") {
 		t.Errorf("request body missing model or input: %q", gotBody)
 	}

@@ -18,28 +18,20 @@ import (
 // upstream wrote before it closed.
 func postResponses(t *testing.T, url string, body string) (int, http.Header, []byte) {
 	t.Helper()
-	request, err := http.NewRequestWithContext(
-		context.Background(),
-		http.MethodPost,
-		url,
-		bytes.NewBufferString(body),
-	)
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, bytes.NewBufferString(body))
 	if err != nil {
 		t.Fatalf("new responses request: %v", err)
 	}
-
 	request.Header.Set("Content-Type", "application/json")
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatalf("POST %s: %v", url, err)
 	}
-
 	defer func() { _ = response.Body.Close() }()
 	responseBody, err := io.ReadAll(response.Body)
 	if err != nil {
 		t.Fatalf("read %s response: %v", url, err)
 	}
-
 	return response.StatusCode, response.Header, responseBody
 }
 
@@ -69,15 +61,11 @@ func TestResponsesEndpointEndToEnd(t *testing.T) {
 
 	// Codex non-streaming: the mock streams response.output_text.delta "ok", so
 	// the Responses object carries a message output item with that text.
-	status, _, body := postResponses(
-		t,
-		openAIURL+"/v1/responses",
-		`{"model":"gpt-future","input":"say hi","stream":false}`,
-	)
+	status, _, body := postResponses(t, openAIURL+"/v1/responses",
+		`{"model":"gpt-future","input":"say hi","stream":false}`)
 	if status != http.StatusOK {
 		t.Fatalf("codex responses status = %d; body=%s", status, body)
 	}
-
 	var object struct {
 		Object string `json:"object"`
 		ID     string `json:"id"`
@@ -86,72 +74,53 @@ func TestResponsesEndpointEndToEnd(t *testing.T) {
 	if err := json.Unmarshal(body, &object); err != nil {
 		t.Fatalf("decode responses object: %v; body=%s", err, body)
 	}
-
 	if object.Object != "response" {
 		t.Fatalf("object = %q, want response; body=%s", object.Object, body)
 	}
-
 	if len(object.ID) < 5 || object.ID[:5] != "resp_" {
 		t.Fatalf("id = %q, want resp_ prefix", object.ID)
 	}
-
 	if object.ID == "resp-routing" || bytes.Contains(body, []byte(`"resp-routing"`)) {
 		t.Fatalf("provider response id escaped into the public Responses object: %s", body)
 	}
-
 	if !bytes.Contains(body, []byte(`"output_text"`)) || !bytes.Contains(body, []byte(`"ok"`)) {
 		t.Fatalf("codex responses object missing output_text ok; body=%s", body)
 	}
-
 	drainCodex(t, fakes.codexReqs)
 
 	// The OpenAI listener rejects a Codex temperature other than 1 before the
 	// provider request.
-	status, _, body = postResponses(
-		t,
-		openAIURL+"/v1/responses",
-		`{"model":"gpt-future","input":"say hi","temperature":0.5,"stream":false}`,
-	)
+	status, _, body = postResponses(t, openAIURL+"/v1/responses",
+		`{"model":"gpt-future","input":"say hi","temperature":0.5,"stream":false}`)
 	if status != http.StatusBadRequest || !bytes.Contains(body, []byte(`"param":"temperature"`)) {
 		t.Fatalf("openai codex temperature = %d %s, want 400 for temperature", status, body)
 	}
 
 	// The Cursor listener returns the compatibility warning in an
 	// X-Clyde-Warning header and in clyde.warnings.
-	status, header, body := postResponses(
-		t,
-		cursorURL+"/v1/responses",
-		`{"model":"gpt-future","input":"say hi","temperature":0.5,"stream":false}`,
-	)
+	status, header, body := postResponses(t, cursorURL+"/v1/responses",
+		`{"model":"gpt-future","input":"say hi","temperature":0.5,"stream":false}`)
 	if status != http.StatusOK {
 		t.Fatalf("codex warn status = %d; body=%s", status, body)
 	}
-
 	warning := header.Get("X-Clyde-Warning")
 	if warning == "" {
 		t.Fatalf("expected X-Clyde-Warning header for codex temperature; headers=%v", header)
 	}
-
 	if !bytes.Contains([]byte(warning), []byte("temperature")) {
 		t.Fatalf("X-Clyde-Warning = %q, want it to name temperature", warning)
 	}
-
 	if !bytes.Contains(body, []byte(`"clyde"`)) || !bytes.Contains(body, []byte(`"warnings"`)) {
 		t.Fatalf("codex responses object missing clyde.warnings; body=%s", body)
 	}
-
 	drainCodex(t, fakes.codexReqs)
 
 	// Codex streaming: the Responses SSE sequence with named events and no [DONE].
-	status, _, body = postResponses(
-		t,
-		openAIURL+"/v1/responses",
-		`{"model":"gpt-future","input":"say hi","stream":true}`,
-	)
+	status, _, body = postResponses(t, openAIURL+"/v1/responses",
+		`{"model":"gpt-future","input":"say hi","stream":true}`)
 	if status != http.StatusOK {
 		t.Fatalf("codex stream status = %d; body=%s", status, body)
 	}
-
 	for _, want := range []string{
 		"event: response.created",
 		"event: response.output_text.delta",
@@ -161,40 +130,31 @@ func TestResponsesEndpointEndToEnd(t *testing.T) {
 			t.Fatalf("codex responses stream missing %q; body=%s", want, body)
 		}
 	}
-
 	if bytes.Contains(body, []byte("[DONE]")) {
 		t.Fatalf("codex responses stream must not emit [DONE]; body=%s", body)
 	}
-
 	drainCodex(t, fakes.codexReqs)
 
 	// Anthropic non-streaming: the anthropic provider returns a FinalResponse
 	// rather than streamed events, so this confirms the Responses collector
 	// assembles the object from the provider's final response too.
-	status, _, body = postResponses(
-		t,
-		openAIURL+"/v1/responses",
-		`{"model":"claude-future","input":"say hi","stream":false}`,
-	)
+	status, _, body = postResponses(t, openAIURL+"/v1/responses",
+		`{"model":"claude-future","input":"say hi","stream":false}`)
 	if status != http.StatusOK {
 		t.Fatalf("anthropic responses status = %d; body=%s", status, body)
 	}
-
 	var anthObject struct {
 		Object string `json:"object"`
 	}
 	if err := json.Unmarshal(body, &anthObject); err != nil {
 		t.Fatalf("decode anthropic responses object: %v; body=%s", err, body)
 	}
-
 	if anthObject.Object != "response" {
 		t.Fatalf("anthropic object = %q, want response; body=%s", anthObject.Object, body)
 	}
-
 	if !bytes.Contains(body, []byte(`"ok"`)) {
 		t.Fatalf("anthropic responses object missing FinalResponse text ok; body=%s", body)
 	}
-
 	select {
 	case <-fakes.anthReqs:
 	case <-time.After(3 * time.Second):

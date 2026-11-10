@@ -20,20 +20,16 @@ func (p *sseEventParser) getToolState(itemID, callID, name string) (*toolCallSta
 		p.updateToolState(state, callID, name)
 		return state, false
 	}
-
 	state := p.toolCallsByItemID[callID]
 	if callID == "" || state == nil {
 		return p.createToolState(itemID, callID, name), true
 	}
-
 	if itemID != "" {
 		p.toolCallsByItemID[itemID] = state
 	}
-
 	if state.Name == "" {
 		state.Name = name
 	}
-
 	return state, false
 }
 
@@ -41,11 +37,9 @@ func (p *sseEventParser) updateToolState(state *toolCallState, callID, name stri
 	if state.CallID == "" {
 		state.CallID = callID
 	}
-
 	if state.Name == "" {
 		state.Name = name
 	}
-
 	if callID != "" {
 		p.toolCallsByItemID[callID] = state
 	}
@@ -53,17 +47,11 @@ func (p *sseEventParser) updateToolState(state *toolCallState, callID, name stri
 
 func (p *sseEventParser) createToolState(itemID, callID, name string) *toolCallState {
 	state := &toolCallState{
-		Index:             p.nextToolIndex,
-		ItemID:            itemID,
-		CallID:            callID,
-		Name:              name,
-		Type:              "function",
-		IdentityEmitted:   false,
-		ArgumentDeltaSeen: false,
-		ArgumentsEmitted:  false,
-		NativeParseLogged: false,
-		ClientCustomTool:  false,
-		Arguments: strings.
+		Index:  p.nextToolIndex,
+		ItemID: itemID,
+		CallID: callID,
+		Name:   name,
+		Type:   "function", IdentityEmitted: false, ArgumentDeltaSeen: false, ArgumentsEmitted: false, NativeParseLogged: false, ClientCustomTool: false, Arguments: strings.
 			Builder{},
 
 		Input: strings.
@@ -74,11 +62,9 @@ func (p *sseEventParser) createToolState(itemID, callID, name string) *toolCallS
 	if itemID != "" {
 		p.toolCallsByItemID[itemID] = state
 	}
-
 	if callID != "" {
 		p.toolCallsByItemID[callID] = state
 	}
-
 	return state
 }
 
@@ -87,7 +73,6 @@ func (p *sseEventParser) observeActualToolCallName(name string) {
 	if name == "" {
 		return
 	}
-
 	p.recordToolCallName(name)
 	if isSubagentToolCallName(name) {
 		p.out.HasSubagentToolCall = true
@@ -99,11 +84,9 @@ func (p *sseEventParser) recordToolCallName(name string) {
 	if name == "" {
 		return
 	}
-
 	if slices.Contains(p.out.ToolCallNames, name) {
 		return
 	}
-
 	p.out.ToolCallNames = append(p.out.ToolCallNames, name)
 }
 
@@ -139,9 +122,7 @@ func isContextWindowError(err error) bool {
 	if err == nil {
 		return false
 	}
-
 	var contextErr *ContextWindowError
-
 	return errors.As(err, &contextErr)
 }
 
@@ -149,11 +130,9 @@ func codexResponseFailedError(message string) error {
 	if isCodexContextWindowMessage(message) {
 		return &ContextWindowError{Message: strings.TrimSpace(message)}
 	}
-
 	if isCodexUnsupportedModelMessage(message) {
 		return &UnsupportedModelError{Message: strings.TrimSpace(message)}
 	}
-
 	return fmt.Errorf("%s", message)
 }
 
@@ -188,12 +167,10 @@ func (item transportItem) string(key string) string {
 	if len(raw) == 0 {
 		return ""
 	}
-
 	var out string
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return ""
 	}
-
 	return out
 }
 
@@ -204,39 +181,29 @@ func (item transportItem) toInputItem() codexwire.InputItem {
 	if item == nil {
 		return codexwire.InputItem{}
 	}
-
 	raw, err := json.Marshal(item)
 	if err != nil {
 		return codexwire.InputItem{}
 	}
-
 	var out codexwire.InputItem
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return codexwire.InputItem{}
 	}
-
 	return out
 }
 
-func reasoningEventsFromItem(
-	item transportItem,
-	skipSummary bool,
-	skipText bool,
-) []adapterrender.ReasoningDelta {
+func reasoningEventsFromItem(item transportItem, skipSummary, skipText bool) []adapterrender.ReasoningDelta {
 	if item == nil {
 		return nil
 	}
-
 	raw, err := json.Marshal(item)
 	if err != nil {
 		return nil
 	}
-
 	var payload reasoningItemPayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return nil
 	}
-
 	itemID := strings.TrimSpace(payload.ID)
 	var out []adapterrender.ReasoningDelta
 	if !skipSummary {
@@ -244,23 +211,18 @@ func reasoningEventsFromItem(
 			if strings.TrimSpace(part.Type) != "summary_text" || part.Text == "" {
 				continue
 			}
-
 			idx := i
-			out = append(
-				out,
-				adapterrender.ReasoningDelta{
-					Text:          part.Text,
-					ReasoningKind: "summary",
-					SummaryIndex:  &idx,
-					Signature:     "",
-					RedactedData:  "",
-					ItemID:        itemID,
-					ItemType:      "reasoning",
-				},
-			)
+			out = append(out, adapterrender.ReasoningDelta{
+				Text:          part.Text,
+				ReasoningKind: "summary",
+				SummaryIndex:  &idx,
+				Signature:     "",
+				RedactedData:  "",
+				ItemID:        itemID,
+				ItemType:      "reasoning",
+			})
 		}
 	}
-
 	if !skipText {
 		for _, part := range payload.Content {
 			switch reasoningContentType(strings.TrimSpace(part.Type)) {
@@ -268,54 +230,30 @@ func reasoningEventsFromItem(
 				if part.Text == "" {
 					continue
 				}
-
-				out = append(
-					out,
-					adapterrender.ReasoningDelta{
-						Text:          part.Text,
-						ReasoningKind: "text",
-						SummaryIndex:  nil,
-						Signature:     "",
-						RedactedData:  "",
-						ItemID:        itemID,
-						ItemType:      "reasoning",
-					},
-				)
+				out = append(out, adapterrender.ReasoningDelta{
+					Text:          part.Text,
+					ReasoningKind: "text",
+					SummaryIndex:  nil,
+					Signature:     "",
+					RedactedData:  "",
+					ItemID:        itemID,
+					ItemType:      "reasoning",
+				})
 			}
 		}
 	}
-
 	return out
 }
 
-func mapUsage(completed completedResponse) adapteropenai.Usage {
-	if completed.Response.Usage == nil {
-		return adapteropenai.Usage{
-			PromptTokens:            0,
-			CompletionTokens:        0,
-			TotalTokens:             0,
-			PromptTokensDetails:     nil,
-			CompletionTokensDetails: nil,
-			InputTokens:             0,
-			OutputTokens:            0,
-			CacheReadTokens:         0,
-			CacheWriteTokens:        0,
-			MaxTokens:               0,
-		}
+func mapUsage(c completedResponse) adapteropenai.Usage {
+	if c.Response.Usage == nil {
+		return adapteropenai.Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, PromptTokensDetails: nil, CompletionTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0}
 	}
-
-	usage := completed.Response.Usage
+	usage := c.Response.Usage
 	u := adapteropenai.Usage{
-		PromptTokens:            usage.InputTokens,
-		CompletionTokens:        usage.OutputTokens,
-		TotalTokens:             usage.TotalTokens,
-		PromptTokensDetails:     nil,
-		CompletionTokensDetails: nil,
-		InputTokens:             0,
-		OutputTokens:            0,
-		CacheReadTokens:         0,
-		CacheWriteTokens:        0,
-		MaxTokens:               0,
+		PromptTokens:     usage.InputTokens,
+		CompletionTokens: usage.OutputTokens,
+		TotalTokens:      usage.TotalTokens, PromptTokensDetails: nil, CompletionTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0,
 	}
 	if usage.InputTokensDetails != nil {
 		u.PromptTokensDetails = &adapteropenai.PromptTokensDetails{
@@ -324,13 +262,9 @@ func mapUsage(completed completedResponse) adapteropenai.Usage {
 			CompatibilityOmitsUncached: false,
 		}
 	}
-
 	if usage.OutputTokensDetails != nil {
-		u.CompletionTokensDetails = &adapteropenai.CompletionTokensDetails{
-			ReasoningTokens: usage.OutputTokensDetails.ReasoningTokens,
-		}
+		u.CompletionTokensDetails = &adapteropenai.CompletionTokensDetails{ReasoningTokens: usage.OutputTokensDetails.ReasoningTokens}
 	}
-
 	return u
 }
 
@@ -338,44 +272,27 @@ func reasoningTokensFromEvent(raw transportStreamEvent) int {
 	if raw.Response == nil {
 		return 0
 	}
-
 	return raw.Response.Usage.OutputTokensDetails.ReasoningTokens
 }
 
-func usageTelemetry(completed completedResponse) UsageTelemetry {
-	if completed.Response.Usage == nil {
-		return UsageTelemetry{
-			UsagePresent:               false,
-			InputTokens:                0,
-			OutputTokens:               0,
-			TotalTokens:                0,
-			InputTokensDetailsPresent:  false,
-			CachedTokens:               0,
-			OutputTokensDetailsPresent: false,
-			ReasoningOutputTokens:      0,
-		}
+func usageTelemetry(c completedResponse) UsageTelemetry {
+	if c.Response.Usage == nil {
+		return UsageTelemetry{UsagePresent: false, InputTokens: 0, OutputTokens: 0, TotalTokens: 0, InputTokensDetailsPresent: false, CachedTokens: 0, OutputTokensDetailsPresent: false, ReasoningOutputTokens: 0}
 	}
-
-	usage := completed.Response.Usage
+	usage := c.Response.Usage
 	out := UsageTelemetry{
-		UsagePresent:               true,
-		InputTokens:                usage.InputTokens,
-		OutputTokens:               usage.OutputTokens,
-		TotalTokens:                usage.TotalTokens,
-		InputTokensDetailsPresent:  false,
-		CachedTokens:               0,
-		OutputTokensDetailsPresent: false,
-		ReasoningOutputTokens:      0,
+		UsagePresent: true,
+		InputTokens:  usage.InputTokens,
+		OutputTokens: usage.OutputTokens,
+		TotalTokens:  usage.TotalTokens, InputTokensDetailsPresent: false, CachedTokens: 0, OutputTokensDetailsPresent: false, ReasoningOutputTokens: 0,
 	}
 	if usage.InputTokensDetails != nil {
 		out.InputTokensDetailsPresent = true
 		out.CachedTokens = usage.InputTokensDetails.CachedTokens
 	}
-
 	if usage.OutputTokensDetails != nil {
 		out.OutputTokensDetailsPresent = true
 		out.ReasoningOutputTokens = usage.OutputTokensDetails.ReasoningTokens
 	}
-
 	return out
 }

@@ -47,24 +47,15 @@ func (c ingressConnCloser) Close(reason string) error {
 	if c.conn == nil {
 		return nil
 	}
-
 	if err := c.conn.Close(); err != nil {
-		slog.WarnContext(
-			context.Background(),
-			"adapter.ingress.conn_close_failed",
-			"component",
-			"adapter",
-			"concern",
-			slogger.ConcernAdapterHTTPIngress,
-			"reason",
-			reason,
-			"err",
-			err,
+		slog.WarnContext(context.Background(), "adapter.ingress.conn_close_failed",
+			"component", "adapter",
+			"concern", slogger.ConcernAdapterHTTPIngress,
+			"reason", reason,
+			"err", err,
 		)
-
 		return fmt.Errorf("ingress conn close: %w", err)
 	}
-
 	return nil
 }
 
@@ -73,25 +64,18 @@ func (c ingressConnCloser) Close(reason string) error {
 // quiet-relevant PhaseIngress member so reload defers to in-flight requests and
 // Quiesce drains them first. Component and Concern match the adapter's slog
 // routing so ingress lifecycle events land in the correct concern log file.
-func newAdapterIngressRegistry(
-	group *livetrack.Group,
-	log *slog.Logger,
-) *livetrack.Registry[IngressMeta] {
-	return livetrack.Attach[IngressMeta](
-		group,
-		livetrack.MemberSpec{
-			Phase:         livetrack.PhaseIngress,
-			QuietRelevant: true,
-			CancelNoWait:  false,
-		},
-		livetrack.Options[IngressMeta]{
-			Component:     "adapter",
-			Concern:       slogger.ConcernAdapterHTTPIngress,
-			Log:           log,
-			PollEvery:     0,
-			CloserGrace:   0,
-			ParallelClose: false,
-			Now:           nil,
-		},
-	)
+func newAdapterIngressRegistry(group *livetrack.Group, log *slog.Logger) *livetrack.Registry[IngressMeta] {
+	return livetrack.Attach[IngressMeta](group, livetrack.MemberSpec{
+		Phase:         livetrack.PhaseIngress,
+		QuietRelevant: true,
+		CancelNoWait:  false,
+	}, livetrack.Options[IngressMeta]{
+		Component:     "adapter",
+		Concern:       slogger.ConcernAdapterHTTPIngress,
+		Log:           log,
+		PollEvery:     0,
+		CloserGrace:   0,
+		ParallelClose: false,
+		Now:           nil,
+	})
 }

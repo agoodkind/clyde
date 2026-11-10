@@ -19,32 +19,24 @@ func writeInjectedFixture(t *testing.T, content string) string {
 	if err := os.WriteFile(path, []byte(line), 0o600); err != nil {
 		t.Fatalf("write transcript: %v", err)
 	}
-
 	return path
 }
 
 func streamInjectedFixture(t *testing.T, path string, includeInjected bool) []string {
 	t.Helper()
-	messages, err := conversation.CollectMessages(
-		New().Stream(
-			path,
-			conversation.LoadOptions{
-				IncludeSystemPrompts:  false,
-				IncludeSystemMessages: false,
-				IncludeToolOutputs:    false,
-				IncludeInjected:       includeInjected,
-			},
-		),
-	)
+	messages, err := conversation.CollectMessages(New().Stream(path, conversation.LoadOptions{
+		IncludeSystemPrompts:  false,
+		IncludeSystemMessages: false,
+		IncludeToolOutputs:    false,
+		IncludeInjected:       includeInjected,
+	}))
 	if err != nil {
 		t.Fatalf("collect messages: %v", err)
 	}
-
 	texts := make([]string, 0, len(messages))
 	for _, message := range messages {
 		texts = append(texts, message.Text)
 	}
-
 	return texts
 }
 
@@ -55,16 +47,13 @@ func streamInjectedFixture(t *testing.T, path string, includeInjected bool) []st
 // because the harness always appends the block last.
 func TestStreamStripsHookAdditionalContextAfterThePrompt(t *testing.T) {
 	t.Parallel()
-	path := writeInjectedFixture(
-		t,
-		`"why is the build failing?\n\nUserPromptSubmit hook additional context: # Rules\n\nrespond in as few words as possible\n\nmore rule text"`,
-	)
+	path := writeInjectedFixture(t,
+		`"why is the build failing?\n\nUserPromptSubmit hook additional context: # Rules\n\nrespond in as few words as possible\n\nmore rule text"`)
 
 	texts := streamInjectedFixture(t, path, false)
 	if len(texts) != 1 {
 		t.Fatalf("messages=%d want 1", len(texts))
 	}
-
 	if texts[0] != "why is the build failing?" {
 		t.Fatalf("text=%q want the typed prompt alone", texts[0])
 	}
@@ -74,16 +63,13 @@ func TestStreamStripsHookAdditionalContextAfterThePrompt(t *testing.T) {
 // the same splice.
 func TestStreamStripsSessionStartHookContext(t *testing.T) {
 	t.Parallel()
-	path := writeInjectedFixture(
-		t,
-		`"continue the migration\n\nSessionStart hook additional context: reorient instructions here"`,
-	)
+	path := writeInjectedFixture(t,
+		`"continue the migration\n\nSessionStart hook additional context: reorient instructions here"`)
 
 	texts := streamInjectedFixture(t, path, false)
 	if len(texts) != 1 {
 		t.Fatalf("messages=%d want 1", len(texts))
 	}
-
 	if texts[0] != "continue the migration" {
 		t.Fatalf("text=%q want the typed prompt alone", texts[0])
 	}
@@ -95,16 +81,13 @@ func TestStreamStripsSessionStartHookContext(t *testing.T) {
 func TestStreamKeepsHookContextWhenInjectedIsIncluded(t *testing.T) {
 	t.Parallel()
 	body := "why is the build failing?\n\nUserPromptSubmit hook additional context: # Rules\n\nrule text"
-	path := writeInjectedFixture(
-		t,
-		`"why is the build failing?\n\nUserPromptSubmit hook additional context: # Rules\n\nrule text"`,
-	)
+	path := writeInjectedFixture(t,
+		`"why is the build failing?\n\nUserPromptSubmit hook additional context: # Rules\n\nrule text"`)
 
 	texts := streamInjectedFixture(t, path, true)
 	if len(texts) != 1 {
 		t.Fatalf("messages=%d want 1", len(texts))
 	}
-
 	if texts[0] != body {
 		t.Fatalf("text=%q want the full message byte for byte", texts[0])
 	}
@@ -116,16 +99,13 @@ func TestStreamKeepsHookContextWhenInjectedIsIncluded(t *testing.T) {
 // message would delete it.
 func TestStreamDropsHookFeedbackLinesOnly(t *testing.T) {
 	t.Parallel()
-	path := writeInjectedFixture(
-		t,
-		`"first user line\nStop hook feedback:\n- the goal condition text\nlast user line"`,
-	)
+	path := writeInjectedFixture(t,
+		`"first user line\nStop hook feedback:\n- the goal condition text\nlast user line"`)
 
 	texts := streamInjectedFixture(t, path, false)
 	if len(texts) != 1 {
 		t.Fatalf("messages=%d want 1", len(texts))
 	}
-
 	want := "first user line\n- the goal condition text\nlast user line"
 	if texts[0] != want {
 		t.Fatalf("text=%q want %q", texts[0], want)
@@ -139,16 +119,13 @@ func TestStreamDropsHookFeedbackLinesOnly(t *testing.T) {
 // quoted heading, survive and only the trailing splice is removed.
 func TestStreamKeepsAQuotedHookHeadingBeforeTheRealSplice(t *testing.T) {
 	t.Parallel()
-	path := writeInjectedFixture(
-		t,
-		`"why does every message contain\nUserPromptSubmit hook additional context: markers?\nplease investigate\n\nUserPromptSubmit hook additional context: # Rules\n\nrule text"`,
-	)
+	path := writeInjectedFixture(t,
+		`"why does every message contain\nUserPromptSubmit hook additional context: markers?\nplease investigate\n\nUserPromptSubmit hook additional context: # Rules\n\nrule text"`)
 
 	texts := streamInjectedFixture(t, path, false)
 	if len(texts) != 1 {
 		t.Fatalf("messages=%d want 1", len(texts))
 	}
-
 	want := "why does every message contain\nUserPromptSubmit hook additional context: markers?\nplease investigate"
 	if texts[0] != want {
 		t.Fatalf("text=%q want the typed prompt with its quoted heading kept", texts[0])
@@ -161,16 +138,13 @@ func TestStreamKeepsAQuotedHookHeadingBeforeTheRealSplice(t *testing.T) {
 // every type, so the person's text between the quote and the splice survives.
 func TestStreamKeepsAQuotedHeadingOfTheOtherType(t *testing.T) {
 	t.Parallel()
-	path := writeInjectedFixture(
-		t,
-		`"my logs show this line:\nUserPromptSubmit hook additional context: something\nis that expected?\n\nSessionStart hook additional context: reorient text"`,
-	)
+	path := writeInjectedFixture(t,
+		`"my logs show this line:\nUserPromptSubmit hook additional context: something\nis that expected?\n\nSessionStart hook additional context: reorient text"`)
 
 	texts := streamInjectedFixture(t, path, false)
 	if len(texts) != 1 {
 		t.Fatalf("messages=%d want 1", len(texts))
 	}
-
 	want := "my logs show this line:\nUserPromptSubmit hook additional context: something\nis that expected?"
 	if texts[0] != want {
 		t.Fatalf("text=%q want the typed prompt with its quoted heading kept", texts[0])
@@ -183,16 +157,13 @@ func TestStreamKeepsAQuotedHeadingOfTheOtherType(t *testing.T) {
 func TestStreamKeepsAnInlineHeadingMention(t *testing.T) {
 	t.Parallel()
 	body := "the string UserPromptSubmit hook additional context: appears in my logs, why?"
-	path := writeInjectedFixture(
-		t,
-		`"the string UserPromptSubmit hook additional context: appears in my logs, why?"`,
-	)
+	path := writeInjectedFixture(t,
+		`"the string UserPromptSubmit hook additional context: appears in my logs, why?"`)
 
 	texts := streamInjectedFixture(t, path, false)
 	if len(texts) != 1 {
 		t.Fatalf("messages=%d want 1", len(texts))
 	}
-
 	if texts[0] != body {
 		t.Fatalf("text=%q want the message untouched", texts[0])
 	}
@@ -202,16 +173,13 @@ func TestStreamKeepsAnInlineHeadingMention(t *testing.T) {
 // it switched to splicing plain text.
 func TestStreamStripsLegacyHookCarrierTag(t *testing.T) {
 	t.Parallel()
-	path := writeInjectedFixture(
-		t,
-		`"real question\n<user-prompt-submit-hook>old style hook payload</user-prompt-submit-hook>"`,
-	)
+	path := writeInjectedFixture(t,
+		`"real question\n<user-prompt-submit-hook>old style hook payload</user-prompt-submit-hook>"`)
 
 	texts := streamInjectedFixture(t, path, false)
 	if len(texts) != 1 {
 		t.Fatalf("messages=%d want 1", len(texts))
 	}
-
 	if texts[0] != "real question" {
 		t.Fatalf("text=%q want %q", texts[0], "real question")
 	}
@@ -222,36 +190,26 @@ func TestStreamStripsLegacyHookCarrierTag(t *testing.T) {
 // feed can log that stripping ran without knowing any marker.
 func TestStreamCountsWhatItStripped(t *testing.T) {
 	t.Parallel()
-	path := writeInjectedFixture(
-		t,
-		`"typed prompt\n<system-reminder>reminder</system-reminder>\n\nUserPromptSubmit hook additional context: rules"`,
-	)
+	path := writeInjectedFixture(t,
+		`"typed prompt\n<system-reminder>reminder</system-reminder>\n\nUserPromptSubmit hook additional context: rules"`)
 
 	var tally transcript.HarnessStrips
-	messages, err := conversation.CollectMessages(
-		New().Stream(
-			path,
-			conversation.LoadOptions{
-				IncludeSystemPrompts:  false,
-				IncludeSystemMessages: false,
-				IncludeToolOutputs:    false,
-				IncludeInjected:       false,
-				HarnessTally:          &tally,
-			},
-		),
-	)
+	messages, err := conversation.CollectMessages(New().Stream(path, conversation.LoadOptions{
+		IncludeSystemPrompts:  false,
+		IncludeSystemMessages: false,
+		IncludeToolOutputs:    false,
+		IncludeInjected:       false,
+		HarnessTally:          &tally,
+	}))
 	if err != nil {
 		t.Fatalf("collect messages: %v", err)
 	}
-
 	if len(messages) != 1 {
 		t.Fatalf("messages=%d want 1", len(messages))
 	}
-
 	if tally.Injected != 1 {
 		t.Fatalf("injected tally=%d want 1", tally.Injected)
 	}
-
 	if tally.System != 1 {
 		t.Fatalf("system tally=%d want 1", tally.System)
 	}
@@ -264,29 +222,23 @@ func TestStreamCountsWhatItStripped(t *testing.T) {
 // happened.
 func TestStreamTallyCountsFullyStrippedRecords(t *testing.T) {
 	t.Parallel()
-	path := writeInjectedFixture(t, `"<task-notification>agent finished</task-notification>"`)
+	path := writeInjectedFixture(t,
+		`"<task-notification>agent finished</task-notification>"`)
 
 	var tally transcript.HarnessStrips
-	messages, err := conversation.CollectMessages(
-		New().Stream(
-			path,
-			conversation.LoadOptions{
-				IncludeSystemPrompts:  false,
-				IncludeSystemMessages: false,
-				IncludeToolOutputs:    false,
-				IncludeInjected:       false,
-				HarnessTally:          &tally,
-			},
-		),
-	)
+	messages, err := conversation.CollectMessages(New().Stream(path, conversation.LoadOptions{
+		IncludeSystemPrompts:  false,
+		IncludeSystemMessages: false,
+		IncludeToolOutputs:    false,
+		IncludeInjected:       false,
+		HarnessTally:          &tally,
+	}))
 	if err != nil {
 		t.Fatalf("collect messages: %v", err)
 	}
-
 	if len(messages) != 0 {
 		t.Fatalf("messages=%d want 0: the record is entirely harness content", len(messages))
 	}
-
 	if tally.System != 1 {
 		t.Fatalf("system tally=%d want 1: the dropped record must still count", tally.System)
 	}
@@ -297,16 +249,13 @@ func TestStreamTallyCountsFullyStrippedRecords(t *testing.T) {
 // halves.
 func TestStreamStripsBashInputTagPair(t *testing.T) {
 	t.Parallel()
-	path := writeInjectedFixture(
-		t,
-		`"<bash-input>make deploy</bash-input>\nplease look at the failure"`,
-	)
+	path := writeInjectedFixture(t,
+		`"<bash-input>make deploy</bash-input>\nplease look at the failure"`)
 
 	texts := streamInjectedFixture(t, path, false)
 	if len(texts) != 1 {
 		t.Fatalf("messages=%d want 1", len(texts))
 	}
-
 	if texts[0] != "please look at the failure" {
 		t.Fatalf("text=%q want %q", texts[0], "please look at the failure")
 	}

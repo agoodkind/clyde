@@ -35,15 +35,12 @@ func (c RotationConfig) normalized() RotationConfig {
 	if c.MaxSizeMB <= 0 {
 		c.MaxSizeMB = defaultAuditRotationMaxSizeMB
 	}
-
 	if c.MaxBackups <= 0 {
 		c.MaxBackups = defaultAuditRotationMaxBackups
 	}
-
 	if c.MaxAgeDays <= 0 {
 		c.MaxAgeDays = defaultAuditRotationMaxAgeDays
 	}
-
 	return c
 }
 
@@ -62,42 +59,24 @@ func NewLogger(component string, rotation RotationConfig) (*slog.Logger, func())
 
 	rotation = rotation.normalized()
 	compressCopy := rotation.Compress
-	lj := gklog.NewLumberjackWriterWithConfig(
-		logPath,
-		gklog.RotationConfig{
-			MaxSizeMB:  rotation.MaxSizeMB,
-			MaxBackups: rotation.MaxBackups,
-			MaxAgeDays: rotation.MaxAgeDays,
-			Compress:   &compressCopy,
-		},
-	)
+	lj := gklog.NewLumberjackWriterWithConfig(logPath, gklog.RotationConfig{
+		MaxSizeMB:  rotation.MaxSizeMB,
+		MaxBackups: rotation.MaxBackups,
+		MaxAgeDays: rotation.MaxAgeDays,
+		Compress:   &compressCopy,
+	})
 	stderrH := slog.NewJSONHandler(os.Stderr, jsonOpts)
 	writer := gklog.NewLockedWriteCloser(logPath, lj)
 	fileH := slog.NewJSONHandler(writer, jsonOpts)
 	logger := slog.New(gklog.NewTeeHandler(stderrH, fileH)).
-		With(
-			slog.String("build", gklogversion.String()),
-		).
-		With(
-			"component",
-			component,
-		)
+		With(slog.String("build", gklogversion.String())).
+		With("component", component)
 
 	return logger, func() { _ = writer.Close() }
 }
 
 func stderrFallback(component string) *slog.Logger {
-	return slog.New(
-		slog.NewJSONHandler(
-			os.Stderr,
-			&slog.HandlerOptions{
-				Level: slog.LevelDebug,
-			},
-		),
-	).With(
-		slog.String("build", gklogversion.String()),
-	).With(
-		"component",
-		component,
-	)
+	return slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	})).With(slog.String("build", gklogversion.String())).With("component", component)
 }

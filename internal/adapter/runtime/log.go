@@ -15,11 +15,9 @@ func WithExecutionID(ctx context.Context, executionID string) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-
 	if strings.TrimSpace(executionID) == "" {
 		return ctx
 	}
-
 	return context.WithValue(ctx, executionIDContextKey{}, strings.TrimSpace(executionID))
 }
 
@@ -28,9 +26,7 @@ func ExecutionIDFromContext(ctx context.Context) string {
 	if ctx == nil {
 		return ""
 	}
-
 	executionID, _ := ctx.Value(executionIDContextKey{}).(string)
-
 	return strings.TrimSpace(executionID)
 }
 
@@ -108,21 +104,17 @@ func LogCompleted(log *slog.Logger, ctx context.Context, attrs CompletedAttrs) {
 	if log == nil {
 		return
 	}
-
 	if attrs.Backend == "" {
 		attrs.Backend = "unknown"
 	}
-
 	hitRatio := 0.0
 	if denom := attrs.TokensIn + attrs.CacheReadTokens; denom > 0 {
 		hitRatio = float64(attrs.CacheReadTokens) / float64(denom)
 	}
-
 	corr := attrs.Correlation
 	if corr.TraceID == "" {
 		corr = correlation.FromContext(ctx)
 	}
-
 	args := []slog.Attr{
 		slog.String("backend", attrs.Backend),
 		slog.String("path", attrs.Path),
@@ -148,12 +140,7 @@ func LogCompleted(log *slog.Logger, ctx context.Context, attrs CompletedAttrs) {
 	}
 	args = append(args, corr.Attrs()...)
 	args = append(args, slog.String("model", attrs.ModelID))
-	log.LogAttrs(
-		ctx,
-		slog.LevelInfo,
-		"adapter.chat.completed",
-		append([]slog.Attr{slog.String("concern", "adapter.chat.render")}, args...)...,
-	)
+	log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.completed", append([]slog.Attr{slog.String("concern", "adapter.chat.render")}, args...)...)
 }
 
 // StartedAttrs is part of Clyde's typed adapter surface.
@@ -176,12 +163,10 @@ func LogStarted(log *slog.Logger, ctx context.Context, sink RequestEventSink, at
 	if log == nil {
 		return
 	}
-
 	corr := attrs.Correlation
 	if corr.TraceID == "" {
 		corr = correlation.FromContext(ctx)
 	}
-
 	logAttrs := []slog.Attr{
 		slog.String("provider", attrs.Provider),
 		slog.String("backend", attrs.Backend),
@@ -193,41 +178,22 @@ func LogStarted(log *slog.Logger, ctx context.Context, sink RequestEventSink, at
 		slog.String("ingress", attrs.Ingress),
 	}
 	logAttrs = append(logAttrs, corr.Attrs()...)
-	log.LogAttrs(
-		ctx,
-		slog.LevelInfo,
-		"adapter.request.started",
-		append([]slog.Attr{slog.String("concern", "adapter.chat.dispatch")}, logAttrs...)...,
-	)
+	log.LogAttrs(ctx, slog.LevelInfo, "adapter.request.started", append([]slog.Attr{slog.String("concern", "adapter.chat.dispatch")}, logAttrs...)...)
 	if sink != nil {
-		sink(
-			ctx,
-			RequestEvent{
-				Stage:       RequestStageStarted,
-				Provider:    attrs.Provider,
-				Backend:     attrs.Backend,
-				RequestID:   attrs.RequestID,
-				ExecutionID: executionID(attrs.ExecutionID, ctx),
-				Alias:       attrs.Alias,
-				ModelID:     attrs.ModelID,
-				Stream:      attrs.Stream,
-				Correlation: corr,
-				FinishReason:
+		sink(ctx, RequestEvent{
+			Stage:       RequestStageStarted,
+			Provider:    attrs.Provider,
+			Backend:     attrs.Backend,
+			RequestID:   attrs.RequestID,
+			ExecutionID: executionID(attrs.ExecutionID, ctx),
+			Alias:       attrs.Alias,
+			ModelID:     attrs.ModelID,
+			Stream:      attrs.Stream,
+			Correlation: corr, FinishReason:
 
-				// StreamOpenedAttrs is part of Clyde's typed adapter surface.
-				"",
-				TokensIn:                   0,
-				TokensOut:                  0,
-				CacheReadTokens:            0,
-				CacheCreationTokens:        0,
-				DerivedCacheCreationTokens: 0,
-				ToolCallCount:              0,
-				ToolCallNames:              nil,
-				HasSubagentToolCall:        false,
-				DurationMs:                 0,
-				Err:                        "",
-			},
-		)
+			// StreamOpenedAttrs is part of Clyde's typed adapter surface.
+			"", TokensIn: 0, TokensOut: 0, CacheReadTokens: 0, CacheCreationTokens: 0, DerivedCacheCreationTokens: 0, ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, DurationMs: 0, Err: "",
+		})
 	}
 }
 
@@ -247,21 +213,14 @@ type StreamOpenedAttrs struct {
 }
 
 // LogStreamOpened is part of Clyde's typed adapter surface.
-func LogStreamOpened(
-	log *slog.Logger,
-	ctx context.Context,
-	sink RequestEventSink,
-	attrs StreamOpenedAttrs,
-) {
+func LogStreamOpened(log *slog.Logger, ctx context.Context, sink RequestEventSink, attrs StreamOpenedAttrs) {
 	if log == nil {
 		return
 	}
-
 	corr := attrs.Correlation
 	if corr.TraceID == "" {
 		corr = correlation.FromContext(ctx)
 	}
-
 	logAttrs := []slog.Attr{
 		slog.String("provider", attrs.Provider),
 		slog.String("backend", attrs.Backend),
@@ -273,41 +232,22 @@ func LogStreamOpened(
 		slog.String("ingress", attrs.Ingress),
 	}
 	logAttrs = append(logAttrs, corr.Attrs()...)
-	log.LogAttrs(
-		ctx,
-		slog.LevelInfo,
-		"adapter.request.stream_opened",
-		append([]slog.Attr{slog.String("concern", "adapter.chat.dispatch")}, logAttrs...)...,
-	)
+	log.LogAttrs(ctx, slog.LevelInfo, "adapter.request.stream_opened", append([]slog.Attr{slog.String("concern", "adapter.chat.dispatch")}, logAttrs...)...)
 	if sink != nil {
-		sink(
-			ctx,
-			RequestEvent{
-				Stage:       RequestStageStreamOpened,
-				Provider:    attrs.Provider,
-				Backend:     attrs.Backend,
-				RequestID:   attrs.RequestID,
-				ExecutionID: executionID(attrs.ExecutionID, ctx),
-				Alias:       attrs.Alias,
-				ModelID:     attrs.ModelID,
-				Stream:      attrs.Stream,
-				Correlation: corr,
-				FinishReason:
+		sink(ctx, RequestEvent{
+			Stage:       RequestStageStreamOpened,
+			Provider:    attrs.Provider,
+			Backend:     attrs.Backend,
+			RequestID:   attrs.RequestID,
+			ExecutionID: executionID(attrs.ExecutionID, ctx),
+			Alias:       attrs.Alias,
+			ModelID:     attrs.ModelID,
+			Stream:      attrs.Stream,
+			Correlation: corr, FinishReason:
 
-				// LogTerminal is part of Clyde's typed adapter surface.
-				"",
-				TokensIn:                   0,
-				TokensOut:                  0,
-				CacheReadTokens:            0,
-				CacheCreationTokens:        0,
-				DerivedCacheCreationTokens: 0,
-				ToolCallCount:              0,
-				ToolCallNames:              nil,
-				HasSubagentToolCall:        false,
-				DurationMs:                 0,
-				Err:                        "",
-			},
-		)
+			// LogTerminal is part of Clyde's typed adapter surface.
+			"", TokensIn: 0, TokensOut: 0, CacheReadTokens: 0, CacheCreationTokens: 0, DerivedCacheCreationTokens: 0, ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, DurationMs: 0, Err: "",
+		})
 	}
 }
 
@@ -316,7 +256,6 @@ func LogTerminal(log *slog.Logger, ctx context.Context, sink RequestEventSink, e
 	if log == nil {
 		return
 	}
-
 	msg := "adapter.request.completed"
 	level := slog.LevelInfo
 	switch ev.Stage {
@@ -328,12 +267,10 @@ func LogTerminal(log *slog.Logger, ctx context.Context, sink RequestEventSink, e
 	case RequestStageCancelled:
 		msg = "adapter.request.cancelled"
 	}
-
 	corr := ev.Correlation
 	if corr.TraceID == "" {
 		corr = correlation.FromContext(ctx)
 	}
-
 	logAttrs := []slog.Attr{
 		slog.String("concern", "adapter.chat.dispatch"),
 		slog.String("provider", ev.Provider),
@@ -368,6 +305,5 @@ func executionID(explicit string, ctx context.Context) string {
 	if value := strings.TrimSpace(explicit); value != "" {
 		return value
 	}
-
 	return ExecutionIDFromContext(ctx)
 }

@@ -26,24 +26,19 @@ func TestNewPricingTableConvertsDollarsToMicrocents(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected longest-prefix match for claude-sonnet-4-6")
 	}
-
 	// $3/MTok -> 300 microcents/token, $15 -> 1500, $3.75 -> 375, $0.30 -> 30.
 	if rates.InputPerToken != 300 {
 		t.Errorf("input rate=%d want 300", rates.InputPerToken)
 	}
-
 	if rates.OutputPerToken != 1500 {
 		t.Errorf("output rate=%d want 1500", rates.OutputPerToken)
 	}
-
 	if rates.CacheWritePerToken != 375 {
 		t.Errorf("cache write rate=%d want 375", rates.CacheWritePerToken)
 	}
-
 	if rates.CacheReadPerToken != 30 {
 		t.Errorf("cache read rate=%d want 30", rates.CacheReadPerToken)
 	}
-
 	if _, ok := table.lookup("unknown-model"); ok {
 		t.Fatalf("lookup for unknown model should miss")
 	}
@@ -54,22 +49,10 @@ func TestEmptyPricingTableMisses(t *testing.T) {
 	if _, ok := table.lookup("claude-sonnet-4"); ok {
 		t.Fatalf("empty table must always miss")
 	}
-
-	b := EstimateCost(
-		CostInputs{
-			ModelID:             "claude-sonnet-4",
-			TTL:                 "",
-			InputTokens:         100,
-			OutputTokens:        50,
-			CacheCreationTokens: 0,
-			CacheReadTokens:     0,
-		},
-		table,
-	)
+	b := EstimateCost(CostInputs{ModelID: "claude-sonnet-4", TTL: "", InputTokens: 100, OutputTokens: 50, CacheCreationTokens: 0, CacheReadTokens: 0}, table)
 	if b.RatesKnown {
 		t.Fatalf("rates must be unknown with an empty table")
 	}
-
 	if b.TotalMicrocents != 0 {
 		t.Fatalf("unknown rates must yield zero cost, got %d", b.TotalMicrocents)
 	}
@@ -89,7 +72,6 @@ func TestEstimateCostPricesRecordedTokens(t *testing.T) {
 	if !b.RatesKnown {
 		t.Fatalf("rates should be known for sonnet-4")
 	}
-
 	// Input: 1000 * 300 = 300_000 microcents
 	// Output: 500 * 1500 = 750_000
 	// Cache write: 200 * 375 = 75_000
@@ -132,32 +114,25 @@ func TestEstimateCostOpus48AndContextVariant(t *testing.T) {
 			CacheReadPerMTok:  0,
 		},
 	})
-
 	for _, modelID := range []string{"claude-opus-4-8", "claude-opus-4-8[1m]"} {
-		b := EstimateCost(
-			CostInputs{
-				ModelID:             modelID,
-				TTL:                 "",
-				InputTokens:         1_000,
-				OutputTokens:        1_000,
-				CacheCreationTokens: 0,
-				CacheReadTokens:     0,
-			},
-			table,
-		)
+		b := EstimateCost(CostInputs{
+			ModelID:             modelID,
+			TTL:                 "",
+			InputTokens:         1_000,
+			OutputTokens:        1_000,
+			CacheCreationTokens: 0,
+			CacheReadTokens:     0,
+		}, table)
 		if !b.RatesKnown {
 			t.Fatalf("rates should be known for %q", modelID)
 		}
-
 		// 1000 * 500 input + 1000 * 2500 output = 3_000_000 microcents.
 		if b.InputMicrocents != 500_000 {
 			t.Errorf("%q input microcents=%d want 500_000", modelID, b.InputMicrocents)
 		}
-
 		if b.OutputMicrocents != 2_500_000 {
 			t.Errorf("%q output microcents=%d want 2_500_000", modelID, b.OutputMicrocents)
 		}
-
 		if b.TotalMicrocents != 3_000_000 {
 			t.Errorf("%q total microcents=%d want 3_000_000", modelID, b.TotalMicrocents)
 		}
@@ -176,25 +151,20 @@ func TestEstimateCostCodexModelPricesNonzero(t *testing.T) {
 			CacheReadPerMTok:  0.125,
 		},
 	})
-	b := EstimateCost(
-		CostInputs{
-			ModelID:             "gpt-5",
-			TTL:                 "",
-			InputTokens:         10_000,
-			OutputTokens:        2_000,
-			CacheCreationTokens: 0,
-			CacheReadTokens:     5_000,
-		},
-		table,
-	)
+	b := EstimateCost(CostInputs{
+		ModelID:             "gpt-5",
+		TTL:                 "",
+		InputTokens:         10_000,
+		OutputTokens:        2_000,
+		CacheCreationTokens: 0,
+		CacheReadTokens:     5_000,
+	}, table)
 	if !b.RatesKnown {
 		t.Fatalf("rates should be known for configured codex model gpt-5")
 	}
-
 	if b.TotalMicrocents <= 0 {
 		t.Fatalf("codex model must price to a nonzero cost, got %d", b.TotalMicrocents)
 	}
-
 	// Input: 10_000 * 125 = 1_250_000
 	// Output: 2_000 * 1000 = 2_000_000
 	// Cache read: 5_000 * 12.5 -> 5_000 * 13 (rounded) = 65_000
@@ -202,11 +172,9 @@ func TestEstimateCostCodexModelPricesNonzero(t *testing.T) {
 	if b.InputMicrocents != 1_250_000 {
 		t.Errorf("input microcents=%d want 1_250_000", b.InputMicrocents)
 	}
-
 	if b.OutputMicrocents != 2_000_000 {
 		t.Errorf("output microcents=%d want 2_000_000", b.OutputMicrocents)
 	}
-
 	if b.CacheReadMicrocents != 65_000 {
 		t.Errorf("cache read microcents=%d want 65_000", b.CacheReadMicrocents)
 	}

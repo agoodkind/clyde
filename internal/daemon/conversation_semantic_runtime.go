@@ -36,11 +36,7 @@ const (
 // ConversationCheckpointDir returns the directory that stores fingerprint
 // record files for every conversation collection.
 func ConversationCheckpointDir() string {
-	return filepath.Join(
-		config.DefaultStateDir(),
-		conversationSemanticStateDirName,
-		conversationCheckpointDirName,
-	)
+	return filepath.Join(config.DefaultStateDir(), conversationSemanticStateDirName, conversationCheckpointDirName)
 }
 
 func semanticRetryDelay(failures uint32, jitter time.Duration) time.Duration {
@@ -48,7 +44,6 @@ func semanticRetryDelay(failures uint32, jitter time.Duration) time.Duration {
 	for remaining := failures; remaining > 1 && delay < 5*time.Minute; remaining-- {
 		delay = min(2*delay, 5*time.Minute)
 	}
-
 	return min(delay+max(jitter, 0), 5*time.Minute)
 }
 
@@ -58,9 +53,7 @@ func semanticRetryDelayWithJitter(failures uint32) time.Duration {
 	if err != nil {
 		return baseDelay
 	}
-
 	jitter := time.Duration(jitterValue.Int64())
-
 	return semanticRetryDelay(failures, jitter)
 }
 
@@ -161,25 +154,17 @@ func (c *conversationSemanticConnectionCloser) Close(reason string) error {
 	if c == nil || c.closer == nil {
 		return nil
 	}
-
 	if err := c.closer.Close(); err != nil {
 		if c.log != nil {
-			c.log.Warn(
-				"daemon.conversation_semantic.grpc_close_failed",
-				"concern",
-				"conversation.semantic",
-				"component",
-				"daemon",
-				"reason",
-				reason,
-				"err",
-				err,
+			c.log.Warn("daemon.conversation_semantic.grpc_close_failed",
+				"concern", "conversation.semantic",
+				"component", "daemon",
+				"reason", reason,
+				"err", err,
 			)
 		}
-
 		return fmt.Errorf("close semantic search grpc connection: %w", err)
 	}
-
 	return nil
 }
 
@@ -197,22 +182,14 @@ func (c *semanticConnectionCloser) closeWithContext(ctx context.Context) error {
 	if c.client == nil {
 		return nil
 	}
-
 	if err := c.client.Close(ctx); err != nil {
-		slog.WarnContext(
-			ctx,
-			"daemon.conversation_semantic.client_close_failed",
-			"concern",
-			"conversation.semantic",
-			"component",
-			"daemon",
-			"err",
-			err,
+		slog.WarnContext(ctx, "daemon.conversation_semantic.client_close_failed",
+			"concern", "conversation.semantic",
+			"component", "daemon",
+			"err", err,
 		)
-
 		return fmt.Errorf("close conversation semantic client: %w", err)
 	}
-
 	return nil
 }
 
@@ -235,102 +212,65 @@ func conversationEmbeddingAPIKey(envName string, filePath string) (string, error
 		if value == "" {
 			return "", fmt.Errorf("embedding API key environment variable %q is empty", envName)
 		}
-
 		return value, nil
 	}
-
 	if filePath != "" {
 		content, err := os.ReadFile(filePath)
 		if err != nil {
-			slog.Warn(
-				"daemon.conversation_semantic.embedding_key_read_failed",
-				"concern",
-				"conversation.semantic",
-				"component",
-				"daemon",
-				"path",
-				filePath,
-				"err",
-				err,
+			slog.Warn("daemon.conversation_semantic.embedding_key_read_failed",
+				"concern", "conversation.semantic",
+				"component", "daemon",
+				"path", filePath,
+				"err", err,
 			)
-
 			return "", fmt.Errorf("read embedding API key file %q: %w", filePath, err)
 		}
-
 		value := strings.TrimSpace(string(content))
 		if value == "" {
 			return "", fmt.Errorf("embedding API key file %q is empty", filePath)
 		}
-
 		return value, nil
 	}
-
 	return localEmbeddingAPIKey, nil
 }
 
 // OpenConversationSearchClient opens the configured local or Milvus backend.
-//
-// Only the Milvus backend resolves the embedding API key. The client uses the
-// shared conversation checkpoint directory. The caller closes the client after
-// its last search or ingestion operation.
-//
-//	client, err := OpenConversationSearchClient(ctx, semanticCfg)
-//	if err != nil {
-//		return err
-//	}
-//	defer client.Close(ctx)
-func OpenConversationSearchClient(
-	ctx context.Context,
-	semanticCfg config.ConversationSemanticConfig,
-) (*vectorsearch.Client, error) {
+// Only the Milvus backend resolves the embedding API key.
+func OpenConversationSearchClient(ctx context.Context, semanticCfg config.ConversationSemanticConfig) (*vectorsearch.Client, error) {
 	return openConversationSearchClient(ctx, semanticCfg, ConversationCheckpointDir())
 }
 
-func openConversationSearchClient(
-	ctx context.Context,
-	semanticCfg config.ConversationSemanticConfig,
-	checkpointDir string,
-) (*vectorsearch.Client, error) {
+func openConversationSearchClient(ctx context.Context, semanticCfg config.ConversationSemanticConfig, checkpointDir string) (*vectorsearch.Client, error) {
 	backend := vectorsearch.BackendMilvus
 	if semanticCfg.Backend == config.ConversationSemanticBackendLocal {
 		backend = vectorsearch.BackendLocal
 	}
-
 	apiKey := ""
 	if backend == vectorsearch.BackendMilvus {
-		resolved, err := conversationEmbeddingAPIKey(
-			semanticCfg.EmbeddingAPIKeyEnv,
-			semanticCfg.EmbeddingAPIKeyFile,
-		)
+		resolved, err := conversationEmbeddingAPIKey(semanticCfg.EmbeddingAPIKeyEnv, semanticCfg.EmbeddingAPIKeyFile)
 		if err != nil {
 			return nil, semanticConnectorError{cause: err}
 		}
-
 		apiKey = resolved
 	}
-
-	client, err := vectorsearch.Open(
-		ctx,
-		vectorsearch.Options{
-			Backend:                backend,
-			LocalRoot:              semanticCfg.LocalRoot,
-			MilvusAddress:          semanticCfg.MilvusAddress,
-			MilvusDatabase:         semanticCfg.MilvusDatabase,
-			MilvusLayout:           vectorsearch.Layout(semanticCfg.MilvusLayout),
-			EmbeddingBaseURL:       semanticCfg.EmbeddingBaseURL,
-			EmbeddingModel:         semanticCfg.EmbeddingModel,
-			EmbeddingDimension:     semanticCfg.EmbeddingDimension,
-			EmbeddingAPIKey:        apiKey,
-			EmbeddingTimeout:       semanticCfg.EmbeddingRequestTimeout.AsDuration(),
-			QueryInstructionPrefix: semanticCfg.QueryInstructionPrefix,
-			DenseSearchParams:      semanticCfg.DenseSearchParams(),
-			CheckpointDir:          checkpointDir,
-		},
-	)
+	client, err := vectorsearch.Open(ctx, vectorsearch.Options{
+		Backend:                backend,
+		LocalRoot:              semanticCfg.LocalRoot,
+		MilvusAddress:          semanticCfg.MilvusAddress,
+		MilvusDatabase:         semanticCfg.MilvusDatabase,
+		MilvusLayout:           vectorsearch.Layout(semanticCfg.MilvusLayout),
+		EmbeddingBaseURL:       semanticCfg.EmbeddingBaseURL,
+		EmbeddingModel:         semanticCfg.EmbeddingModel,
+		EmbeddingDimension:     semanticCfg.EmbeddingDimension,
+		EmbeddingAPIKey:        apiKey,
+		EmbeddingTimeout:       semanticCfg.EmbeddingRequestTimeout.AsDuration(),
+		QueryInstructionPrefix: semanticCfg.QueryInstructionPrefix,
+		DenseSearchParams:      semanticCfg.DenseSearchParams(),
+		CheckpointDir:          checkpointDir,
+	})
 	if err != nil {
 		return nil, semanticConnectorError{cause: err}
 	}
-
 	return client, nil
 }
 
@@ -349,117 +289,78 @@ func semanticConnectorFor(semanticCfg config.ConversationSemanticConfig) semanti
 		} else {
 			client, err = OpenConversationSearchClient(ctx, semanticCfg)
 		}
-
 		if err != nil {
 			return failed, err
 		}
-
 		closer := &semanticConnectionCloser{client: client}
-		connection := semanticConnection{
-			search:     nil,
-			feeder:     nil,
-			connCloser: closer,
-			close:      closer.Close,
-		}
+		connection := semanticConnection{search: nil, feeder: nil, connCloser: closer, close: closer.Close}
 		if semanticCfg.AnswersSearch() {
 			connection.search = client
 		}
-
 		if semanticCfg.FeedsEngine() {
 			connection.feeder = client
 		}
-
 		return connection, nil
 	}
 }
 
-func startConversationSemanticRuntime(
-	ctx context.Context,
-	cfg *config.Config,
-	log *slog.Logger,
-	group *livetrack.Group,
-) *conversationSemanticRuntime {
+func startConversationSemanticRuntime(ctx context.Context, cfg *config.Config, log *slog.Logger, group *livetrack.Group) *conversationSemanticRuntime {
 	// One connection serves both directions, so it is built when either one is
 	// wanted. Which direction actually uses it is decided at the two call sites
 	// that read from it.
 	if cfg == nil || !cfg.Conversation.Semantic.UsesEngine() {
 		return nil
 	}
-
 	if log == nil {
 		log = slog.Default()
 	}
-
 	semanticCfg := cfg.Conversation.Semantic
 	// The semantic-search grpc connection is internal daemon-to-daemon work, so
 	// it attaches as a non-quiet-relevant PhaseWorkers member: the group drains
 	// it on reload and shutdown, but it never holds the quiet-wait. The registry
 	// is attached once here and holds a session only once a dial-and-register
 	// attempt succeeds.
-	registry := livetrack.Attach[conversationSemanticConnectionMeta](
-		group,
-		livetrack.MemberSpec{
-			Phase:         livetrack.PhaseWorkers,
-			QuietRelevant: false,
-			CancelNoWait:  false,
-		},
-		livetrack.Options[conversationSemanticConnectionMeta]{
-			Component:     "daemon",
-			Concern:       "conversation.semantic",
-			Log:           log,
-			PollEvery:     0,
-			CloserGrace:   0,
-			ParallelClose: false,
-			Now:           nil,
-		},
-	)
+	registry := livetrack.Attach[conversationSemanticConnectionMeta](group, livetrack.MemberSpec{
+		Phase:         livetrack.PhaseWorkers,
+		QuietRelevant: false,
+		CancelNoWait:  false,
+	}, livetrack.Options[conversationSemanticConnectionMeta]{
+		Component:     "daemon",
+		Concern:       "conversation.semantic",
+		Log:           log,
+		PollEvery:     0,
+		CloserGrace:   0,
+		ParallelClose: false,
+		Now:           nil,
+	})
 	meta := conversationSemanticConnectionMeta{
 		CollectionID: semanticCfg.CollectionID,
 	}
 	meta.IsLivetrackMeta()
-	runtime := newConversationSemanticRuntime(
-		log,
-		semanticConnectorFor(semanticCfg),
-		registry,
-		meta,
-	)
+	runtime := newConversationSemanticRuntime(log, semanticConnectorFor(semanticCfg), registry, meta)
 	if len(semanticCfg.Backends) > 0 {
 		runtime.startRegistrationWorker(ctx, group, true)
 		return runtime
 	}
-
 	if err := runtime.attemptRegister(ctx); err != nil {
 		// A boot-time failure is transient (the engine is often briefly down
 		// during a co-restart), so keep the runtime alive and retry in the
 		// background rather than disabling search for the process life.
-		log.WarnContext(
-			ctx,
-			"daemon.conversation_semantic.initial_register_failed",
-			"concern",
-			"conversation.semantic",
-			"component",
-			"daemon",
-			"collection_id",
-			semanticCfg.CollectionID,
-			"retry_backoff_ms",
-			semanticRetryDelay(1, 0).Milliseconds(),
-			"err",
-			err,
+		log.WarnContext(ctx, "daemon.conversation_semantic.initial_register_failed",
+			"concern", "conversation.semantic",
+			"component", "daemon",
+			"collection_id", semanticCfg.CollectionID,
+			"retry_backoff_ms", semanticRetryDelay(1, 0).Milliseconds(),
+			"err", err,
 		)
 		runtime.startRetryWorker(ctx, group)
 	} else {
-		log.InfoContext(
-			ctx,
-			"daemon.conversation_semantic.started",
-			"concern",
-			"conversation.semantic",
-			"component",
-			"daemon",
-			"collection_id",
-			semanticCfg.CollectionID,
+		log.InfoContext(ctx, "daemon.conversation_semantic.started",
+			"concern", "conversation.semantic",
+			"component", "daemon",
+			"collection_id", semanticCfg.CollectionID,
 		)
 	}
-
 	return runtime
 }
 
@@ -507,14 +408,10 @@ const semanticRetryWorkerHookName = "conversation.semantic.retry_stop"
 // afterwards cancels and joins the worker inside the workers phase, before the
 // semantic connection registry (a PhaseWorkers member) drains. A nil group has no
 // owner, so nothing is created and the caller must start nothing.
-func (r *conversationSemanticRuntime) installRetryStop(
-	ctx context.Context,
-	group *livetrack.Group,
-) (context.Context, chan struct{}, bool) {
+func (r *conversationSemanticRuntime) installRetryStop(ctx context.Context, group *livetrack.Group) (context.Context, chan struct{}, bool) {
 	if group == nil {
 		return nil, nil, false
 	}
-
 	workerCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	r.retryMu.Lock()
@@ -522,7 +419,6 @@ func (r *conversationSemanticRuntime) installRetryStop(
 	r.retryDone = done
 	r.retryMu.Unlock()
 	group.AddHookBefore(livetrack.PhaseWorkers, semanticRetryWorkerHookName, r.stopRetryWorker)
-
 	return workerCtx, done, true
 }
 
@@ -534,48 +430,29 @@ func (r *conversationSemanticRuntime) installRetryStop(
 // that drain boundary. The daemon starts it before the control server accepts
 // reload or rebind requests, so no drain can begin between the hook install and
 // the goroutine launch.
-func (r *conversationSemanticRuntime) startRetryWorker(
-	ctx context.Context,
-	group *livetrack.Group,
-) bool {
+func (r *conversationSemanticRuntime) startRetryWorker(ctx context.Context, group *livetrack.Group) bool {
 	return r.startRegistrationWorker(ctx, group, false)
 }
 
-func (r *conversationSemanticRuntime) startRegistrationWorker(
-	ctx context.Context,
-	group *livetrack.Group,
-	initial bool,
-) bool {
+func (r *conversationSemanticRuntime) startRegistrationWorker(ctx context.Context, group *livetrack.Group, initial bool) bool {
 	workerCtx, done, owned := r.installRetryStop(ctx, group)
 	if !owned {
-		r.log.WarnContext(
-			ctx,
-			"daemon.conversation_semantic.retry_start_skipped_unowned",
-			"concern",
-			"conversation.semantic",
-			"component",
-			"daemon",
-			"collection_id",
-			r.meta.CollectionID,
+		r.log.WarnContext(ctx, "daemon.conversation_semantic.retry_start_skipped_unowned",
+			"concern", "conversation.semantic",
+			"component", "daemon",
+			"collection_id", r.meta.CollectionID,
 		)
-
 		return false
 	}
-
 	go func() {
 		defer close(done)
 		defer r.cancelRetryWorker()
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				r.log.ErrorContext(
-					workerCtx,
-					"daemon.conversation_semantic.retry_panic",
-					"concern",
-					"conversation.semantic",
-					"component",
-					"daemon",
-					"err",
-					fmt.Sprintf("panic: %v", recovered),
+				r.log.ErrorContext(workerCtx, "daemon.conversation_semantic.retry_panic",
+					"concern", "conversation.semantic",
+					"component", "daemon",
+					"err", fmt.Sprintf("panic: %v", recovered),
 				)
 			}
 		}()
@@ -584,20 +461,10 @@ func (r *conversationSemanticRuntime) startRegistrationWorker(
 			if err == nil {
 				return
 			}
-
-			r.log.WarnContext(
-				workerCtx,
-				"daemon.conversation_semantic.initial_register_failed",
-				"collection_id",
-				r.meta.CollectionID,
-				"err",
-				err,
-			)
+			r.log.WarnContext(workerCtx, "daemon.conversation_semantic.initial_register_failed", "collection_id", r.meta.CollectionID, "err", err)
 		}
-
 		r.retryRegisterLoop(workerCtx)
 	}()
-
 	return true
 }
 
@@ -623,32 +490,23 @@ func (r *conversationSemanticRuntime) stopRetryWorker(ctx context.Context) error
 	if r == nil {
 		return nil
 	}
-
 	r.retryMu.Lock()
 	done := r.retryDone
 	r.retryMu.Unlock()
 	if done == nil {
 		return nil
 	}
-
 	r.cancelRetryWorker()
 	select {
 	case <-done:
 		return nil
 	case <-ctx.Done():
-		r.log.WarnContext(
-			ctx,
-			"daemon.conversation_semantic.retry_stop_timeout",
-			"concern",
-			"conversation.semantic",
-			"component",
-			"daemon",
-			"collection_id",
-			r.meta.CollectionID,
-			"err",
-			ctx.Err(),
+		r.log.WarnContext(ctx, "daemon.conversation_semantic.retry_stop_timeout",
+			"concern", "conversation.semantic",
+			"component", "daemon",
+			"collection_id", r.meta.CollectionID,
+			"err", ctx.Err(),
 		)
-
 		return fmt.Errorf("wait for semantic registration retry worker: %w", ctx.Err())
 	}
 }
@@ -668,7 +526,6 @@ func (r *conversationSemanticRuntime) attemptRegister(ctx context.Context) error
 	if alreadyRegistered {
 		return nil
 	}
-
 	r.mu.Lock()
 	r.connecting = true
 	r.attempts++
@@ -686,42 +543,28 @@ func (r *conversationSemanticRuntime) attemptRegister(ctx context.Context) error
 	if err != nil {
 		return err
 	}
-
-	_, registerErr := r.registry.Register(
-		ctx,
-		"conversation.semantic.grpc",
-		r.meta,
-		&conversationSemanticConnectionCloser{
-			closer: connection.connCloser,
-			log:    r.log,
-		},
-	)
+	_, registerErr := r.registry.Register(ctx, "conversation.semantic.grpc", r.meta, &conversationSemanticConnectionCloser{
+		closer: connection.connCloser,
+		log:    r.log,
+	})
 	if registerErr != nil {
 		if connection.close != nil {
 			if closeErr := connection.close(); closeErr != nil {
-				r.log.WarnContext(
-					ctx,
-					"daemon.conversation_semantic.abandoned_connection_close_failed",
-					"concern",
-					"conversation.semantic",
-					"component",
-					"daemon",
-					"err",
-					closeErr,
+				r.log.WarnContext(ctx, "daemon.conversation_semantic.abandoned_connection_close_failed",
+					"concern", "conversation.semantic",
+					"component", "daemon",
+					"err", closeErr,
 				)
 			}
 		}
-
 		return fmt.Errorf("register semantic search connection with livetrack: %w", registerErr)
 	}
-
 	r.mu.Lock()
 	r.search = connection.search
 	r.feeder = connection.feeder
 	r.registered = true
 	r.connectionState, _ = connection.connCloser.(semanticConnectionStateReader)
 	r.mu.Unlock()
-
 	return nil
 }
 
@@ -734,18 +577,11 @@ func (r *conversationSemanticRuntime) retryRegisterLoop(ctx context.Context) {
 	if !registered {
 		return
 	}
-
-	r.log.InfoContext(
-		ctx,
-		"daemon.conversation_semantic.register_recovered",
-		"concern",
-		"conversation.semantic",
-		"component",
-		"daemon",
-		"collection_id",
-		r.meta.CollectionID,
-		"attempt",
-		attempts,
+	r.log.InfoContext(ctx, "daemon.conversation_semantic.register_recovered",
+		"concern", "conversation.semantic",
+		"component", "daemon",
+		"collection_id", r.meta.CollectionID,
+		"attempt", attempts,
 	)
 }
 
@@ -760,7 +596,6 @@ func (r *conversationSemanticRuntime) retryRegisterUntilReady(ctx context.Contex
 	}()
 	failures := uint32(1)
 	attempts := 0
-
 	for {
 		backoff := r.retryDelay(failures)
 		r.mu.Lock()
@@ -771,41 +606,25 @@ func (r *conversationSemanticRuntime) retryRegisterUntilReady(ctx context.Contex
 			return attempts, false
 		case <-time.After(backoff):
 		}
-
 		attempts++
 		err := r.attemptRegister(ctx)
 		if err == nil {
 			return attempts, true
 		}
-
 		if errors.Is(err, livetrack.ErrRegistryClosed) {
-			r.log.DebugContext(
-				ctx,
-				"daemon.conversation_semantic.retry_stopped_registry_closed",
-				"concern",
-				"conversation.semantic",
-				"component",
-				"daemon",
-				"attempt",
-				attempts,
+			r.log.DebugContext(ctx, "daemon.conversation_semantic.retry_stopped_registry_closed",
+				"concern", "conversation.semantic",
+				"component", "daemon",
+				"attempt", attempts,
 			)
-
 			return attempts, false
 		}
-
-		r.log.DebugContext(
-			ctx,
-			"daemon.conversation_semantic.register_retry_failed",
-			"concern",
-			"conversation.semantic",
-			"component",
-			"daemon",
-			"attempt",
-			attempts,
-			"backoff_ms",
-			backoff.Milliseconds(),
-			"err",
-			err,
+		r.log.DebugContext(ctx, "daemon.conversation_semantic.register_retry_failed",
+			"concern", "conversation.semantic",
+			"component", "daemon",
+			"attempt", attempts,
+			"backoff_ms", backoff.Milliseconds(),
+			"err", err,
 		)
 		failures++
 	}
@@ -819,13 +638,11 @@ func (r *conversationSemanticRuntime) currentSearchClient() conversationSemantic
 	if r == nil {
 		return nil
 	}
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if !r.registered {
 		return nil
 	}
-
 	return r.search
 }
 
@@ -835,12 +652,10 @@ func (r *conversationSemanticRuntime) syncClient() conversationSemanticClient {
 	if r == nil {
 		return nil
 	}
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if !r.registered {
 		return nil
 	}
-
 	return r.feeder
 }

@@ -108,16 +108,7 @@ func (c *Client) loadCollectionIfPresent(ctx context.Context, collectionName str
 	return c.store.collectionPresent(ctx, collectionName)
 }
 
-// SearchCollectionAvailable checks whether the backend can query an existing
-// collection.
-//
-// The client converts collectionID to its storage collection name. A missing
-// collection returns false without an error; backend read or load failures
-// return an error. Milvus loads the collection before reporting availability.
-//
-// An existing client can check a logical collection ID before searching:
-//
-//	available, err := client.SearchCollectionAvailable(ctx, "project")
+// SearchCollectionAvailable checks whether the backend can query an existing collection.
 func (c *Client) SearchCollectionAvailable(ctx context.Context, collectionID string) (bool, error) {
 	return c.store.searchCollectionPresent(ctx, CollectionName(collectionID))
 }
@@ -129,7 +120,6 @@ func Open(ctx context.Context, options Options) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	return &Client{
 		store:       opened.store,
 		embedder:    opened.embedder,
@@ -151,12 +141,7 @@ func Open(ctx context.Context, options Options) (*Client, error) {
 
 		fillMu: sync.Mutex{},
 
-		lastUpsert: UpsertStats{
-			JobID:           "",
-			RowsWritten:     0,
-			VectorsReused:   0,
-			VectorsEmbedded: 0,
-		},
+		lastUpsert:      UpsertStats{JobID: "", RowsWritten: 0, VectorsReused: 0, VectorsEmbedded: 0},
 		lastUpsertKnown: false,
 
 		vectorMu:    sync.Mutex{},
@@ -171,7 +156,6 @@ func (c *Client) DeliveryBatchBytes() int64 {
 	if c == nil {
 		return 0
 	}
-
 	return c.deliveryBatchBytes
 }
 
@@ -180,7 +164,6 @@ func (c *Client) Close(ctx context.Context) error {
 	if c == nil || c.store == nil {
 		return nil
 	}
-
 	return c.store.close(ctx)
 }
 
@@ -198,18 +181,15 @@ func (c *Client) SearchConversations(
 	if c == nil {
 		return nil, errors.New("search semantic conversations: client is nil")
 	}
-
 	trimmedCollectionID := strings.TrimSpace(collectionID)
 	if trimmedCollectionID == "" {
 		return nil, errors.New("search semantic conversations: collection id is empty")
 	}
-
 	started := clock.Now()
 	vector, reused, err := c.queryVector(ctx, query)
 	if err != nil {
 		return nil, err
 	}
-
 	embedDuration := clock.Now().Sub(started)
 	request := collection.SearchRequest{
 		Collection:    CollectionName(trimmedCollectionID),
@@ -226,37 +206,22 @@ func (c *Client) SearchConversations(
 		request.GroupBy = c.declaration.ItemIDColumn
 		request.PerGroupLimit = perConversationLimit
 	}
-
 	hits, timing, err := c.search(ctx, request)
 	if err != nil {
 		return nil, err
 	}
-
-	slog.InfoContext(
-		ctx,
-		"conversation.vectorsearch.search_completed",
-		"concern",
-		"conversation.semantic",
-		"component",
-		"conversation",
-		"collection",
-		request.Collection,
-		"embed_ms",
-		embedDuration.Milliseconds(),
-		"vector_reused",
-		reused,
-		"rank_ms",
-		timing.rank.Milliseconds(),
-		"load_ms",
-		timing.load.Milliseconds(),
-		"total_ms",
-		clock.Now().Sub(started).Milliseconds(),
-		"candidates",
-		timing.candidates,
-		"hits",
-		len(hits),
+	slog.InfoContext(ctx, "conversation.vectorsearch.search_completed",
+		"concern", "conversation.semantic",
+		"component", "conversation",
+		"collection", request.Collection,
+		"embed_ms", embedDuration.Milliseconds(),
+		"vector_reused", reused,
+		"rank_ms", timing.rank.Milliseconds(),
+		"load_ms", timing.load.Milliseconds(),
+		"total_ms", clock.Now().Sub(started).Milliseconds(),
+		"candidates", timing.candidates,
+		"hits", len(hits),
 	)
-
 	return semHits(hits)
 }
 
@@ -277,12 +242,10 @@ func (c *Client) queryVector(ctx context.Context, query string) ([]float32, bool
 	if found {
 		return cached, true, nil
 	}
-
 	vector, err := c.embedQuery(ctx, query)
 	if err != nil {
 		return nil, false, err
 	}
-
 	c.vectorMu.Lock()
 	defer c.vectorMu.Unlock()
 	if _, present := c.vectors[query]; !present {
@@ -290,11 +253,9 @@ func (c *Client) queryVector(ctx context.Context, query string) ([]float32, bool
 			delete(c.vectors, c.vectorOrder[0])
 			c.vectorOrder = c.vectorOrder[1:]
 		}
-
 		c.vectors[query] = vector
 		c.vectorOrder = append(c.vectorOrder, query)
 	}
-
 	return vector, false, nil
 }
 
@@ -312,14 +273,12 @@ func (c *Client) SearchWithinConversation(
 	if trimmedConversationID == "" {
 		return nil, "", errors.New("search within semantic conversation: conversation id is empty")
 	}
-
 	scoped := filter
 	scoped.ConversationIDs = []string{trimmedConversationID}
 	hits, err := c.SearchConversations(ctx, collectionID, query, limit, scoped, 0)
 	if err != nil {
 		return nil, "", err
 	}
-
 	return hits, "", nil
 }
 
@@ -328,34 +287,19 @@ func (c *Client) SearchWithinConversation(
 func (c *Client) embedQuery(ctx context.Context, query string) ([]float32, error) {
 	vector, err := c.embedder.Embed(ctx, c.queryPrefix+query)
 	if err != nil {
-		slog.WarnContext(
-			ctx,
-			"conversation.vectorsearch.embed_failed",
-			"concern",
-			"conversation.semantic",
-			"component",
-			"conversation",
-			"err",
-			err,
+		slog.WarnContext(ctx, "conversation.vectorsearch.embed_failed",
+			"concern", "conversation.semantic",
+			"component", "conversation",
+			"err", err,
 		)
-
 		return nil, fmt.Errorf("embed conversation query: %w", err)
 	}
-
 	if c.dimension > 0 && len(vector) != c.dimension {
-		return nil, fmt.Errorf(
-			"embed conversation query: endpoint returned %d dimensions, configured embedding_dimension is %d",
-			len(vector),
-			c.dimension,
-		)
+		return nil, fmt.Errorf("embed conversation query: endpoint returned %d dimensions, configured embedding_dimension is %d", len(vector), c.dimension)
 	}
-
 	return vector, nil
 }
 
-func (c *Client) search(
-	ctx context.Context,
-	request collection.SearchRequest,
-) ([]collection.Hit, searchTiming, error) {
+func (c *Client) search(ctx context.Context, request collection.SearchRequest) ([]collection.Hit, searchTiming, error) {
 	return c.store.search(ctx, request)
 }

@@ -35,23 +35,18 @@ const (
 // ConversationInfo loads one artifact and computes metadata that does not
 // require rendering the transcript body.
 func (idx *Index) ConversationInfo(record Record) (Info, error) {
-	messages, err := idx.LoadMessagesWithOptions(
-		record,
-		LoadOptions{
-			IncludeSystemPrompts:       false,
-			IncludeSystemMessages:      true,
-			IncludeToolOutputs:         true,
-			IncludeInjected:            false,
-			HarnessTally:               nil,
-			ResolveInjectedTranscripts: false,
-		},
-	)
+	messages, err := idx.LoadMessagesWithOptions(record, LoadOptions{
+		IncludeSystemPrompts:       false,
+		IncludeSystemMessages:      true,
+		IncludeToolOutputs:         true,
+		IncludeInjected:            false,
+		HarnessTally:               nil,
+		ResolveInjectedTranscripts: false,
+	})
 	if err != nil {
 		return Info{}, err
 	}
-
 	segments := CompactionSegments(messages)
-
 	return Info{
 		Record:          record,
 		Stats:           conversationStats(messages),
@@ -74,7 +69,6 @@ func conversationStats(messages []transcript.Message) Stats {
 		if message.Compaction == nil && message.Visibility != transcript.MessageVisibilityMetaOnly {
 			stats.VisibleMessages++
 		}
-
 		switch infoMessageRole(message.Role) {
 		case infoMessageRoleUser:
 			stats.UserMessages++
@@ -85,7 +79,6 @@ func conversationStats(messages []transcript.Message) Stats {
 		default:
 			// Other provider roles are counted in total and visible counts only.
 		}
-
 		stats.ToolCallCount += len(message.Tools)
 		for _, tool := range message.Tools {
 			if tool.Output != "" {
@@ -93,6 +86,5 @@ func conversationStats(messages []transcript.Message) Stats {
 			}
 		}
 	}
-
 	return stats
 }

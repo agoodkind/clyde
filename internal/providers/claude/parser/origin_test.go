@@ -17,20 +17,14 @@ func scanRecordAtPath(t *testing.T, filename string, body string) conversation.R
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write transcript: %v", err)
 	}
-
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("stat transcript: %v", err)
 	}
-
-	record, ok := New().ScanRecord(
-		path,
-		conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()},
-	)
+	record, ok := New().ScanRecord(path, conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()})
 	if !ok {
 		t.Fatalf("ScanRecord returned ok=false for %s", filename)
 	}
-
 	return record
 }
 
@@ -44,11 +38,9 @@ func TestScanRecordClassifiesSidechainTranscriptAsSubagentOrigin(t *testing.T) {
 	if record.Origin != conversation.OriginSubagent {
 		t.Fatalf("origin = %q, want %q", record.Origin, conversation.OriginSubagent)
 	}
-
 	if !record.IsSubagent() {
 		t.Fatalf("IsSubagent = false, want true for a sidechain transcript")
 	}
-
 	// Claude names no parent conversation for a sidechain, and agentId names the
 	// agent rather than a conversation, so no lineage is invented.
 	if record.Lineage != nil {
@@ -65,7 +57,6 @@ func TestScanRecordClassifiesOrdinaryTranscriptAsUserOrigin(t *testing.T) {
 	if record.Origin != conversation.OriginUser {
 		t.Fatalf("origin = %q, want %q", record.Origin, conversation.OriginUser)
 	}
-
 	if record.IsSubagent() {
 		t.Fatalf("IsSubagent = true, want false for an ordinary transcript")
 	}
@@ -82,11 +73,7 @@ func TestScanRecordPrefersSidechainMarkerOverAgentFilename(t *testing.T) {
 	record := scanRecordAtPath(t, "agent-89abcdef.jsonl", body)
 
 	if record.Origin != conversation.OriginUser {
-		t.Fatalf(
-			"origin = %q, want %q; the in-file marker must beat the filename",
-			record.Origin,
-			conversation.OriginUser,
-		)
+		t.Fatalf("origin = %q, want %q; the in-file marker must beat the filename", record.Origin, conversation.OriginUser)
 	}
 }
 
@@ -118,18 +105,10 @@ func TestScanRecordReadsTheSidechainMarkerFromTheSessionRecord(t *testing.T) {
 	record := scanRecordAtPath(t, "user-session.jsonl", body)
 
 	if record.Origin != conversation.OriginUser {
-		t.Fatalf(
-			"origin = %q, want %q; a later sidechain entry must not reclassify the transcript",
-			record.Origin,
-			conversation.OriginUser,
-		)
+		t.Fatalf("origin = %q, want %q; a later sidechain entry must not reclassify the transcript", record.Origin, conversation.OriginUser)
 	}
-
 	if record.NativeID != "user-session" {
-		t.Fatalf(
-			"native id = %q, want user-session so the session id still resolves",
-			record.NativeID,
-		)
+		t.Fatalf("native id = %q, want user-session so the session id still resolves", record.NativeID)
 	}
 }
 
@@ -151,13 +130,9 @@ func TestScanRecordDoesNotTitleASidechainWithTheParentSessionID(t *testing.T) {
 	if record.Origin != conversation.OriginSubagent {
 		t.Fatalf("origin = %q, want %q", record.Origin, conversation.OriginSubagent)
 	}
-
 	if record.Title == "parent-session" {
-		t.Fatal(
-			"title is the dispatching conversation's session id, so Resolve can answer a parent lookup with the agent's transcript",
-		)
+		t.Fatal("title is the dispatching conversation's session id, so Resolve can answer a parent lookup with the agent's transcript")
 	}
-
 	if record.Title == "" {
 		t.Fatal("title is empty, so the row lists with no name at all")
 	}

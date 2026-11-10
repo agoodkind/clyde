@@ -43,14 +43,8 @@ var _ conversation.Parser = (*Parser)(nil)
 // New returns a Codex rollout parser.
 func New() *Parser {
 	return &Parser{
-		mu: sync.Mutex{},
-		paths: codexstore.StorePaths{
-			CodexHome:           "",
-			SQLiteHome:          "",
-			SessionsDir:         "",
-			ArchivedSessionsDir: "",
-			SessionIndexPath:    "",
-		},
+		mu:      sync.Mutex{},
+		paths:   codexstore.StorePaths{CodexHome: "", SQLiteHome: "", SessionsDir: "", ArchivedSessionsDir: "", SessionIndexPath: ""},
 		index:   codexstore.SessionIndex{},
 		indexOK: false,
 	}
@@ -121,12 +115,7 @@ func emptyThreadSummary() codexstore.ThreadSummary {
 		LatestCWD:     "",
 		CLIVersion:    "",
 		Originator:    "",
-		Source: codexstore.ThreadSource{
-			Kind:           "",
-			ParentThreadID: "",
-			AgentNickname:  "",
-			AgentRole:      "",
-		},
+		Source:        codexstore.ThreadSource{Kind: "", ParentThreadID: "", AgentNickname: "", AgentRole: ""},
 		AgentNickname: "",
 		AgentRole:     "",
 		IsSubagent:    false,
@@ -139,60 +128,22 @@ func emptyThreadSummary() codexstore.ThreadSummary {
 // durable thread names, and walks every rollout file into a scan candidate
 // without parsing it. A changed session-index title forces a header refresh
 // even when the rollout itself is unchanged.
-func (p *Parser) Discover(
-	ctx context.Context,
-	prior map[string]conversation.Record,
-) ([]conversation.ScanCandidate, error) {
+func (p *Parser) Discover(ctx context.Context, prior map[string]conversation.Record) ([]conversation.ScanCandidate, error) {
 	paths, err := codexstore.ResolveStorePathsFromEnv(ctx)
 	if err != nil {
-		slog.WarnContext(
-			ctx,
-			"providers.codex.parser.paths_failed",
-			"concern",
-			concern,
-			"component",
-			"codex",
-			"err",
-			err,
-		)
-
+		slog.WarnContext(ctx, "providers.codex.parser.paths_failed", "concern", concern, "component", "codex", "err", err)
 		return nil, fmt.Errorf("resolve Codex store paths: %w", err)
 	}
-
 	index, err := codexstore.ReadSessionIndex(ctx, paths.SessionIndexPath)
 	if err != nil {
-		slog.WarnContext(
-			ctx,
-			"providers.codex.parser.session_index_failed",
-			"concern",
-			concern,
-			"component",
-			"codex",
-			"path",
-			paths.SessionIndexPath,
-			"err",
-			err,
-		)
-
+		slog.WarnContext(ctx, "providers.codex.parser.session_index_failed", "concern", concern, "component", "codex", "path", paths.SessionIndexPath, "err", err)
 		return nil, fmt.Errorf("read Codex session index: %w", err)
 	}
-
 	candidates, err := codexstore.NewDiscoveryScanner(paths).DiscoverCandidates()
 	if err != nil {
-		slog.WarnContext(
-			ctx,
-			"providers.codex.parser.discover_failed",
-			"concern",
-			concern,
-			"component",
-			"codex",
-			"err",
-			err,
-		)
-
+		slog.WarnContext(ctx, "providers.codex.parser.discover_failed", "concern", concern, "component", "codex", "err", err)
 		return nil, fmt.Errorf("discover Codex rollouts: %w", err)
 	}
-
 	p.mu.Lock()
 	p.paths = paths
 	p.index = index
@@ -202,32 +153,21 @@ func (p *Parser) Discover(
 	out := make([]conversation.ScanCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
 		metadataChanged := false
-		threadID, _, identified := codexstore.RolloutIdentityFromFilename(
-			filepath.Base(candidate.Path),
-		)
+		threadID, _, identified := codexstore.RolloutIdentityFromFilename(filepath.Base(candidate.Path))
 		if previous, found := prior[candidate.Path]; found && identified {
 			title := index.ThreadName(threadID)
 			if title == "" {
 				title = threadID
 			}
-
 			metadataChanged = previous.Title != title
 		}
-
-		out = append(
-			out,
-			conversation.ScanCandidate{
-				MetadataChanged: metadataChanged,
-				Path:            candidate.Path,
-				Selector:        "",
-				Stamp: conversation.FileStamp{
-					Size:  candidate.Stamp.Size,
-					Mtime: candidate.Stamp.Mtime,
-				},
-			},
-		)
+		out = append(out, conversation.ScanCandidate{
+			MetadataChanged: metadataChanged,
+			Path:            candidate.Path,
+			Selector:        "",
+			Stamp:           conversation.FileStamp{Size: candidate.Stamp.Size, Mtime: candidate.Stamp.Mtime},
+		})
 	}
-
 	return out, nil
 }
 
@@ -253,33 +193,18 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 			if err == nil {
 				err = fmt.Errorf("codex rollout %s missing session_meta id", path)
 			}
-
-			slog.Warn(
-				"providers.codex.parser.header_failed",
-				"concern",
-				concern,
-				"component",
-				"codex",
-				"path",
-				path,
-				"err",
-				err,
-			)
-
+			slog.Warn("providers.codex.parser.header_failed", "concern", concern, "component", "codex", "path", path, "err", err)
 			return emptyRecord(), false
 		}
-
 		thread = fallback
 	} else {
 		thread.UpdatedAt = stamp.Mtime
 	}
-
 	if thread.IsSubagent && thread.Source.ParentThreadID == "" && thread.ForkedFromID == "" {
 		// Review and compact subagent machinery has no parent thread, while
 		// spawned child threads and forks carry lineage.
 		return emptyRecord(), false
 	}
-
 	var lineage *conversation.Lineage
 	if thread.ForkedFromID != "" {
 		lineage = &conversation.Lineage{
@@ -296,32 +221,23 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 			ParentMessageUUID: "",
 		}
 	}
-
 	// session_meta classifies the thread, and the spawn lineage above already
 	// carries the parent thread id, so the origin does not repeat it.
 	origin := conversation.OriginUser
 	if thread.IsSubagent {
 		origin = conversation.OriginSubagent
 	}
-
 	name := ""
 	if indexOK {
 		name = index.ThreadName(thread.ID)
 	}
-
 	title := name
 	if title == "" {
 		title = thread.ID
 	}
-
 	workspaceRoot := firstNonEmpty(thread.LatestCWD, thread.CWD)
-
 	return conversation.Record{
-		ID: conversation.DerivedID(
-			providerid.ProviderCodex,
-			thread.ID,
-			thread.RolloutPath,
-		),
+		ID:             conversation.DerivedID(providerid.ProviderCodex, thread.ID, thread.RolloutPath),
 		Provider:       providerid.ProviderCodex,
 		NativeID:       thread.ID,
 		Selector:       "",
@@ -347,14 +263,10 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 // records (they carry no renderable text). With IncludeToolOutputs set it
 // buffers so each output can be attached to its tool call by call_id, matching
 // the Claude parser's two-pass behavior.
-func (p *Parser) Stream(
-	path string,
-	opts conversation.LoadOptions,
-) iter.Seq2[transcript.Message, error] {
+func (p *Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[transcript.Message, error] {
 	if opts.IncludeToolOutputs {
 		return p.streamWithToolOutputs(path, opts)
 	}
-
 	return func(yield func(transcript.Message, error) bool) {
 		streamOpts := codexHistoryOptions(opts)
 		for msg, err := range codexstore.StreamMessages(path, streamOpts) {
@@ -362,12 +274,10 @@ func (p *Parser) Stream(
 				yield(emptyMessage(), fmt.Errorf("read codex rollout: %w", err))
 				return
 			}
-
 			message, ok := codexTranscriptMessage(msg, opts.IncludeSystemMessages)
 			if !ok {
 				continue
 			}
-
 			if !yield(message, nil) {
 				return
 			}
@@ -387,23 +297,17 @@ func codexHistoryOptions(opts conversation.LoadOptions) codexstore.HistoryOption
 
 // streamWithToolOutputs collects the whole rollout, links each tool-output
 // record to its tool call by call_id, and then yields the shaped messages.
-func (p *Parser) streamWithToolOutputs(
-	path string,
-	opts conversation.LoadOptions,
-) iter.Seq2[transcript.Message, error] {
+func (p *Parser) streamWithToolOutputs(path string, opts conversation.LoadOptions) iter.Seq2[transcript.Message, error] {
 	return func(yield func(transcript.Message, error) bool) {
 		var history []codexstore.HistoryMessage
-
 		streamOpts := codexHistoryOptions(opts)
 		for msg, err := range codexstore.StreamMessages(path, streamOpts) {
 			if err != nil {
 				yield(emptyMessage(), fmt.Errorf("read codex rollout: %w", err))
 				return
 			}
-
 			history = append(history, msg)
 		}
-
 		for _, message := range attachCodexToolOutputs(history, opts.IncludeSystemMessages) {
 			if !yield(message, nil) {
 				return
@@ -421,12 +325,8 @@ type codexToolRef struct {
 
 // attachCodexToolOutputs shapes the buffered history into transcript messages
 // and folds each tool-output marker into the matching tool call's Output.
-func attachCodexToolOutputs(
-	history []codexstore.HistoryMessage,
-	includeSystemMessages bool,
-) []transcript.Message {
+func attachCodexToolOutputs(history []codexstore.HistoryMessage, includeSystemMessages bool) []transcript.Message {
 	out := make([]transcript.Message, 0, len(history))
-
 	index := make(map[string]codexToolRef, len(history))
 	for _, hm := range history {
 		if hm.ToolOutputCallID != "" {
@@ -434,28 +334,22 @@ func attachCodexToolOutputs(
 				out[ref.messageIndex].Tools[ref.toolIndex].Output = hm.ToolOutput
 				out[ref.messageIndex].Tools[ref.toolIndex].IsError = hm.ToolOutputIsError
 			}
-
 			continue
 		}
-
 		message, ok := codexTranscriptMessage(hm, includeSystemMessages)
 		if !ok {
 			continue
 		}
-
 		messageIndex := len(out)
-
 		out = append(out, message)
 		for toolIndex := range message.Tools {
 			callID := message.Tools[toolIndex].ID
 			if callID == "" {
 				continue
 			}
-
 			index[callID] = codexToolRef{messageIndex: messageIndex, toolIndex: toolIndex}
 		}
 	}
-
 	return out
 }
 
@@ -463,13 +357,12 @@ func attachCodexToolOutputs(
 // the file itself cannot be read, preserving the prior scanner's behavior of
 // keeping a record for unreadable rollouts.
 func fallbackThread(path string, archived bool) (codexstore.ThreadSummary, bool) {
-	threadID, createdAt, ok := codexstore.RolloutIdentityFromFilename(filepath.Base(path))
+	id, createdAt, ok := codexstore.RolloutIdentityFromFilename(filepath.Base(path))
 	if !ok {
 		return emptyThreadSummary(), false
 	}
-
 	summary := codexstore.ThreadSummary{
-		ID:            threadID,
+		ID:            id,
 		RolloutPath:   path,
 		ForkedFromID:  "",
 		Preview:       "",
@@ -481,19 +374,13 @@ func fallbackThread(path string, archived bool) (codexstore.ThreadSummary, bool)
 		LatestCWD:     "",
 		CLIVersion:    "",
 		Originator:    "",
-		Source: codexstore.ThreadSource{
-			Kind:           "",
-			ParentThreadID: "",
-			AgentNickname:  "",
-			AgentRole:      "",
-		},
+		Source:        codexstore.ThreadSource{Kind: "", ParentThreadID: "", AgentNickname: "", AgentRole: ""},
 		AgentNickname: "",
 		AgentRole:     "",
 		IsSubagent:    false,
 		IsArchived:    archived,
 		Messages:      nil,
 	}
-
 	return summary, true
 }
 
@@ -503,7 +390,6 @@ func (*Parser) isArchivedPath(paths codexstore.StorePaths, path string) bool {
 	if paths.ArchivedSessionsDir == "" {
 		return false
 	}
-
 	return strings.HasPrefix(path, paths.ArchivedSessionsDir)
 }
 
@@ -513,6 +399,5 @@ func firstNonEmpty(values ...string) string {
 			return value
 		}
 	}
-
 	return ""
 }

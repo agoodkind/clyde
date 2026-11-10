@@ -30,32 +30,24 @@ func sessionPromptMessage(raw json.RawMessage, timestamp time.Time) (HistoryMess
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return emptyHistoryMessage(), false
 	}
-
 	text := strings.TrimSpace(payload.BaseInstructions.Text)
 	if text == "" {
 		return emptyHistoryMessage(), false
 	}
-
 	return textHistoryMessage(roleDeveloper, text, timestamp, ""), true
 }
 
-func responseItemMessage(
-	raw json.RawMessage,
-	timestamp time.Time,
-	opts HistoryOptions,
-) (HistoryMessage, bool) {
+func responseItemMessage(raw json.RawMessage, timestamp time.Time, opts HistoryOptions) (HistoryMessage, bool) {
 	var payload responsePayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return emptyHistoryMessage(), false
 	}
-
 	switch responseItemType(payload.Type) {
 	case responseItemMessageType:
 		text := strings.TrimSpace(contentText(payload.Content))
 		if text == "" {
 			return emptyHistoryMessage(), false
 		}
-
 		// Developer and system role messages carry injected guidance (sandbox
 		// permissions, developer instructions). They are system-prompt content,
 		// gated behind IncludeSystemPrompts and normalized to the developer role
@@ -64,17 +56,13 @@ func responseItemMessage(
 			if !opts.IncludeSystemPrompts {
 				return emptyHistoryMessage(), false
 			}
-
 			return textHistoryMessage(roleDeveloper, text, timestamp, payload.Phase), true
 		}
-
 		if payload.Role == "user" {
 			return userTextMessage(text, timestamp, payload.Phase, opts)
 		}
-
 		message := textHistoryMessage(payload.Role, text, timestamp, payload.Phase)
 		message.TextParts = transcriptTextParts(raw, payload, timestamp, opts)
-
 		return message, true
 	case responseItemFunctionCall:
 		return toolCallHistoryMessage(payload.CallID, payload.Name, payload.Arguments, timestamp)
@@ -142,23 +130,19 @@ const (
 )
 
 func classifyCodexUserText(text string) codexUserTextClass {
-	if strings.HasPrefix(text, codexSystemPromptHead) &&
-		strings.Contains(text, codexSystemPromptBody) {
+	if strings.HasPrefix(text, codexSystemPromptHead) && strings.Contains(text, codexSystemPromptBody) {
 		return codexUserTextSystemPrompt
 	}
-
 	for _, head := range codexSystemMessageHeads {
 		if strings.HasPrefix(text, head) {
 			return codexUserTextSystemMessage
 		}
 	}
-
 	for _, head := range codexInjectedHeads {
 		if strings.HasPrefix(text, head) {
 			return codexUserTextInjected
 		}
 	}
-
 	return codexUserTextConversation
 }
 
@@ -166,29 +150,21 @@ func classifyCodexUserText(text string) codexUserTextClass {
 // frame follows the matching include option; an AGENTS.md instruction message
 // renders as developer-role system-prompt content so it gates and displays with
 // the rest of that class; a person's turn passes through unchanged.
-func userTextMessage(
-	text string,
-	timestamp time.Time,
-	phase string,
-	opts HistoryOptions,
-) (HistoryMessage, bool) {
+func userTextMessage(text string, timestamp time.Time, phase string, opts HistoryOptions) (HistoryMessage, bool) {
 	switch classifyCodexUserText(text) {
 	case codexUserTextSystemPrompt:
 		if !opts.IncludeSystemPrompts {
 			if opts.Tally != nil {
 				opts.Tally.System++
 			}
-
 			return emptyHistoryMessage(), false
 		}
-
 		return textHistoryMessage(roleDeveloper, text, timestamp, phase), true
 	case codexUserTextSystemMessage:
 		if !opts.IncludeSystemMessages {
 			if opts.Tally != nil {
 				opts.Tally.System++
 			}
-
 			return emptyHistoryMessage(), false
 		}
 	case codexUserTextInjected:
@@ -196,49 +172,38 @@ func userTextMessage(
 			if opts.Tally != nil {
 				opts.Tally.Injected++
 			}
-
 			return emptyHistoryMessage(), false
 		}
 	case codexUserTextConversation:
 	}
-
 	return textHistoryMessage("user", text, timestamp, phase), true
 }
 
-func eventMessage(
-	raw json.RawMessage,
-	timestamp time.Time,
-	opts HistoryOptions,
-) (HistoryMessage, bool) {
+func eventMessage(raw json.RawMessage, timestamp time.Time, opts HistoryOptions) (HistoryMessage, bool) {
 	var payload eventPayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return emptyHistoryMessage(), false
 	}
-
 	switch eventMessageType(payload.Type) {
 	case eventMessageTypeUser:
 		text := strings.TrimSpace(payload.Message)
 		if text == "" {
 			return emptyHistoryMessage(), false
 		}
-
 		return userTextMessage(text, timestamp, payload.Phase, opts)
 	case eventMessageTypeAgent:
 		text := strings.TrimSpace(payload.Message)
 		if text == "" {
 			return emptyHistoryMessage(), false
 		}
-
 		return textHistoryMessage("assistant", text, timestamp, payload.Phase), true
 	case eventMessageTypeReasoning:
 		thinking := strings.TrimSpace(payload.Text)
 		if thinking == "" {
 			return emptyHistoryMessage(), false
 		}
-
 		message := textHistoryMessage("assistant", "", timestamp, "")
 		message.Thinking = thinking
-
 		return message, true
 	default:
 		return emptyHistoryMessage(), false
@@ -275,45 +240,35 @@ func toolCallHistoryMessage(callID, name, raw string, timestamp time.Time) (Hist
 	if strings.TrimSpace(name) == "" && strings.TrimSpace(callID) == "" {
 		return emptyHistoryMessage(), false
 	}
-
 	message := textHistoryMessage("assistant", "", timestamp, "")
 	input := toolInputJSON(raw)
 	display, displayLang := toolDisplayText(name, input)
-	message.Tools = []transcript.ToolCall{
-		{
-			ID:               callID,
-			Name:             name,
-			Input:            input,
-			Display:          display,
-			DisplayLang:      displayLang,
-			Output:           "",
-			IsError:          false,
-			Attachments:      nil,
-			Timestamp:        nil,
-			TimestampUnknown: false,
-		},
-	}
+	message.Tools = []transcript.ToolCall{{
+		ID:               callID,
+		Name:             name,
+		Input:            input,
+		Display:          display,
+		DisplayLang:      displayLang,
+		Output:           "",
+		IsError:          false,
+		Attachments:      nil,
+		Timestamp:        nil,
+		TimestampUnknown: false,
+	}}
 	message.HasTools = true
-
 	return message, true
 }
 
 // toolOutputHistoryMessage builds an output-marker record. The parser attaches
 // its text to the matching tool call by call_id when tool outputs are
 // requested, and drops it otherwise.
-func toolOutputHistoryMessage(
-	callID string,
-	output json.RawMessage,
-	timestamp time.Time,
-) (HistoryMessage, bool) {
+func toolOutputHistoryMessage(callID string, output json.RawMessage, timestamp time.Time) (HistoryMessage, bool) {
 	if strings.TrimSpace(callID) == "" {
 		return emptyHistoryMessage(), false
 	}
-
 	message := textHistoryMessage("assistant", "", timestamp, "")
 	message.ToolOutputCallID = callID
 	message.ToolOutput = outputText(output)
-
 	return message, true
 }
 
@@ -326,16 +281,13 @@ func toolInputJSON(raw string) transcript.ToolInputJSON {
 	if trimmed == "" {
 		return transcript.ToolInputJSON{Raw: nil}
 	}
-
 	if json.Valid([]byte(trimmed)) {
 		return transcript.ToolInputJSON{Raw: json.RawMessage(trimmed)}
 	}
-
 	encoded, err := json.Marshal(trimmed)
 	if err != nil {
 		return transcript.ToolInputJSON{Raw: nil}
 	}
-
 	return transcript.ToolInputJSON{Raw: json.RawMessage(encoded)}
 }
 
@@ -345,25 +297,18 @@ func outputText(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
 	}
-
 	var text string
 	if json.Unmarshal(raw, &text) == nil {
 		return text
 	}
-
 	return string(raw)
 }
 
-func compactedMessage(
-	raw json.RawMessage,
-	timestamp time.Time,
-	opts HistoryOptions,
-) (HistoryMessage, bool) {
+func compactedMessage(raw json.RawMessage, timestamp time.Time, opts HistoryOptions) (HistoryMessage, bool) {
 	var payload compactedPayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return emptyHistoryMessage(), false
 	}
-
 	contextItems := []transcript.CompactedContextItem(nil)
 	replacementHistoryCount := 0
 	trimmedMessage := strings.TrimSpace(payload.Message)
@@ -376,7 +321,6 @@ func compactedMessage(
 			legacyCompactedSummaryContextItem(trimmedMessage),
 		}
 	}
-
 	return HistoryMessage{
 		Role:              "system",
 		ParentUUID:        "",

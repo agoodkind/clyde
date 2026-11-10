@@ -20,9 +20,7 @@ func reorientPageFromProto(resp *clydev1.ReorientConversationResponse) conversat
 	}
 }
 
-func reorientConversationRefFromProto(
-	wire *clydev1.ReorientConversationRef,
-) conversation.ReorientConversationRef {
+func reorientConversationRefFromProto(wire *clydev1.ReorientConversationRef) conversation.ReorientConversationRef {
 	if wire == nil {
 		return conversation.ReorientConversationRef{
 			ID:            "",
@@ -31,7 +29,6 @@ func reorientConversationRefFromProto(
 			WorkspaceRoot: "",
 		}
 	}
-
 	return conversation.ReorientConversationRef{
 		ID:            wire.GetId(),
 		Provider:      providerFromProto(wire.GetProvider()).String(),

@@ -199,15 +199,9 @@ func ParseCurrentThreadJSON(data []byte) (ThreadDocument, error) {
 	if err := json.Unmarshal(data, &thread); err != nil {
 		return ThreadDocument{}, CurrentThreadDecodeError{Err: err}
 	}
-
 	if thread.Version != CurrentThreadVersion {
-		return ThreadDocument{}, fmt.Errorf(
-			"unsupported current zed thread version %q, want %q",
-			thread.Version,
-			CurrentThreadVersion,
-		)
+		return ThreadDocument{}, fmt.Errorf("unsupported current zed thread version %q, want %q", thread.Version, CurrentThreadVersion)
 	}
-
 	return thread, nil
 }
 
@@ -222,16 +216,13 @@ func (part *MentionPart) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return fmt.Errorf("decode zed mention payload: %w", err)
 	}
-
 	part.Content = raw.Content
 
 	uri, err := decodeMentionURI(raw.URI)
 	if err != nil {
 		return err
 	}
-
 	part.URI = uri
-
 	return nil
 }
 
@@ -243,38 +234,32 @@ func (message *ThreadMessage) UnmarshalJSON(data []byte) error {
 		message.Kind = ThreadMessageKindResume
 		return nil
 	}
-
 	kind, payload, err := decodeVariant(data)
 	if err != nil {
 		return err
 	}
-
 	switch kind {
 	case variantKindUser:
 		var user UserMessage
 		if err := json.Unmarshal(payload, &user); err != nil {
 			return fmt.Errorf("decode zed user message: %w", err)
 		}
-
 		message.Kind, message.User = ThreadMessageKindUser, &user
 	case variantKindAgent:
 		var agent AgentMessage
 		if err := json.Unmarshal(payload, &agent); err != nil {
 			return fmt.Errorf("decode zed agent message: %w", err)
 		}
-
 		message.Kind, message.Agent = ThreadMessageKindAgent, &agent
 	case variantKindCompaction:
 		var compaction CompactionMessage
 		if err := json.Unmarshal(payload, &compaction); err != nil {
 			return fmt.Errorf("decode zed compaction message: %w", err)
 		}
-
 		message.Kind, message.Compaction = ThreadMessageKindCompaction, &compaction
 	default:
 		return fmt.Errorf("unsupported zed thread message variant %q", kind)
 	}
-
 	return nil
 }
 
@@ -285,23 +270,19 @@ func (part *UserContentPart) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-
 	part.Kind = UserContentKind(kind)
 	switch part.Kind {
 	case UserContentKindText:
 		if err := json.Unmarshal(payload, &part.Text); err != nil {
 			return fmt.Errorf("decode zed user text part: %w", err)
 		}
-
 		return nil
 	case UserContentKindMention:
 		var mention MentionPart
 		if err := json.Unmarshal(payload, &mention); err != nil {
 			return fmt.Errorf("decode zed mention part: %w", err)
 		}
-
 		part.Mention = &mention
-
 		return nil
 	default:
 		return fmt.Errorf("unsupported user content variant %q", kind)
@@ -313,12 +294,10 @@ func decodeMentionURI(raw json.RawMessage) (string, error) {
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
 		return "", nil
 	}
-
 	uri, ok := findMentionURIValue(raw)
 	if !ok {
 		return "", fmt.Errorf("decode zed mention uri: no leaf string found")
 	}
-
 	return uri, nil
 }
 
@@ -341,7 +320,6 @@ func findMentionURIValue(raw json.RawMessage) (string, bool) {
 				return uri, true
 			}
 		}
-
 		return "", false
 	}
 
@@ -353,18 +331,10 @@ func findMentionURIValue(raw json.RawMessage) (string, bool) {
 				return uri, true
 			}
 		}
-
 		return "", false
 	}
 
-	slog.Warn(
-		"providers.zed.store.mention_uri_decode_failed",
-		"concern",
-		"providers.zed.store",
-		"raw_length",
-		len(raw),
-	)
-
+	slog.Warn("providers.zed.store.mention_uri_decode_failed", "concern", "providers.zed.store", "raw_length", len(raw))
 	return "", false
 }
 
@@ -373,40 +343,34 @@ func orderedMentionKeys(values map[string]json.RawMessage) []string {
 	for key := range values {
 		keys = append(keys, key)
 	}
-
-	sort.SliceStable(
-		keys,
-		func(i, j int) bool {
-			leftPriority, leftOK := mentionURIKeyPriority[keys[i]]
-			rightPriority, rightOK := mentionURIKeyPriority[keys[j]]
-			switch {
-			case leftOK && rightOK:
-				if leftPriority != rightPriority {
-					return leftPriority < rightPriority
-				}
-			case leftOK:
-				return true
-			case rightOK:
-				return false
+	sort.SliceStable(keys, func(i, j int) bool {
+		leftPriority, leftOK := mentionURIKeyPriority[keys[i]]
+		rightPriority, rightOK := mentionURIKeyPriority[keys[j]]
+		switch {
+		case leftOK && rightOK:
+			if leftPriority != rightPriority {
+				return leftPriority < rightPriority
 			}
+		case leftOK:
+			return true
+		case rightOK:
+			return false
+		}
 
-			leftLeafPriority, leftLeafOK := mentionURILeafPriority[keys[i]]
-			rightLeafPriority, rightLeafOK := mentionURILeafPriority[keys[j]]
-			switch {
-			case leftLeafOK && rightLeafOK:
-				if leftLeafPriority != rightLeafPriority {
-					return leftLeafPriority < rightLeafPriority
-				}
-			case leftLeafOK:
-				return true
-			case rightLeafOK:
-				return false
+		leftLeafPriority, leftLeafOK := mentionURILeafPriority[keys[i]]
+		rightLeafPriority, rightLeafOK := mentionURILeafPriority[keys[j]]
+		switch {
+		case leftLeafOK && rightLeafOK:
+			if leftLeafPriority != rightLeafPriority {
+				return leftLeafPriority < rightLeafPriority
 			}
-
-			return keys[i] < keys[j]
-		},
-	)
-
+		case leftLeafOK:
+			return true
+		case rightLeafOK:
+			return false
+		}
+		return keys[i] < keys[j]
+	})
 	return keys
 }
 
@@ -417,14 +381,12 @@ func (part *AgentContentPart) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-
 	part.Kind = AgentContentKind(kind)
 	switch part.Kind {
 	case AgentContentKindText, AgentContentKindRedactedThinking:
 		if err := json.Unmarshal(payload, &part.Text); err != nil {
 			return fmt.Errorf("decode zed assistant text part: %w", err)
 		}
-
 		return nil
 	case AgentContentKindThinking:
 		var thinking struct {
@@ -434,18 +396,14 @@ func (part *AgentContentPart) UnmarshalJSON(data []byte) error {
 		if err := json.Unmarshal(payload, &thinking); err != nil {
 			return fmt.Errorf("decode zed thinking part: %w", err)
 		}
-
 		part.Text, part.Signature = thinking.Text, thinking.Signature
-
 		return nil
 	case AgentContentKindToolUse:
 		var toolUse ToolUse
 		if err := json.Unmarshal(payload, &toolUse); err != nil {
 			return fmt.Errorf("decode zed tool use part: %w", err)
 		}
-
 		part.ToolUse = &toolUse
-
 		return nil
 	default:
 		return fmt.Errorf("unsupported zed assistant content variant %q", kind)
@@ -459,14 +417,12 @@ func (message *CompactionMessage) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-
 	message.Kind = CompactionMessageKind(kind)
 	switch message.Kind {
 	case CompactionMessageKindSummary:
 		if err := json.Unmarshal(payload, &message.Summary); err != nil {
 			return fmt.Errorf("decode zed compaction summary: %w", err)
 		}
-
 		return nil
 	case CompactionMessageKindProviderNative:
 		var providerNative struct {
@@ -476,9 +432,7 @@ func (message *CompactionMessage) UnmarshalJSON(data []byte) error {
 		if err := json.Unmarshal(payload, &providerNative); err != nil {
 			return fmt.Errorf("decode zed provider-native compaction: %w", err)
 		}
-
 		message.Provider, message.Items = providerNative.Provider, providerNative.Items
-
 		return nil
 	default:
 		return fmt.Errorf("unsupported zed compaction variant %q", kind)
@@ -490,18 +444,12 @@ func decodeVariant(data []byte) (variantKind, json.RawMessage, error) {
 	if err := json.Unmarshal(data, &variants); err != nil {
 		return variantKind(""), nil, VariantDecodeError{Err: err}
 	}
-
 	if len(variants) != 1 {
-		return variantKind(""), nil, fmt.Errorf(
-			"expected single-key zed enum variant, got %d keys",
-			len(variants),
-		)
+		return variantKind(""), nil, fmt.Errorf("expected single-key zed enum variant, got %d keys", len(variants))
 	}
-
 	for kind, payload := range variants {
 		return variantKind(kind), payload, nil
 	}
-
 	return variantKind(""), nil, fmt.Errorf("expected single-key zed enum variant")
 }
 

@@ -77,15 +77,12 @@ func (e *adapterError) Error() string {
 	if e == nil {
 		return ""
 	}
-
 	if strings.TrimSpace(e.Message) != "" {
 		return e.Message
 	}
-
 	if e.Cause != nil {
 		return e.Cause.Error()
 	}
-
 	return string(e.Class)
 }
 
@@ -93,7 +90,6 @@ func (e *adapterError) Unwrap() error {
 	if e == nil {
 		return nil
 	}
-
 	return e.Cause
 }
 
@@ -114,21 +110,18 @@ func newAdapterError(class adapterErrorClass, message string) *adapterError {
 		Warnings:          nil,
 	}
 	e.applyDefaults()
-
 	return e
 }
 
 func adapterErrInvalidJSON(message string, cause error) *adapterError {
 	e := newAdapterError(adapterErrorInvalidJSON, message)
 	e.Cause = cause
-
 	return e
 }
 
 func adapterErrInvalidRequest(message string, cause error) *adapterError {
 	e := newAdapterError(adapterErrorInvalidRequest, message)
 	e.Cause = cause
-
 	return e
 }
 
@@ -136,7 +129,6 @@ func adapterErrRejectedParameter(rejection adaptercompat.Rejection) *adapterErro
 	e := newAdapterError(adapterErrorInvalidRequest, rejection.Message)
 	e.Code = rejection.Code
 	e.Param = rejection.Param
-
 	return e
 }
 
@@ -148,7 +140,6 @@ func adapterErrInternal(message string, cause error) *adapterError {
 	e := newAdapterError(adapterErrorInternal, message)
 	e.Cause = cause
 	e.SafeForClient = false
-
 	return e
 }
 
@@ -156,7 +147,6 @@ func adapterErrUpstreamFailed(provider, message string, cause error) *adapterErr
 	e := newAdapterError(adapterErrorUpstreamFailed, message)
 	e.Provider = strings.TrimSpace(provider)
 	e.Cause = cause
-
 	return e
 }
 
@@ -169,7 +159,6 @@ func adapterErrBaselineMissing(provider, message string, cause error) *adapterEr
 	e := newAdapterError(adapterErrorBaselineMissing, message)
 	e.Provider = strings.TrimSpace(provider)
 	e.Cause = cause
-
 	return e
 }
 
@@ -186,102 +175,26 @@ type adapterErrorDefaults struct {
 }
 
 var adapterErrorDefaultsByClass = map[adapterErrorClass]adapterErrorDefaults{
-	adapterErrorAuthFailed: {
-		HTTPStatus: http.StatusUnauthorized,
-		Code:       "unauthorized",
-		Param:      "",
-	},
-	adapterErrorMethodNotAllowed: {
-		HTTPStatus: http.StatusMethodNotAllowed,
-		Code:       "method_not_allowed",
-		Param:      "",
-	},
-	adapterErrorInvalidJSON: {
-		HTTPStatus: http.StatusBadRequest,
-		Code:       "invalid_json",
-		Param:      "",
-	},
-	adapterErrorInvalidRequest: {
-		HTTPStatus: http.StatusBadRequest,
-		Code:       "invalid_request",
-		Param:      "",
-	},
-	adapterErrorModelNotFound: {
-		HTTPStatus: http.StatusBadRequest,
-		Code:       "model_not_found",
-		Param:      "model",
-	},
-	adapterErrorModelNotSupported: {
-		HTTPStatus: http.StatusBadRequest,
-		Code:       "model_not_supported",
-		Param:      "model",
-	},
-	adapterErrorUnsupportedBackend: {
-		HTTPStatus: http.StatusBadRequest,
-		Code:       "unsupported_backend",
-		Param:      "",
-	},
-	adapterErrorUnsupportedContent: {
-		HTTPStatus: http.StatusBadRequest,
-		Code:       "unsupported_content",
-		Param:      "",
-	},
-	adapterErrorContextLengthExceeded: {
-		HTTPStatus: http.StatusBadRequest,
-		Code:       "context_length_exceeded",
-		Param:      "messages",
-	},
-	adapterErrorRateLimited: {
-		HTTPStatus: http.StatusTooManyRequests,
-		Code:       "rate_limit_exceeded",
-		Param:      "",
-	},
-	adapterErrorUpstreamAuthFailed: {
-		HTTPStatus: http.StatusBadRequest,
-		Code:       "upstream_auth_failed",
-		Param:      "",
-	},
-	adapterErrorUpstreamRateLimited: {
-		HTTPStatus: http.StatusBadRequest,
-		Code:       "upstream_rate_limited",
-		Param:      "",
-	},
-	adapterErrorUpstreamSchemaViolation: {
-		HTTPStatus: http.StatusBadRequest,
-		Code:       "upstream_malformed_request",
-		Param:      "",
-	},
-	adapterErrorUpstreamNetworkError: {
-		HTTPStatus: http.StatusBadRequest,
-		Code:       "upstream_network_error",
-		Param:      "",
-	},
-	adapterErrorUpstreamUnavailable: {
-		HTTPStatus: http.StatusBadGateway,
-		Code:       "upstream_unavailable",
-		Param:      "",
-	},
-	adapterErrorUpstreamFailed: {
-		HTTPStatus: http.StatusBadGateway,
-		Code:       "upstream_failed",
-		Param:      "",
-	},
-	adapterErrorBaselineMissing: {
-		HTTPStatus: http.StatusServiceUnavailable,
-		Code:       "wire_baseline_unavailable",
-		Param:      "",
-	},
-	adapterErrorTimeout: {
-		HTTPStatus: http.StatusGatewayTimeout,
-		Code:       "timeout",
-		Param:      "",
-	},
-	adapterErrorCanceled: {HTTPStatus: 499, Code: "canceled", Param: ""},
-	adapterErrorInternal: {
-		HTTPStatus: http.StatusInternalServerError,
-		Code:       "internal_error",
-		Param:      "",
-	},
+	adapterErrorAuthFailed:              {HTTPStatus: http.StatusUnauthorized, Code: "unauthorized", Param: ""},
+	adapterErrorMethodNotAllowed:        {HTTPStatus: http.StatusMethodNotAllowed, Code: "method_not_allowed", Param: ""},
+	adapterErrorInvalidJSON:             {HTTPStatus: http.StatusBadRequest, Code: "invalid_json", Param: ""},
+	adapterErrorInvalidRequest:          {HTTPStatus: http.StatusBadRequest, Code: "invalid_request", Param: ""},
+	adapterErrorModelNotFound:           {HTTPStatus: http.StatusBadRequest, Code: "model_not_found", Param: "model"},
+	adapterErrorModelNotSupported:       {HTTPStatus: http.StatusBadRequest, Code: "model_not_supported", Param: "model"},
+	adapterErrorUnsupportedBackend:      {HTTPStatus: http.StatusBadRequest, Code: "unsupported_backend", Param: ""},
+	adapterErrorUnsupportedContent:      {HTTPStatus: http.StatusBadRequest, Code: "unsupported_content", Param: ""},
+	adapterErrorContextLengthExceeded:   {HTTPStatus: http.StatusBadRequest, Code: "context_length_exceeded", Param: "messages"},
+	adapterErrorRateLimited:             {HTTPStatus: http.StatusTooManyRequests, Code: "rate_limit_exceeded", Param: ""},
+	adapterErrorUpstreamAuthFailed:      {HTTPStatus: http.StatusBadRequest, Code: "upstream_auth_failed", Param: ""},
+	adapterErrorUpstreamRateLimited:     {HTTPStatus: http.StatusBadRequest, Code: "upstream_rate_limited", Param: ""},
+	adapterErrorUpstreamSchemaViolation: {HTTPStatus: http.StatusBadRequest, Code: "upstream_malformed_request", Param: ""},
+	adapterErrorUpstreamNetworkError:    {HTTPStatus: http.StatusBadRequest, Code: "upstream_network_error", Param: ""},
+	adapterErrorUpstreamUnavailable:     {HTTPStatus: http.StatusBadGateway, Code: "upstream_unavailable", Param: ""},
+	adapterErrorUpstreamFailed:          {HTTPStatus: http.StatusBadGateway, Code: "upstream_failed", Param: ""},
+	adapterErrorBaselineMissing:         {HTTPStatus: http.StatusServiceUnavailable, Code: "wire_baseline_unavailable", Param: ""},
+	adapterErrorTimeout:                 {HTTPStatus: http.StatusGatewayTimeout, Code: "timeout", Param: ""},
+	adapterErrorCanceled:                {HTTPStatus: 499, Code: "canceled", Param: ""},
+	adapterErrorInternal:                {HTTPStatus: http.StatusInternalServerError, Code: "internal_error", Param: ""},
 }
 
 func (e *adapterError) applyDefaults() {
@@ -291,25 +204,20 @@ func (e *adapterError) applyDefaults() {
 	if e.HTTPStatus == 0 {
 		e.HTTPStatus = http.StatusInternalServerError
 	}
-
 	if defaults, ok := adapterErrorDefaultsByClass[e.Class]; ok {
 		e.HTTPStatus = defaults.HTTPStatus
 		e.Code = defaults.Code
 		e.Param = defaults.Param
 	}
-
 	if e.Message == "" {
 		e.Message = string(e.Class)
 	}
-
 	if explicitStatus > 0 {
 		e.HTTPStatus = explicitStatus
 	}
-
 	if explicitCode != "" {
 		e.Code = explicitCode
 	}
-
 	if explicitParam != "" {
 		e.Param = explicitParam
 	}
@@ -334,47 +242,32 @@ func markRawForwardingError(err error) error {
 	if err == nil {
 		return nil
 	}
-
 	return &rawForwardingError{cause: err}
 }
 
 // errorContractForRequest returns the compatibility contract for raw
 // forwarding errors.
-func errorContractForRequest(
-	ctx context.Context,
-	family adapterRouteFamily,
-	err error,
-) errcontract.ClientContract {
+func errorContractForRequest(ctx context.Context, family adapterRouteFamily, err error) errcontract.ClientContract {
 	var forwarding *rawForwardingError
 	if errors.As(err, &forwarding) {
 		return errcontract.ClientContractCompatibility
 	}
-
 	return errorContractForListener(ctx, family)
 }
 
 // errorContractForListener returns the documented contract only for an
 // OpenAI family request on the "openai" listener.
-func errorContractForListener(
-	ctx context.Context,
-	family adapterRouteFamily,
-) errcontract.ClientContract {
+func errorContractForListener(ctx context.Context, family adapterRouteFamily) errcontract.ClientContract {
 	if family == adapterRouteOpenAI && listenerFollowsDocumentedContract(ctx) {
 		return errcontract.ClientContractDocumented
 	}
-
 	return errcontract.ClientContractCompatibility
 }
 
-func applyContractShape(
-	family adapterRouteFamily,
-	contract errcontract.ClientContract,
-	aerr *adapterError,
-) *adapterError {
+func applyContractShape(family adapterRouteFamily, contract errcontract.ClientContract, aerr *adapterError) *adapterError {
 	if contract == errcontract.ClientContractDocumented {
 		return applyDocumentedShape(aerr)
 	}
-
 	return applyFamilyShape(family, aerr)
 }
 
@@ -393,13 +286,11 @@ func adapterErrorFrom(err error) *adapterError {
 	if err == nil {
 		return nil
 	}
-
 	var aerr *adapterError
 	if errors.As(err, &aerr) {
 		aerr.applyDefaults()
 		return aerr
 	}
-
 	return adapterErrUpstreamFailed("", err.Error(), err)
 }
 
@@ -422,7 +313,6 @@ func (s *Server) writeShapedError(w http.ResponseWriter, r *http.Request, err er
 	if aerr == nil {
 		aerr = adapterErrInternal("adapter internal error", nil)
 	}
-
 	family := adapterRouteFamilyForPath(r.URL.Path)
 	contract := errorContractForRequest(r.Context(), family, err)
 	aerr = applyContractShape(family, contract, aerr)
@@ -434,7 +324,6 @@ func (s *Server) writeShapedError(w http.ResponseWriter, r *http.Request, err er
 			message += "; see Clyde logs with request_id " + corr.RequestID
 		}
 	}
-
 	message = maybeAppendClydeRequestID(family, aerr, message, corr.RequestID)
 	attrs := []slog.Attr{
 		slog.String("method", r.Method),
@@ -462,13 +351,8 @@ func (s *Server) writeShapedError(w http.ResponseWriter, r *http.Request, err er
 		s.writeFallbackError(r.Context(), w, family, aerr.HTTPStatus, info)
 		return
 	}
-
 	if writeErr := renderer.Render(w, aerr.HTTPStatus, info); writeErr != nil {
-		s.adapterErrorLog().LogAttrs(
-			r.Context(),
-			slog.LevelWarn,
-			"adapter.error_boundary.render_failed",
-			slog.String("route_family", string(family)),
+		s.adapterErrorLog().LogAttrs(r.Context(), slog.LevelWarn, "adapter.error_boundary.render_failed", slog.String("route_family", string(family)),
 			slog.Any("err", writeErr),
 		)
 	}
@@ -478,7 +362,6 @@ func (s *Server) adapterErrorLog() *slog.Logger {
 	if s == nil || s.errorLog == nil {
 		return slogger.For(slogger.ConcernAdapterHTTPErrors)
 	}
-
 	return s.errorLog
 }
 
@@ -486,7 +369,6 @@ func (s *Server) adapterChatDispatchLog() *slog.Logger {
 	if s == nil || s.dispatchLog == nil {
 		return slogger.For(slogger.ConcernAdapterChatDispatch)
 	}
-
 	return s.dispatchLog
 }
 
@@ -498,11 +380,7 @@ func (s *Server) adapterChatDispatchLog() *slog.Logger {
 // fills Type directly, because the provider mapper already chose the
 // family-correct type; this direct-construction path never names a
 // provider wire type.
-func adapterErrorInfoForFamily(
-	_ adapterRouteFamily,
-	aerr *adapterError,
-	message string,
-) errcontract.ErrorInfo {
+func adapterErrorInfoForFamily(_ adapterRouteFamily, aerr *adapterError, message string) errcontract.ErrorInfo {
 	if aerr == nil {
 		return errcontract.ErrorInfo{
 			Type:           "",
@@ -516,12 +394,10 @@ func adapterErrorInfoForFamily(
 			Status:         http.StatusInternalServerError,
 		}
 	}
-
 	aerr.applyDefaults()
 	if message == "" {
 		message = aerr.Message
 	}
-
 	return errcontract.ErrorInfo{
 		Type:           "",
 		Class:          string(aerr.Class),
@@ -544,29 +420,20 @@ func adapterErrorInfoForRequest(
 ) errcontract.ErrorInfo {
 	info := adapterErrorInfoForFamily(family, aerr, message)
 	info.Diagnostics = errorDiagnosticsForRequest(family, aerr, corr, r)
-
 	return info
 }
 
-func maybeAppendClydeRequestID(
-	family adapterRouteFamily,
-	aerr *adapterError,
-	message string,
-	requestID string,
-) string {
+func maybeAppendClydeRequestID(family adapterRouteFamily, aerr *adapterError, message string, requestID string) string {
 	if family != adapterRouteOpenAI || aerr == nil || strings.TrimSpace(requestID) == "" {
 		return message
 	}
-
 	if !strings.HasPrefix(string(aerr.Class), "upstream_") {
 		return message
 	}
-
 	needle := "Clyde request_id="
 	if strings.Contains(message, needle) {
 		return message
 	}
-
 	return strings.TrimSpace(message) + " (" + needle + requestID + ")"
 }
 
@@ -579,7 +446,6 @@ func errorDiagnosticsForRequest(
 	if aerr == nil {
 		aerr = adapterErrInternal("adapter internal error", nil)
 	}
-
 	headers := map[string]string(nil)
 	headerNames := []string(nil)
 	method := ""
@@ -592,10 +458,8 @@ func errorDiagnosticsForRequest(
 		if r.URL != nil {
 			path = r.URL.Path
 		}
-
 		userAgent = r.UserAgent()
 	}
-
 	return &errcontract.ErrorDiagnostics{
 		RequestID:          corr.RequestID,
 		TraceID:            string(corr.TraceID),
@@ -628,29 +492,22 @@ func diagnosticIdentityAttributes(corr correlation.Context) []errcontract.Diagno
 	if len(corr.IdentityAttributes) == 0 {
 		return nil
 	}
-
 	fields := make([]errcontract.DiagnosticField, 0, len(corr.IdentityAttributes))
 	for _, attr := range corr.IdentityAttributes {
 		if attr.Key == "" || attr.Value == "" {
 			continue
 		}
-
 		// Skip clyde-owned identity attribute keys that the diagnostics
 		// envelope already exposes as named fields. Vendor metadata
 		// (cursor_request_id, etc.) flows through unchanged.
 		if diagnosticReservedIdentityKey(attr.Key) {
 			continue
 		}
-
-		fields = append(
-			fields,
-			errcontract.DiagnosticField{
-				Key:   attr.Key,
-				Value: attr.Value,
-			},
-		)
+		fields = append(fields, errcontract.DiagnosticField{
+			Key:   attr.Key,
+			Value: attr.Value,
+		})
 	}
-
 	return fields
 }
 
@@ -664,7 +521,6 @@ func diagnosticReservedIdentityKey(key string) bool {
 		clydeingress.AttrKeyUpstreamResponseID:
 		return true
 	}
-
 	return false
 }
 
@@ -673,7 +529,6 @@ func errorLogHint(requestID string) string {
 	if requestID == "" {
 		return "adapter/http/errors.jsonl"
 	}
-
 	return "adapter/http/errors.jsonl request_id=" + requestID
 }
 
@@ -687,19 +542,15 @@ func (s *Server) lookupErrorRenderer(family adapterRouteFamily) (errcontract.Err
 			return r, true
 		}
 	}
-
 	return defaultBoundaryRegistry.errorRenderer(family)
 }
 
-func (s *Server) lookupStreamErrorRenderer(
-	family adapterRouteFamily,
-) (errcontract.StreamErrorRenderer, bool) {
+func (s *Server) lookupStreamErrorRenderer(family adapterRouteFamily) (errcontract.StreamErrorRenderer, bool) {
 	if s != nil && s.streamErrorRenderers != nil {
 		if r, ok := s.streamErrorRenderers[family]; ok {
 			return r, true
 		}
 	}
-
 	return defaultBoundaryRegistry.streamErrorRenderer(family)
 }
 
@@ -708,18 +559,8 @@ func (s *Server) lookupStreamErrorRenderer(
 // instead of a bare WriteHeader. The chosen shape is a
 // minimal-on-purpose JSON string body; callers add the warning log so
 // regressions in registration get noticed.
-func (s *Server) writeFallbackError(
-	ctx context.Context,
-	w http.ResponseWriter,
-	family adapterRouteFamily,
-	status int,
-	info errcontract.ErrorInfo,
-) {
-	s.adapterErrorLog().LogAttrs(
-		ctx,
-		slog.LevelWarn,
-		"adapter.error_boundary.no_renderer_for_family",
-		slog.String("route_family", string(family)),
+func (s *Server) writeFallbackError(ctx context.Context, w http.ResponseWriter, family adapterRouteFamily, status int, info errcontract.ErrorInfo) {
+	s.adapterErrorLog().LogAttrs(ctx, slog.LevelWarn, "adapter.error_boundary.no_renderer_for_family", slog.String("route_family", string(family)),
 		slog.Int("status", status),
 		slog.String("error_type", info.Type),
 		slog.String("error_code", info.Code),
@@ -734,27 +575,20 @@ func (s *Server) writeFallbackError(
 // followed by the [DONE] terminator. Mid-stream errors must use this
 // helper because the response headers have already been committed and
 // switching to a JSON envelope would corrupt the SSE channel.
-func (s *Server) respondAdapterStreamError(
-	ctx context.Context,
-	sse errcontract.StreamErrorWriter,
-	err error,
-) error {
+func (s *Server) respondAdapterStreamError(ctx context.Context, sse errcontract.StreamErrorWriter, err error) error {
 	if sse == nil {
 		return nil
 	}
-
 	aerr := adapterErrorFrom(err)
 	if aerr == nil {
 		aerr = adapterErrInternal("adapter internal error", nil)
 	}
-
 	contract := errorContractForRequest(ctx, adapterRouteOpenAI, err)
 	aerr = applyContractShape(adapterRouteOpenAI, contract, aerr)
 	message := aerr.Message
 	if !aerr.SafeForClient {
 		message = "adapter internal error"
 	}
-
 	corr := correlation.FromContext(ctx)
 	message = maybeAppendClydeRequestID(adapterRouteOpenAI, aerr, message, corr.RequestID)
 	info := adapterErrorInfoForFamily(adapterRouteOpenAI, aerr, message)
@@ -763,25 +597,14 @@ func (s *Server) respondAdapterStreamError(
 	info.Status = aerr.HTTPStatus
 	renderer, ok := s.lookupStreamErrorRenderer(adapterRouteOpenAI)
 	if !ok {
-		return fmt.Errorf(
-			"no stream error renderer registered for route family %q",
-			adapterRouteOpenAI,
-		)
+		return fmt.Errorf("no stream error renderer registered for route family %q", adapterRouteOpenAI)
 	}
-
 	if writeErr := renderer.WriteStreamError(sse, info); writeErr != nil {
-		s.log.LogAttrs(
-			ctx,
-			slog.LevelWarn,
-			"adapter.chat.stream_error_write_failed",
-			slog.String("concern", "adapter.chat.render"),
-			slog.String("openai_type", info.Type),
+		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_error_write_failed", slog.String("concern", "adapter.chat.render"), slog.String("openai_type", info.Type),
 			slog.String("openai_code", info.Code),
 			slog.Any("err", writeErr),
 		)
-
 		return fmt.Errorf("render stream error: %w", writeErr)
 	}
-
 	return nil
 }

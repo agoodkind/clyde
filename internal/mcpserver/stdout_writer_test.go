@@ -25,7 +25,6 @@ func (w *slowWriter) Write(p []byte) (int, error) {
 			return byteIndex, err
 		}
 	}
-
 	return len(p), nil
 }
 
@@ -46,11 +45,9 @@ func TestMCPStdoutWriterSerializesFrames(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(goroutineCount)
-
 	for goroutineIndex := 0; goroutineIndex < goroutineCount; goroutineIndex++ {
 		go func(routineID int) {
 			defer wg.Done()
-
 			for writeIndex := 0; writeIndex < writesPerGoroutine; writeIndex++ {
 				frame := buildFrame(routineID, writeIndex)
 				if _, err := writer.Write(frame); err != nil {
@@ -58,11 +55,8 @@ func TestMCPStdoutWriterSerializesFrames(t *testing.T) {
 					return
 				}
 			}
-		}(
-			goroutineIndex,
-		)
+		}(goroutineIndex)
 	}
-
 	wg.Wait()
 
 	output := buf.String()
@@ -85,11 +79,9 @@ func TestMCPStdoutWriterFrameContentRoundtrips(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(goroutineCount)
-
 	for goroutineIndex := 0; goroutineIndex < goroutineCount; goroutineIndex++ {
 		go func(routineID int) {
 			defer wg.Done()
-
 			for writeIndex := 0; writeIndex < writesPerGoroutine; writeIndex++ {
 				frame := buildFrame(routineID, writeIndex)
 				expectedMu.Lock()
@@ -100,18 +92,14 @@ func TestMCPStdoutWriterFrameContentRoundtrips(t *testing.T) {
 					return
 				}
 			}
-		}(
-			goroutineIndex,
-		)
+		}(goroutineIndex)
 	}
-
 	wg.Wait()
 
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
 	if len(lines) != len(expected) {
 		t.Fatalf("expected %d frames, got %d", len(expected), len(lines))
 	}
-
 	for _, line := range lines {
 		if _, ok := expected[line]; !ok {
 			t.Fatalf("frame not in expected set, indicates torn write: %q", line)
@@ -147,7 +135,6 @@ func buildFrame(goroutineID int, writeIndex int) []byte {
 	if err != nil {
 		panic(fmt.Sprintf("marshal frame: %v", err))
 	}
-
 	return append(encoded, '\n')
 }
 
@@ -161,17 +148,14 @@ func verifyFrames(t *testing.T, output string, expectedCount int) {
 	if len(lines) != expectedCount {
 		t.Fatalf("expected %d JSON-RPC lines, got %d", expectedCount, len(lines))
 	}
-
 	for lineIndex, line := range lines {
 		if line == "" {
 			t.Fatalf("empty line at index %d, indicates torn frame", lineIndex)
 		}
-
 		var decoded frame
 		if err := json.Unmarshal([]byte(line), &decoded); err != nil {
 			t.Fatalf("torn JSON frame at index %d: %v\nline=%q", lineIndex, err, line)
 		}
-
 		if decoded.JSONRPC != "2.0" || decoded.Method != "notifications/test" {
 			t.Fatalf("unexpected frame contents at index %d: %+v", lineIndex, decoded)
 		}

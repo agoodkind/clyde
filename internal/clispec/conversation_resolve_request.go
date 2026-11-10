@@ -34,10 +34,7 @@ func (resolveRequestPayload) isClispecPrepared() {}
 // opt-in exhaustive scan.
 func resolveRequestOp() Operation[resolveRequestInput, resolveRequestPayload] {
 	return Operation[resolveRequestInput, resolveRequestPayload]{
-		Name: Name{
-			Canonical:   "conversation_resolve_request",
-			CLIOverride: "resolve-request",
-		},
+		Name:       Name{Canonical: "conversation_resolve_request", CLIOverride: "resolve-request"},
 		Group:      conversationGroup,
 		Surfaces:   SurfaceSet{CLI: true, MCP: true},
 		outputKind: resultKindValue,
@@ -51,52 +48,31 @@ func resolveRequestOp() Operation[resolveRequestInput, resolveRequestPayload] {
 			"clyde conversation resolve-request " + exampleRequestID + " --full-scan",
 		},
 		Args: []Arg[resolveRequestInput]{
-			PositionalArg(
-				"request_id",
-				"Provider request id, such as the value Cursor's Copy Request ID action yields.",
-				func(in *resolveRequestInput, v string) { in.RequestID = v },
-			),
+			PositionalArg("request_id", "Provider request id, such as the value Cursor's Copy Request ID action yields.",
+				func(in *resolveRequestInput, v string) { in.RequestID = v }),
 		},
 		Params: []Param[resolveRequestInput]{
-			BoolParam(
-				"full_scan",
-				"Read every stored turn when the bounded paths miss. "+
-					"This takes tens of seconds, so it never runs unless you pass it.",
-				false,
-				func(in *resolveRequestInput, v bool) { in.FullScan = v },
-			),
+			BoolParam("full_scan", "Read every stored turn when the bounded paths miss. This takes tens of seconds, so it never runs unless you pass it.", false,
+				func(in *resolveRequestInput, v bool) { in.FullScan = v }),
 		},
-		New: func() resolveRequestInput {
-			return resolveRequestInput{
-				RequestID: "",
-				FullScan:  false,
-			}
-		},
+		New:            func() resolveRequestInput { return resolveRequestInput{RequestID: "", FullScan: false} },
 		MCPTaskSupport: "",
 		MCPTaskRun:     nil,
 		mcpTaskResult:  nil,
 		Children:       nil,
-		Prepare: func(input resolveRequestInput) (resolveRequestPayload, error) {
-			requestID := strings.TrimSpace(input.RequestID)
+		Prepare: func(in resolveRequestInput) (resolveRequestPayload, error) {
+			requestID := strings.TrimSpace(in.RequestID)
 			if requestID == "" {
 				return resolveRequestPayload{}, fmt.Errorf("request_id is required")
 			}
-
-			return resolveRequestPayload{RequestID: requestID, FullScan: input.FullScan}, nil
+			return resolveRequestPayload{RequestID: requestID, FullScan: in.FullScan}, nil
 		},
 		Run: nil,
 		runResult: func(ctx context.Context, p resolveRequestPayload) (Result, error) {
 			resolution, err := daemon.ResolveConversationRequest(ctx, p.RequestID, p.FullScan)
 			if err != nil {
-				return nil, logFail(
-					ctx,
-					surfaceFromContext(ctx),
-					"resolve_request_failed",
-					"resolve conversation request",
-					err,
-				)
+				return nil, logFail(ctx, surfaceFromContext(ctx), "resolve_request_failed", "resolve conversation request", err)
 			}
-
 			return valueResult{
 				Payload: resolveRequestOutputFromDomain(resolution),
 				Text:    formatRequestResolution(resolution),
@@ -126,12 +102,9 @@ func resolveRequestOutputFromDomain(resolution conv.RequestResolution) resolveRe
 	if resolution.Found {
 		record := resolution.Record
 		output.Conversation = &record
-
 		return output
 	}
-
 	output.NotFoundReason = resolution.Reason.String()
-
 	return output
 }
 
@@ -142,10 +115,8 @@ func formatRequestResolution(resolution conv.RequestResolution) string {
 	if !resolution.Found {
 		fmt.Fprintf(&out, "not_found_reason: %s\n", resolution.Reason.String())
 		fmt.Fprintf(&out, "\n%s\n", resolution.Reason.Describe())
-
 		return out.String()
 	}
-
 	record := resolution.Record
 	fmt.Fprintf(&out, "origin: %s\n", resolution.Origin.String())
 	fmt.Fprintf(&out, "conversation_id: %s\n", record.ID)
@@ -156,6 +127,5 @@ func formatRequestResolution(resolution conv.RequestResolution) string {
 	fmt.Fprintf(&out, "artifact_path: %s\n", record.ArtifactPath)
 	fmt.Fprintf(&out, "updated_at: %s\n", formatTime(record.UpdatedAt))
 	fmt.Fprintf(&out, "\nRead the transcript with: clyde conversation search %s\n", record.ID)
-
 	return out.String()
 }

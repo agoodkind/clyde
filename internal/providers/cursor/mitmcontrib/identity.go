@@ -15,12 +15,7 @@ import (
 // capture fixtures and live traffic both populate the facet.
 func extractIdentity(headers http.Header) mitm.IdentityContribution {
 	requestID := firstHeader(headers, "x-request-id", "x-cursor-request-id", "request-id")
-	originalRequestID := firstHeader(
-		headers,
-		"x-original-request-id",
-		"x-cursor-original-request-id",
-		"original-request-id",
-	)
+	originalRequestID := firstHeader(headers, "x-original-request-id", "x-cursor-original-request-id", "original-request-id")
 	sessionID := firstHeader(headers, "x-session-id", "x-cursor-session-id", "cursor-session-id")
 	conversationID := firstHeader(headers, "x-cursor-conversation-id", "x-conversation-id")
 	generationID := firstHeader(headers, "x-cursor-generation-id", "x-generation-id")
@@ -43,11 +38,9 @@ func extractIdentity(headers http.Header) mitm.IdentityContribution {
 		contrib.ConversationID = conversationID
 		contrib.ConversationSource = "header"
 	}
-
 	if !facet.Empty() {
 		contrib.Facet = facet
 	}
-
 	return contrib
 }
 
@@ -57,7 +50,6 @@ func firstHeader(h http.Header, keys ...string) string {
 			return value
 		}
 	}
-
 	return ""
 }
 
@@ -73,26 +65,11 @@ type CaptureHeaders struct {
 
 // ExtractCaptureHeaders returns the raw Cursor identity headers
 // from the supplied header bundle.
-func ExtractCaptureHeaders(headers http.Header) CaptureHeaders {
+func ExtractCaptureHeaders(h http.Header) CaptureHeaders {
 	return CaptureHeaders{
-		RequestID: firstHeader(
-			headers,
-			"x-request-id",
-			"x-cursor-request-id",
-			"request-id",
-		),
-		OriginalRequestID: firstHeader(
-			headers,
-			"x-original-request-id",
-			"x-cursor-original-request-id",
-			"original-request-id",
-		),
-		SessionID: firstHeader(
-			headers,
-			"x-session-id",
-			"x-cursor-session-id",
-			"cursor-session-id",
-		),
-		Traceparent: firstHeader(headers, "traceparent"),
+		RequestID:         firstHeader(h, "x-request-id", "x-cursor-request-id", "request-id"),
+		OriginalRequestID: firstHeader(h, "x-original-request-id", "x-cursor-original-request-id", "original-request-id"),
+		SessionID:         firstHeader(h, "x-session-id", "x-cursor-session-id", "cursor-session-id"),
+		Traceparent:       firstHeader(h, "traceparent"),
 	}
 }

@@ -23,21 +23,14 @@ func loadKindsFromTOML(t *testing.T, body string) (conversation.ContentKindSet, 
 	if err := os.MkdirAll(configDir, 0o700); err != nil {
 		t.Fatalf("create config dir: %v", err)
 	}
-
-	if err := os.WriteFile(
-		filepath.Join(configDir, "config.toml"),
-		[]byte(body),
-		0o600,
-	); err != nil {
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(body), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
-
 	t.Setenv("XDG_CONFIG_HOME", configRoot)
 	cfg, err := config.LoadGlobalOrDefault()
 	if err != nil {
 		return conversation.ContentKindSet{}, err
 	}
-
 	return SemanticContentKinds(cfg.Conversation.Semantic)
 }
 
@@ -74,17 +67,13 @@ func policyTestMessages() []transcript.Message {
 			Timestamp: time.Unix(1710000002, 0),
 			Text:      "",
 			HasTools:  true,
-			Tools: []transcript.ToolCall{
-				{
-					Name: "shell",
-					Input: transcript.ToolInputJSON{
-						Raw: []byte(`{"command":"go test ./..."}`),
-					},
-					Display:     "go test ./...",
-					DisplayLang: "bash",
-					Output:      "ok\tgoodkind.io/clyde\t1.2s",
-				},
-			},
+			Tools: []transcript.ToolCall{{
+				Name:        "shell",
+				Input:       transcript.ToolInputJSON{Raw: []byte(`{"command":"go test ./..."}`)},
+				Display:     "go test ./...",
+				DisplayLang: "bash",
+				Output:      "ok\tgoodkind.io/clyde\t1.2s",
+			}},
 		},
 		{Role: "assistant", Timestamp: time.Unix(1710000003, 0), Text: "shipped"},
 	}
@@ -99,55 +88,33 @@ func TestDefaultConfigSelectsChatAndToolCalls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-
 	if !kinds.Has(conversation.ContentKindChat) || !kinds.Has(conversation.ContentKindToolCalls) {
 		t.Fatalf("default kinds = %v, want chat and tool_calls", kinds.Kinds())
 	}
-
-	if kinds.Has(conversation.ContentKindThinking) ||
-		kinds.Has(conversation.ContentKindToolOutputs) {
+	if kinds.Has(conversation.ContentKindThinking) || kinds.Has(conversation.ContentKindToolOutputs) {
 		t.Fatalf("default kinds = %v, want reasoning and tool outputs absent", kinds.Kinds())
 	}
 
-	built, err := BuildSemanticConversationDocuments(
-		policyTestRecord(),
-		policyTestMessages(),
-		kinds,
-	)
+	built, err := BuildSemanticConversationDocuments(policyTestRecord(), policyTestMessages(), kinds)
 	if err != nil {
 		t.Fatalf("build documents: %v", err)
 	}
-
 	if built.PolicySkipped != 1 {
 		t.Fatalf("PolicySkipped = %d, want 1 (the reasoning-only turn)", built.PolicySkipped)
 	}
-
 	if len(built.Docs) != 3 {
 		t.Fatalf("documents = %d, want 3", len(built.Docs))
 	}
-
 	for _, doc := range built.Docs {
 		if doc.Thinking != "" {
-			t.Fatalf(
-				"document %d carries reasoning %q under the default",
-				doc.MessageIndex,
-				doc.Thinking,
-			)
+			t.Fatalf("document %d carries reasoning %q under the default", doc.MessageIndex, doc.Thinking)
 		}
-
 		for _, tool := range doc.Tools {
 			if tool.Display != "go test ./..." {
-				t.Fatalf(
-					"tool display = %q, want the display text the default indexes",
-					tool.Display,
-				)
+				t.Fatalf("tool display = %q, want the display text the default indexes", tool.Display)
 			}
-
 			if tool.Output != "" {
-				t.Fatalf(
-					"tool output = %q, want empty; tool_outputs is not a default kind",
-					tool.Output,
-				)
+				t.Fatalf("tool output = %q, want empty; tool_outputs is not a default kind", tool.Output)
 			}
 		}
 	}
@@ -163,11 +130,7 @@ func TestSkippedMessageKeepsTheIndexOfEveryLaterMessage(t *testing.T) {
 		t.Fatalf("load config: %v", err)
 	}
 
-	built, err := BuildSemanticConversationDocuments(
-		policyTestRecord(),
-		policyTestMessages(),
-		kinds,
-	)
+	built, err := BuildSemanticConversationDocuments(policyTestRecord(), policyTestMessages(), kinds)
 	if err != nil {
 		t.Fatalf("build documents: %v", err)
 	}
@@ -176,30 +139,17 @@ func TestSkippedMessageKeepsTheIndexOfEveryLaterMessage(t *testing.T) {
 	for _, doc := range built.Docs {
 		got = append(got, doc.MessageIndex)
 	}
-
 	want := []int32{0, 2, 3}
 	if len(got) != len(want) {
 		t.Fatalf("message indexes = %v, want %v", got, want)
 	}
-
 	messages := policyTestMessages()
-
 	for i := range want {
 		if got[i] != want[i] {
-			t.Fatalf(
-				"message indexes = %v, want %v; index 1 was withheld and must leave a gap",
-				got,
-				want,
-			)
+			t.Fatalf("message indexes = %v, want %v; index 1 was withheld and must leave a gap", got, want)
 		}
-
 		if messages[got[i]].Role != built.Docs[i].Role {
-			t.Fatalf(
-				"document %d has role %q but the loader's message at that position has %q",
-				got[i],
-				built.Docs[i].Role,
-				messages[got[i]].Role,
-			)
+			t.Fatalf("document %d has role %q but the loader's message at that position has %q", got[i], built.Docs[i].Role, messages[got[i]].Role)
 		}
 	}
 }
@@ -207,39 +157,27 @@ func TestSkippedMessageKeepsTheIndexOfEveryLaterMessage(t *testing.T) {
 // TestNamingThinkingOffersTheReasoningOnlyTurn proves the opt-in works, using the
 // export surface's own selector name.
 func TestNamingThinkingOffersTheReasoningOnlyTurn(t *testing.T) {
-	kinds, err := loadKindsFromTOML(
-		t,
-		"[conversation.semantic]\nindexed_content = [\"chat\", \"thinking\", \"tool_calls\"]\n",
-	)
+	kinds, err := loadKindsFromTOML(t, "[conversation.semantic]\nindexed_content = [\"chat\", \"thinking\", \"tool_calls\"]\n")
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
 
-	built, err := BuildSemanticConversationDocuments(
-		policyTestRecord(),
-		policyTestMessages(),
-		kinds,
-	)
+	built, err := BuildSemanticConversationDocuments(policyTestRecord(), policyTestMessages(), kinds)
 	if err != nil {
 		t.Fatalf("build documents: %v", err)
 	}
-
 	if built.PolicySkipped != 0 {
 		t.Fatalf("PolicySkipped = %d, want 0 once thinking is indexed", built.PolicySkipped)
 	}
-
 	if len(built.Docs) != 4 {
 		t.Fatalf("documents = %d, want 4", len(built.Docs))
 	}
-
 	reasoning := ""
-
 	for _, doc := range built.Docs {
 		if doc.MessageIndex == 1 {
 			reasoning = doc.Thinking
 		}
 	}
-
 	if reasoning != "weighing the two approaches" {
 		t.Fatalf("reasoning at index 1 = %q, want the turn's reasoning text", reasoning)
 	}
@@ -249,30 +187,20 @@ func TestNamingThinkingOffersTheReasoningOnlyTurn(t *testing.T) {
 // produced, so the nested-level assertions read against real config input.
 func projectedToolAt(t *testing.T, selector string) (int, string, string, string, bool) {
 	t.Helper()
-	kinds, err := loadKindsFromTOML(
-		t,
-		"[conversation.semantic]\nindexed_content = [\"chat\", \""+selector+"\"]\n",
-	)
+	kinds, err := loadKindsFromTOML(t, "[conversation.semantic]\nindexed_content = [\"chat\", \""+selector+"\"]\n")
 	if err != nil {
 		t.Fatalf("load config for %q: %v", selector, err)
 	}
-
-	built, err := BuildSemanticConversationDocuments(
-		policyTestRecord(),
-		policyTestMessages(),
-		kinds,
-	)
+	built, err := BuildSemanticConversationDocuments(policyTestRecord(), policyTestMessages(), kinds)
 	if err != nil {
 		t.Fatalf("build documents for %q: %v", selector, err)
 	}
-
 	for _, doc := range built.Docs {
 		if len(doc.Tools) > 0 {
 			tool := doc.Tools[0]
 			return built.PolicySkipped, tool.Name, tool.Display, tool.Output, true
 		}
 	}
-
 	return built.PolicySkipped, "", "", "", false
 }
 
@@ -285,11 +213,9 @@ func TestToolKindsAreNestedLevels(t *testing.T) {
 	if !found {
 		t.Fatal("summaries level dropped the tool call entirely")
 	}
-
 	if name != "shell" {
 		t.Fatalf("summaries level name = %q, want shell", name)
 	}
-
 	if display != "" || output != "" {
 		t.Fatalf("summaries level carried display %q or output %q", display, output)
 	}
@@ -298,11 +224,9 @@ func TestToolKindsAreNestedLevels(t *testing.T) {
 	if !found {
 		t.Fatal("calls level dropped the tool call entirely")
 	}
-
 	if !strings.Contains(display, "go test") {
 		t.Fatalf("calls level display = %q, want the call display", display)
 	}
-
 	if output != "" {
 		t.Fatalf("calls level output = %q, want empty", output)
 	}
@@ -311,11 +235,9 @@ func TestToolKindsAreNestedLevels(t *testing.T) {
 	if !found {
 		t.Fatal("outputs level dropped the tool call entirely")
 	}
-
 	if output == "" {
 		t.Fatal("outputs level did not carry the tool result")
 	}
-
 	if !strings.Contains(display, "go test") {
 		t.Fatal("outputs level dropped the display text the calls level carries")
 	}
@@ -330,44 +252,30 @@ func TestSelectingNoToolKindDropsTheCall(t *testing.T) {
 		t.Fatalf("load config: %v", err)
 	}
 
-	built, err := BuildSemanticConversationDocuments(
-		policyTestRecord(),
-		policyTestMessages(),
-		kinds,
-	)
+	built, err := BuildSemanticConversationDocuments(policyTestRecord(), policyTestMessages(), kinds)
 	if err != nil {
 		t.Fatalf("build documents: %v", err)
 	}
-
 	for _, doc := range built.Docs {
 		if len(doc.Tools) != 0 {
 			t.Fatalf("document %d carries tools with only chat selected", doc.MessageIndex)
 		}
 	}
-
 	if built.PolicySkipped != 2 {
-		t.Fatalf(
-			"PolicySkipped = %d, want 2 (the reasoning-only and tool-only turns)",
-			built.PolicySkipped,
-		)
+		t.Fatalf("PolicySkipped = %d, want 2 (the reasoning-only and tool-only turns)", built.PolicySkipped)
 	}
 }
 
 // TestUnknownContentKindFailsResolution proves a typo is rejected by the export
 // surface's own validator rather than silently narrowing the corpus.
 func TestUnknownContentKindFailsResolution(t *testing.T) {
-	_, err := loadKindsFromTOML(
-		t,
-		"[conversation.semantic]\nindexed_content = [\"chat\", \"resoning\"]\n",
-	)
+	_, err := loadKindsFromTOML(t, "[conversation.semantic]\nindexed_content = [\"chat\", \"resoning\"]\n")
 	if err == nil {
 		t.Fatal("resolution succeeded with an unknown content kind; a typo must fail")
 	}
-
 	if !strings.Contains(err.Error(), "resoning") {
 		t.Fatalf("error = %v, want the rejected kind named", err)
 	}
-
 	if !strings.Contains(err.Error(), "thinking") {
 		t.Fatalf("error = %v, want the supported kinds listed", err)
 	}
@@ -381,26 +289,17 @@ func TestExcludedKindsNeverReachTheParser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load default config: %v", err)
 	}
-
 	defaultOptions := SemanticConversationLoadOptions(defaultKinds)
-	if defaultOptions.IncludeSystemPrompts || defaultOptions.IncludeSystemMessages ||
-		defaultOptions.IncludeToolOutputs ||
-		defaultOptions.IncludeInjected {
+	if defaultOptions.IncludeSystemPrompts || defaultOptions.IncludeSystemMessages || defaultOptions.IncludeToolOutputs || defaultOptions.IncludeInjected {
 		t.Fatalf("default load options = %+v, want every gated kind off", defaultOptions)
 	}
 
-	optedIn, err := loadKindsFromTOML(
-		t,
-		"[conversation.semantic]\nindexed_content = [\"chat\", \"system_messages\", \"system_prompts\", \"tool_outputs\", \"injected\"]\n",
-	)
+	optedIn, err := loadKindsFromTOML(t, "[conversation.semantic]\nindexed_content = [\"chat\", \"system_messages\", \"system_prompts\", \"tool_outputs\", \"injected\"]\n")
 	if err != nil {
 		t.Fatalf("load opted-in config: %v", err)
 	}
-
 	optedInOptions := SemanticConversationLoadOptions(optedIn)
-	if !optedInOptions.IncludeSystemPrompts || !optedInOptions.IncludeSystemMessages ||
-		!optedInOptions.IncludeToolOutputs ||
-		!optedInOptions.IncludeInjected {
+	if !optedInOptions.IncludeSystemPrompts || !optedInOptions.IncludeSystemMessages || !optedInOptions.IncludeToolOutputs || !optedInOptions.IncludeInjected {
 		t.Fatalf("opted-in load options = %+v, want every gated kind on", optedInOptions)
 	}
 }
@@ -411,12 +310,10 @@ func TestExcludedKindsNeverReachTheParser(t *testing.T) {
 func TestPolicySkipsAreCountedApartFromFailures(t *testing.T) {
 	conversationID := "claude:policy-counts"
 	index := &fakeConversationSemanticIndex{
-		records: []conversation.StampedRecord{
-			{
-				Record: policyCountsRecord(conversationID),
-				Stamp:  semanticTestStamp(64, 200),
-			},
-		},
+		records: []conversation.StampedRecord{{
+			Record: policyCountsRecord(conversationID),
+			Stamp:  semanticTestStamp(64, 200),
+		}},
 		messagesByID: map[string][]transcript.Message{conversationID: policyTestMessages()},
 		loadOptions:  nil,
 	}
@@ -425,32 +322,19 @@ func TestPolicySkipsAreCountedApartFromFailures(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-
-	worker := newConversationSemanticSyncWorker(
-		index,
-		staticSemanticSyncClient(client),
-		"collection-test",
-		semanticTestLogger(),
-		kinds,
-	)
+	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), kinds)
 	freshness := newConversationSemanticFreshness()
 	worker.freshness = freshness
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("runPass returned error: %v", err)
 	}
-
 	if len(client.upsertCalls) != 1 {
 		t.Fatalf("upsert calls = %d, want 1", len(client.upsertCalls))
 	}
-
 	if len(client.upsertCalls[0].Docs) != 3 {
-		t.Fatalf(
-			"delivered documents = %d, want 3 with the reasoning-only turn withheld",
-			len(client.upsertCalls[0].Docs),
-		)
+		t.Fatalf("delivered documents = %d, want 3 with the reasoning-only turn withheld", len(client.upsertCalls[0].Docs))
 	}
-
 	if snapshot := freshness.snapshot(); snapshot.Manifest != 1 {
 		t.Fatalf("freshness manifest = %d, want 1", snapshot.Manifest)
 	}
@@ -460,6 +344,5 @@ func policyCountsRecord(conversationID string) conversation.Record {
 	record := policyTestRecord()
 	record.ID = conversationID
 	record.NativeID = conversationID
-
 	return record
 }

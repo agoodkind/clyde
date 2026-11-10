@@ -26,24 +26,21 @@ func TestListUsesCacheAndDoesNotForceDebouncedScan(t *testing.T) {
 		debounce:     time.Hour,
 		scanProvider: func(context.Context, *Registry, scanCache) (scanResult, error) {
 			scanCalls++
-
 			return scanResult{
-				records: []Record{
-					{
-						ID:            "claude:cached",
-						Provider:      ProviderClaude,
-						NativeID:      "cached",
-						Title:         "cached",
-						WorkspaceRoot: "",
-						ArtifactPath:  "/tmp/cached.jsonl",
-						ArtifactKind:  "transcript",
-						Model:         "",
-						CreatedAt:     time.Time{},
-						UpdatedAt:     time.Time{},
-						SizeBytes:     0,
-						Archived:      false,
-					},
-				},
+				records: []Record{{
+					ID:            "claude:cached",
+					Provider:      ProviderClaude,
+					NativeID:      "cached",
+					Title:         "cached",
+					WorkspaceRoot: "",
+					ArtifactPath:  "/tmp/cached.jsonl",
+					ArtifactKind:  "transcript",
+					Model:         "",
+					CreatedAt:     time.Time{},
+					UpdatedAt:     time.Time{},
+					SizeBytes:     0,
+					Archived:      false,
+				}},
 				stamps: nil,
 			}, nil
 		},
@@ -53,11 +50,9 @@ func TestListUsesCacheAndDoesNotForceDebouncedScan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list conversations: %v", err)
 	}
-
 	if len(records) != 0 {
 		t.Fatalf("records = %d, want empty cold cache result", len(records))
 	}
-
 	if scanCalls != 0 {
 		t.Fatalf("scan calls after List = %d, want no synchronous scan", scanCalls)
 	}

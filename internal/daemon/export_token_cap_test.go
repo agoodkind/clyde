@@ -17,15 +17,12 @@ func TestNewExportTokenConfigDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newExportTokenConfig: %v", err)
 	}
-
 	if !got.exactEnabled {
 		t.Errorf("exactEnabled = false, want true by default")
 	}
-
 	if got.settings.SafetyFactor != 1.3 {
 		t.Errorf("SafetyFactor = %v, want 1.3", got.settings.SafetyFactor)
 	}
-
 	if got.settings.CharsPerToken != 3.5 {
 		t.Errorf("CharsPerToken = %v, want 3.5", got.settings.CharsPerToken)
 	}
@@ -42,15 +39,12 @@ func TestNewExportTokenConfigReadsKnobs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newExportTokenConfig: %v", err)
 	}
-
 	if got.exactEnabled {
 		t.Errorf("exactEnabled = true, want false when exact_token_count=false")
 	}
-
 	if got.settings.SafetyFactor != 2.0 {
 		t.Errorf("SafetyFactor = %v, want 2.0", got.settings.SafetyFactor)
 	}
-
 	if got.settings.CharsPerToken != 5.0 {
 		t.Errorf("CharsPerToken = %v, want 5.0", got.settings.CharsPerToken)
 	}
@@ -74,19 +68,10 @@ func noExact(tokencount.Family) tokencount.ExactCounter { return nil }
 func TestCapExportBodyTokensEmptyLeavesBodyUnchanged(t *testing.T) {
 	t.Parallel()
 	body := []byte("line1\nline2\nline3\n")
-	got, err := capExportBodyTokens(
-		context.Background(),
-		body,
-		"",
-		"",
-		conversation.Record{},
-		testTokenConfig(),
-		noExact,
-	)
+	got, err := capExportBodyTokens(context.Background(), body, "", "", conversation.Record{}, testTokenConfig(), noExact)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
 	if string(got) != string(body) {
 		t.Fatalf("empty max_tokens changed body: %q", got)
 	}
@@ -94,15 +79,7 @@ func TestCapExportBodyTokensEmptyLeavesBodyUnchanged(t *testing.T) {
 
 func TestCapExportBodyTokensRejectsBadValue(t *testing.T) {
 	t.Parallel()
-	_, err := capExportBodyTokens(
-		context.Background(),
-		[]byte("hi\n"),
-		"bogus",
-		"",
-		conversation.Record{},
-		testTokenConfig(),
-		noExact,
-	)
+	_, err := capExportBodyTokens(context.Background(), []byte("hi\n"), "bogus", "", conversation.Record{}, testTokenConfig(), noExact)
 	if err == nil {
 		t.Fatal("expected error for unparseable max_tokens")
 	}
@@ -111,29 +88,17 @@ func TestCapExportBodyTokensRejectsBadValue(t *testing.T) {
 func TestCapExportBodyTokensTruncatesToTail(t *testing.T) {
 	t.Parallel()
 	var builder strings.Builder
-
 	for i := 0; i < 200; i++ {
 		builder.WriteString("this is a line of transcript text\n")
 	}
-
 	record := conversation.Record{Provider: providerid.ProviderClaude, Model: "claude-opus-4-8"}
-	got, err := capExportBodyTokens(
-		context.Background(),
-		[]byte(builder.String()),
-		"5",
-		"",
-		record,
-		testTokenConfig(),
-		noExact,
-	)
+	got, err := capExportBodyTokens(context.Background(), []byte(builder.String()), "5", "", record, testTokenConfig(), noExact)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
 	if len(got) >= builder.Len() {
 		t.Fatalf("body was not truncated: got %d bytes, original %d", len(got), builder.Len())
 	}
-
 	if len(got) > 0 && !strings.HasSuffix(builder.String(), string(got)) {
 		t.Fatalf("truncated body %q is not a suffix of the original", got)
 	}
@@ -141,7 +106,6 @@ func TestCapExportBodyTokensTruncatesToTail(t *testing.T) {
 
 func TestTokenFamilyForProvider(t *testing.T) {
 	t.Parallel()
-
 	cases := map[providerid.Provider]tokencount.Family{
 		providerid.ProviderClaude: tokencount.FamilyClaude,
 		providerid.ProviderCodex:  tokencount.FamilyGPT,
@@ -163,7 +127,6 @@ func TestSpecForExport(t *testing.T) {
 	if got.Family != tokencount.FamilyClaude || got.Model != "claude-opus-4-8" {
 		t.Fatalf("claude spec = %+v, want FamilyClaude and conversation model", got)
 	}
-
 	if name := got.Count("hi").Tokenizer; name != "o200k x 1.3" {
 		t.Fatalf("claude tokenizer = %q, want %q", name, "o200k x 1.3")
 	}
@@ -172,7 +135,6 @@ func TestSpecForExport(t *testing.T) {
 	if override.Family != tokencount.FamilyUnknown || override.Model != "gpt-4o" {
 		t.Fatalf("override spec = %+v, want FamilyUnknown gpt-4o", override)
 	}
-
 	if name := override.Count("hi").Tokenizer; name != "o200k" {
 		t.Fatalf("override tokenizer = %q, want %q", name, "o200k")
 	}

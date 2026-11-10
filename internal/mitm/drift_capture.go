@@ -46,7 +46,6 @@ func driftUpstreamForProvider(provider string) (driftUpstreamName, bool) {
 	case driftProviderCodex:
 		return driftUpstreamCodexCLI, true
 	}
-
 	return "", false
 }
 
@@ -72,7 +71,6 @@ func isDriftSecretHeader(lowerName string) bool {
 	case driftSecretAuthorization, driftSecretXAPIKey, driftSecretCookie:
 		return true
 	}
-
 	return false
 }
 
@@ -90,10 +88,8 @@ func driftHeaderMap(header http.Header) map[string]string {
 			out[lower] = driftRedactionToken
 			continue
 		}
-
 		out[lower] = strings.Join(values, ", ")
 	}
-
 	return out
 }
 
@@ -109,22 +105,18 @@ func driftBillingAttestationFromBody(body []byte) string {
 	if len(trimmed) == 0 || trimmed[0] != '{' {
 		return ""
 	}
-
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(trimmed, &fields); err != nil {
 		return ""
 	}
-
 	systemRaw, ok := fields["system"]
 	if !ok {
 		return ""
 	}
-
 	line := firstSystemBillingLine(systemRaw)
 	if line == "" {
 		return ""
 	}
-
 	return extractDriftBillingCCH(line)
 }
 
@@ -136,12 +128,10 @@ func firstSystemBillingLine(systemRaw json.RawMessage) string {
 	if len(trimmed) == 0 || trimmed[0] != '[' {
 		return ""
 	}
-
 	var blocks []json.RawMessage
 	if err := json.Unmarshal(trimmed, &blocks); err != nil || len(blocks) == 0 {
 		return ""
 	}
-
 	var first struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
@@ -149,11 +139,9 @@ func firstSystemBillingLine(systemRaw json.RawMessage) string {
 	if err := json.Unmarshal(blocks[0], &first); err != nil {
 		return ""
 	}
-
 	if !strings.HasPrefix(first.Text, "x-anthropic-billing-header:") {
 		return ""
 	}
-
 	return first.Text
 }
 
@@ -166,9 +154,7 @@ func extractDriftBillingCCH(line string) string {
 	if !ok {
 		return ""
 	}
-
 	value, _, _ := strings.Cut(after, ";")
-
 	return strings.TrimSpace(value)
 }
 
@@ -197,12 +183,10 @@ func (p *Proxy) recordDriftCapture(cfg config.MITMConfig, input driftCaptureInpu
 	if !cfg.Drift.Enabled {
 		return
 	}
-
 	upstream, ok := driftUpstreamForProvider(input.provider)
 	if !ok {
 		return
 	}
-
 	p.store.RecordShape(buildDriftShape(input, upstream))
 }
 
@@ -229,34 +213,23 @@ func buildDriftShape(input driftCaptureInput, upstream driftUpstreamName) captur
 	if err != nil {
 		bodyRaw = json.RawMessage(`null`)
 	}
-
 	billing := ""
 	if upstream == driftUpstreamClaudeCode {
 		billing = driftBillingAttestationFromBody(input.body)
 	}
-
 	var featuresRaw json.RawMessage
 	model := ""
 	if features := driftRequestFeatures(requestHeaders, input.body); features != nil {
 		if raw, marshalErr := json.Marshal(features); marshalErr == nil {
 			featuresRaw = raw
 		}
-
 		model = features.ModelID
 	}
-
 	return capture.DriftShape{
-		Timestamp: clock.Now().UTC(),
-		Provider:  input.provider,
-		Upstream:  string(upstream),
-		Fingerprint: driftFingerprint(
-			input,
-			string(upstream),
-			requestHeaders,
-			summary.Keys,
-			billing != "",
-			model,
-		),
+		Timestamp:          clock.Now().UTC(),
+		Provider:           input.provider,
+		Upstream:           string(upstream),
+		Fingerprint:        driftFingerprint(input, string(upstream), requestHeaders, summary.Keys, billing != "", model),
 		Method:             input.method,
 		Path:               templateChurningPath(input.path),
 		URL:                templateChurningPath(input.upstreamURL),
@@ -273,14 +246,7 @@ func buildDriftShape(input driftCaptureInput, upstream driftUpstreamName) captur
 // whether a billing attestation is present, and the model. Two requests with the
 // same fingerprint are the same wire shape for baseline learning and collapse to
 // one stored row.
-func driftFingerprint(
-	input driftCaptureInput,
-	upstream string,
-	headers map[string]string,
-	bodyKeys []string,
-	billingPresent bool,
-	model string,
-) string {
+func driftFingerprint(input driftCaptureInput, upstream string, headers map[string]string, bodyKeys []string, billingPresent bool, model string) string {
 	var b strings.Builder
 	b.WriteString(input.provider)
 	b.WriteByte('\n')
@@ -292,14 +258,11 @@ func driftFingerprint(
 	// only by session collapse to one corpus row.
 	b.WriteString(templateChurningPath(input.path))
 	b.WriteByte('\n')
-
 	headerKeys := make([]string, 0, len(headers))
 	for k := range headers {
 		headerKeys = append(headerKeys, k)
 	}
-
 	sort.Strings(headerKeys)
-
 	for _, k := range headerKeys {
 		b.WriteString(k)
 		b.WriteByte('=')
@@ -312,27 +275,21 @@ func driftFingerprint(
 		} else {
 			b.WriteString(headers[k])
 		}
-
 		b.WriteByte('\n')
 	}
-
 	b.WriteByte('|')
 	keys := append([]string(nil), bodyKeys...)
 	sort.Strings(keys)
-
 	for _, k := range keys {
 		b.WriteString(k)
 		b.WriteByte(',')
 	}
-
 	b.WriteByte('|')
 	if billingPresent {
 		b.WriteString("billing")
 	}
-
 	b.WriteByte('|')
 	b.WriteString(model)
-
 	return sha256Hex([]byte(b.String()))
 }
 
@@ -344,6 +301,5 @@ func driftRequestFeatures(headers map[string]string, body []byte) *RequestFeatur
 	if err != nil || strings.TrimSpace(features.ModelID) == "" {
 		return nil
 	}
-
 	return &features
 }

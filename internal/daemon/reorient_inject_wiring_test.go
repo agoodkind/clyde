@@ -18,7 +18,6 @@ import (
 func hookConfig(mitmCfg config.MITMConfig) *config.Config {
 	cfg := config.NewConfigWithDefaults()
 	cfg.MITM = mitmCfg
-
 	return cfg
 }
 
@@ -34,16 +33,13 @@ func TestMitmHooksDisabledByDefault(t *testing.T) {
 
 func TestAgentGateResponseCheckRegistersAfterReorient(t *testing.T) {
 	t.Parallel()
-	hooks := mitmRequestResponseHooks(
-		hookConfig(config.MITMConfig{
-			AgentGateCommand:         "/path/that/does/not/exist/agent-gate",
-			ReorientSummaryInjection: true,
-		}),
-	)
+	hooks := mitmRequestResponseHooks(hookConfig(config.MITMConfig{
+		AgentGateCommand:         "/path/that/does/not/exist/agent-gate",
+		ReorientSummaryInjection: true,
+	}))
 	if len(hooks) != 2 {
 		t.Fatalf("hooks = %d, want 2", len(hooks))
 	}
-
 	request := mitm.RequestResponseHookRequest{
 		Provider: "claude",
 		Method:   http.MethodPost,
@@ -54,20 +50,16 @@ func TestAgentGateResponseCheckRegistersAfterReorient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("match reorientation hook: %v", err)
 	}
-
 	if reorientMatch.Matched {
 		t.Fatal("reorientation hook matched an ordinary request")
 	}
-
 	match, err := hooks[1].MatchRequestResponse(request)
 	if err != nil {
 		t.Fatalf("match agent-gate hook: %v", err)
 	}
-
 	if !match.Matched || match.Transformer == nil {
 		t.Fatal("configured agent-gate response check did not match")
 	}
-
 	_, err = match.Transformer.TransformResponse(
 		context.Background(),
 		mitm.ResponseHookResponse{
@@ -94,7 +86,6 @@ func TestMitmHooksReorientOnlyRegistersOneHook(t *testing.T) {
 	if len(hooks) != 1 {
 		t.Fatalf("mitmRequestResponseHooks(reorient) = %d hooks, want 1", len(hooks))
 	}
-
 	if _, ok := hooks[0].(*reorientinject.Hook); !ok {
 		t.Fatalf("hook type = %T, want *reorientinject.Hook", hooks[0])
 	}
@@ -108,7 +99,6 @@ func TestSentinelInjectHooksRegistersWhenConfigured(t *testing.T) {
 	if len(hooks) != 1 {
 		t.Fatalf("mitmRequestResponseHooks(sentinel) = %d hooks, want 1", len(hooks))
 	}
-
 	if _, ok := hooks[0].(*sentinelinject.Hook); !ok {
 		t.Fatalf("hook type = %T, want *sentinelinject.Hook", hooks[0])
 	}
@@ -118,13 +108,10 @@ func TestSentinelInjectHooksRegistersWhenConfigured(t *testing.T) {
 // actual_user_sentinel alone registers the sentinel rewrite hook.
 func TestActualUserSentinelInjectHooksRegistersWhenConfigured(t *testing.T) {
 	t.Parallel()
-	hooks := mitmRequestResponseHooks(
-		hookConfig(config.MITMConfig{ActualUserSentinel: "ACTUAL_USER"}),
-	)
+	hooks := mitmRequestResponseHooks(hookConfig(config.MITMConfig{ActualUserSentinel: "ACTUAL_USER"}))
 	if len(hooks) != 1 {
 		t.Fatalf("mitmRequestResponseHooks(actual_user_sentinel) = %d hooks, want 1", len(hooks))
 	}
-
 	if _, ok := hooks[0].(*sentinelinject.Hook); !ok {
 		t.Fatalf("hook type = %T, want *sentinelinject.Hook", hooks[0])
 	}
@@ -134,20 +121,16 @@ func TestActualUserSentinelInjectHooksRegistersWhenConfigured(t *testing.T) {
 // both features are on, sentinel is first so it wins if both hooks would match.
 func TestMitmHooksRegistersSentinelBeforeReorient(t *testing.T) {
 	t.Parallel()
-	hooks := mitmRequestResponseHooks(
-		hookConfig(config.MITMConfig{
-			Sentinel:                 "MYKEYWORD",
-			ReorientSummaryInjection: true,
-		}),
-	)
+	hooks := mitmRequestResponseHooks(hookConfig(config.MITMConfig{
+		Sentinel:                 "MYKEYWORD",
+		ReorientSummaryInjection: true,
+	}))
 	if len(hooks) != 2 {
 		t.Fatalf("hooks = %d, want 2", len(hooks))
 	}
-
 	if _, ok := hooks[0].(*sentinelinject.Hook); !ok {
 		t.Fatalf("hooks[0] = %T, want *sentinelinject.Hook first", hooks[0])
 	}
-
 	if _, ok := hooks[1].(*reorientinject.Hook); !ok {
 		t.Fatalf("hooks[1] = %T, want *reorientinject.Hook second", hooks[1])
 	}

@@ -68,40 +68,27 @@ func toolDisplayText(name string, input transcript.ToolInputJSON) (string, strin
 	if input.Len() == 0 {
 		return "", ""
 	}
-
 	if strings.HasPrefix(strings.TrimSpace(name), foreignToolPrefix) {
 		return string(input.Raw), ""
 	}
-
 	var parsed claudeToolDisplayInput
 	if err := json.Unmarshal(input.Raw, &parsed); err != nil {
 		return string(input.Raw), ""
 	}
-
 	if command := strings.TrimSpace(parsed.Command); command != "" {
 		return command, "bash"
 	}
-
 	if plan := strings.TrimSpace(parsed.Plan); plan != "" {
 		return plan, "markdown"
 	}
-
 	if question := claudeQuestionText(parsed); question != "" {
 		return question, ""
 	}
-
-	for _, candidate := range []string{
-		parsed.FilePath,
-		parsed.Pattern,
-		parsed.Prompt,
-		parsed.URL,
-		parsed.Query,
-	} {
+	for _, candidate := range []string{parsed.FilePath, parsed.Pattern, parsed.Prompt, parsed.URL, parsed.Query} {
 		if trimmed := strings.TrimSpace(candidate); trimmed != "" {
 			return trimmed, ""
 		}
 	}
-
 	return "", ""
 }
 
@@ -115,17 +102,14 @@ func claudeQuestionText(parsed claudeToolDisplayInput) string {
 		if asked := strings.TrimSpace(question.Question); asked != "" {
 			lines = append(lines, asked)
 		}
-
 		for _, option := range question.Options {
 			if label := strings.TrimSpace(option.Label); label != "" {
 				lines = append(lines, label)
 			}
-
 			if description := strings.TrimSpace(option.Description); description != "" {
 				lines = append(lines, description)
 			}
 		}
 	}
-
 	return strings.Join(lines, "\n")
 }

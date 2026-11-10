@@ -19,16 +19,13 @@ func TestIsConductorHostClaimsKnownHosts(t *testing.T) {
 		"us.i.posthog.com",
 		"api.honeycomb.io",
 	} {
-		t.Run(
-			host,
-			func(t *testing.T) {
-				t.Parallel()
+		t.Run(host, func(t *testing.T) {
+			t.Parallel()
 
-				if !isConductorHost(host) {
-					t.Fatalf("isConductorHost(%q) = false, want true", host)
-				}
-			},
-		)
+			if !isConductorHost(host) {
+				t.Fatalf("isConductorHost(%q) = false, want true", host)
+			}
+		})
 	}
 }
 
@@ -41,15 +38,12 @@ func TestIsConductorHostLeavesUnrelatedHostsOpaque(t *testing.T) {
 		"github.com",
 		"some-other.fly.dev",
 	} {
-		t.Run(
-			host,
-			func(t *testing.T) {
-				t.Parallel()
+		t.Run(host, func(t *testing.T) {
+			t.Parallel()
 
-				if isConductorHost(host) {
-					t.Fatalf("isConductorHost(%q) = true, want false", host)
-				}
-			},
-		)
+			if isConductorHost(host) {
+				t.Fatalf("isConductorHost(%q) = true, want false", host)
+			}
+		})
 	}
 }

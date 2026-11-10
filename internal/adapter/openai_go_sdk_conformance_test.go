@@ -46,18 +46,12 @@ func sdkShapeProblems(value reflect.Value, path string) []string {
 		if value.IsNil() {
 			return nil
 		}
-
 		return sdkShapeProblems(value.Elem(), path)
 	case reflect.Slice, reflect.Array:
 		var problems []string
-
 		for index := range value.Len() {
-			problems = append(
-				problems,
-				sdkShapeProblems(value.Index(index), path+"["+strconv.Itoa(index)+"]")...,
-			)
+			problems = append(problems, sdkShapeProblems(value.Index(index), path+"["+strconv.Itoa(index)+"]")...)
 		}
-
 		return problems
 	case reflect.Struct:
 		return sdkStructShapeProblems(value, path)
@@ -67,40 +61,32 @@ func sdkShapeProblems(value reflect.Value, path string) []string {
 }
 
 func sdkStructShapeProblems(value reflect.Value, path string) []string {
-	if variant := value.MethodByName("AsAny"); variant.IsValid() && variant.Type().NumIn() == 0 &&
-		variant.Type().NumOut() == 1 {
+	if variant := value.MethodByName("AsAny"); variant.IsValid() && variant.Type().NumIn() == 0 && variant.Type().NumOut() == 1 {
 		concrete := variant.Call(nil)[0]
 		if concrete.IsNil() {
 			return []string{path + ": unrecognized union variant"}
 		}
-
 		return sdkShapeProblems(concrete, path)
 	}
-
 	metadata := value.FieldByName("JSON")
 	if !metadata.IsValid() || metadata.Kind() != reflect.Struct {
 		return nil
 	}
-
 	var problems []string
-
 	valueType := value.Type()
 	for index := range valueType.NumField() {
 		field := valueType.Field(index)
 		if field.Name == "JSON" || !field.IsExported() {
 			continue
 		}
-
 		presenceValue := metadata.FieldByName(field.Name)
 		if !presenceValue.IsValid() {
 			continue
 		}
-
 		presence, ok := presenceValue.Interface().(respjson.Field)
 		if !ok {
 			continue
 		}
-
 		fieldPath := path + "." + strings.Split(field.Tag.Get("json"), ",")[0]
 		raw := presence.Raw()
 		required := strings.Contains(field.Tag.Get("api"), sdkRequiredTag) &&
@@ -114,13 +100,11 @@ func sdkStructShapeProblems(value reflect.Value, path string) []string {
 			problems = append(problems, sdkShapeProblems(value.Field(index), fieldPath)...)
 		}
 	}
-
 	return problems
 }
 
 func requireSDKShape[T any](t *testing.T, label string, value T) {
 	t.Helper()
-
 	for _, problem := range sdkShapeProblems(reflect.ValueOf(value), label) {
 		t.Errorf("%s", problem)
 	}
@@ -133,7 +117,6 @@ func newConformanceSDKClient(t *testing.T, baseURL string) openai.Client {
 	t.Helper()
 	transport := &http.Transport{}
 	t.Cleanup(transport.CloseIdleConnections)
-
 	return openai.NewClient(
 		option.WithBaseURL(baseURL+"/v1/"),
 		option.WithAPIKey("clyde-conformance"),
@@ -148,18 +131,9 @@ func requireSDKError(t *testing.T, label string, err error, wantStatus int, want
 	if !errors.As(err, &apiErr) {
 		t.Fatalf("%s: error %v is not an SDK API error", label, err)
 	}
-
 	if apiErr.StatusCode != wantStatus || apiErr.Param != wantParam {
-		t.Errorf(
-			"%s: status %d param %q, want %d %q",
-			label,
-			apiErr.StatusCode,
-			apiErr.Param,
-			wantStatus,
-			wantParam,
-		)
+		t.Errorf("%s: status %d param %q, want %d %q", label, apiErr.StatusCode, apiErr.Param, wantStatus, wantParam)
 	}
-
 	requireSDKShape(t, label, *apiErr)
 }
 
@@ -179,13 +153,11 @@ func TestOpenAIGoSDKConformanceCodexProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("models list: %v", err)
 	}
-
 	requireSDKShape(t, "models.list", *models)
 	model, err := client.Models.Get(ctx, "gpt-anthropic-alias")
 	if err != nil {
 		t.Fatalf("models get: %v", err)
 	}
-
 	requireSDKShape(t, "models.get", *model)
 	_, err = client.Models.Get(ctx, "does-not-exist")
 	requireSDKError(t, "models.get missing", err, http.StatusNotFound, "model")
@@ -198,21 +170,15 @@ func TestOpenAIGoSDKConformanceCodexProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("chat: %v", err)
 	}
-
 	requireSDKShape(t, "chat.completion", *chat)
-	chatParams.StreamOptions = openai.ChatCompletionStreamOptionsParam{
-		IncludeUsage: openai.Bool(true),
-	}
-
+	chatParams.StreamOptions = openai.ChatCompletionStreamOptionsParam{IncludeUsage: openai.Bool(true)}
 	chatStream := client.Chat.Completions.NewStreaming(ctx, chatParams)
 	for chatStream.Next() {
 		requireSDKShape(t, "chat.completion.chunk", chatStream.Current())
 	}
-
 	if err := chatStream.Err(); err != nil {
 		t.Fatalf("chat stream: %v", err)
 	}
-
 	rejectedParams := openai.ChatCompletionNewParams{
 		Model:       "gpt-future",
 		Messages:    []openai.ChatCompletionMessageParamUnion{openai.UserMessage("hi")},
@@ -229,15 +195,12 @@ func TestOpenAIGoSDKConformanceCodexProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("responses: %v", err)
 	}
-
 	requireSDKShape(t, "response", *response)
-
 	responseStream := client.Responses.NewStreaming(ctx, responseParams)
 	for responseStream.Next() {
 		event := responseStream.Current()
 		requireSDKShape(t, "response stream "+event.Type, event)
 	}
-
 	if err := responseStream.Err(); err != nil {
 		t.Fatalf("responses stream: %v", err)
 	}
@@ -250,14 +213,11 @@ func TestOpenAIGoSDKConformanceCodexProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("completions: %v", err)
 	}
-
 	requireSDKShape(t, "text_completion", *completion)
-
 	completionStream := client.Completions.NewStreaming(ctx, completionParams)
 	for completionStream.Next() {
 		requireSDKShape(t, "text_completion chunk", completionStream.Current())
 	}
-
 	if err := completionStream.Err(); err != nil {
 		t.Fatalf("completions stream: %v", err)
 	}
@@ -269,54 +229,29 @@ func startAnthropicConformanceServer(t *testing.T, usage anthropic.Usage) confor
 	t.Helper()
 	fakes := newRoutingFakeEndpoints(t)
 	srv := newRoutingIntegrationServer(t, fakes)
-	srv.anthropicProvider = anthropic.NewProvider(
-		adapterprovider.Deps{},
-		anthropic.ProviderOptions{
-			Prepare: func(
-				_ context.Context,
-				req adapterresolver.ResolvedRequest,
-				requestID string,
-			) (
-				anthropic.PreparedRequest,
-				error,
-			) {
-				resolved := req
-				return anthropic.PreparedRequest{RequestID: requestID, Resolved: &resolved}, nil
-			},
-			ExecutePrepared: func(
-				_ context.Context,
-				_ anthropic.PreparedRequest,
-				_ adapterprovider.EventWriter,
-			) (adapterprovider.Result, error) {
-				reported := anthropicbackend.UsageFromAnthropic(usage)
-				response := &adapteropenai.ChatResponse{
-					ID:     "chatcmpl-anthropic-conformance",
-					Object: "chat.completion",
-					Model:  "claude-future",
-					Choices: []adapteropenai.ChatChoice{
-						{
-							Index: 0,
-							Message: adapteropenai.ChatMessage{
-								Role:    "assistant",
-								Content: json.RawMessage(`"ok"`),
-							},
-							FinishReason: "stop",
-						},
-					},
-					Usage: &reported,
-				}
-
-				return adapterprovider.Result{
-					FinalResponse: response,
-					FinishReason:  "stop",
-					Usage:         reported,
-				}, nil
-			},
+	srv.anthropicProvider = anthropic.NewProvider(adapterprovider.Deps{}, anthropic.ProviderOptions{
+		Prepare: func(_ context.Context, req adapterresolver.ResolvedRequest, requestID string) (anthropic.PreparedRequest, error) {
+			resolved := req
+			return anthropic.PreparedRequest{RequestID: requestID, Resolved: &resolved}, nil
 		},
-	)
+		ExecutePrepared: func(_ context.Context, _ anthropic.PreparedRequest, _ adapterprovider.EventWriter) (adapterprovider.Result, error) {
+			reported := anthropicbackend.UsageFromAnthropic(usage)
+			response := &adapteropenai.ChatResponse{
+				ID:     "chatcmpl-anthropic-conformance",
+				Object: "chat.completion",
+				Model:  "claude-future",
+				Choices: []adapteropenai.ChatChoice{{
+					Index:        0,
+					Message:      adapteropenai.ChatMessage{Role: "assistant", Content: json.RawMessage(`"ok"`)},
+					FinishReason: "stop",
+				}},
+				Usage: &reported,
+			}
+			return adapterprovider.Result{FinalResponse: response, FinishReason: "stop", Usage: reported}, nil
+		},
+	})
 	srv.providerRegistry.Register(srv.anthropicProvider)
 	openAIURL, cursorURL := startRoutingListeners(t, srv)
-
 	return conformanceListeners{openAI: openAIURL, cursor: cursorURL}
 }
 
@@ -325,14 +260,9 @@ func startAnthropicConformanceServer(t *testing.T, usage anthropic.Usage) confor
 // anthropicReportedUsage matches that stream.
 func anthropicReportedUsage() anthropic.Usage {
 	thinking := 3
-
 	return anthropic.Usage{
-		InputTokens:              10,
-		OutputTokens:             5,
-		CacheCreationInputTokens: 2,
-		CacheReadInputTokens:     0,
-		CacheCountsReported:      true,
-		ThinkingTokens:           &thinking,
+		InputTokens: 10, OutputTokens: 5, CacheCreationInputTokens: 2, CacheReadInputTokens: 0,
+		CacheCountsReported: true, ThinkingTokens: &thinking,
 	}
 }
 
@@ -341,76 +271,49 @@ func TestOpenAIGoSDKConformanceAnthropicProvider(t *testing.T) {
 	client := newConformanceSDKClient(t, listeners.openAI)
 	ctx := context.Background()
 
-	chat, err := client.Chat.Completions.New(
-		ctx,
-		openai.ChatCompletionNewParams{
-			Model:    "claude-future",
-			Messages: []openai.ChatCompletionMessageParamUnion{openai.UserMessage("hi")},
-		},
-	)
+	chat, err := client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
+		Model:    "claude-future",
+		Messages: []openai.ChatCompletionMessageParamUnion{openai.UserMessage("hi")},
+	})
 	if err != nil {
 		t.Fatalf("anthropic chat: %v", err)
 	}
-
 	requireSDKShape(t, "anthropic chat.completion", *chat)
-	if chat.Usage.CompletionTokensDetails.ReasoningTokens != 3 ||
-		chat.Usage.PromptTokensDetails.CachedTokens != 0 {
-		t.Errorf(
-			"anthropic chat usage details = %s, want reasoning 3 and cached 0",
-			chat.Usage.RawJSON(),
-		)
+	if chat.Usage.CompletionTokensDetails.ReasoningTokens != 3 || chat.Usage.PromptTokensDetails.CachedTokens != 0 {
+		t.Errorf("anthropic chat usage details = %s, want reasoning 3 and cached 0", chat.Usage.RawJSON())
 	}
 
-	response, err := client.Responses.New(
-		ctx,
-		responses.ResponseNewParams{
-			Model: "claude-future",
-			Input: responses.ResponseNewParamsInputUnion{OfString: openai.String("hi")},
-		},
-	)
+	response, err := client.Responses.New(ctx, responses.ResponseNewParams{
+		Model: "claude-future",
+		Input: responses.ResponseNewParamsInputUnion{OfString: openai.String("hi")},
+	})
 	if err != nil {
 		t.Fatalf("anthropic responses: %v", err)
 	}
-
 	requireSDKShape(t, "anthropic response", *response)
 	details := response.Usage
-	if details.OutputTokensDetails.ReasoningTokens != 3 ||
-		details.InputTokensDetails.CacheWriteTokens != 2 ||
-		details.InputTokensDetails.CachedTokens != 0 {
-		t.Errorf(
-			"anthropic response usage = %s, want reasoning 3, cache write 2, cached 0",
-			details.RawJSON(),
-		)
+	if details.OutputTokensDetails.ReasoningTokens != 3 || details.InputTokensDetails.CacheWriteTokens != 2 || details.InputTokensDetails.CachedTokens != 0 {
+		t.Errorf("anthropic response usage = %s, want reasoning 3, cache write 2, cached 0", details.RawJSON())
 	}
 }
 
 func TestAnthropicReportedUsageKeepsCursorUsageBytes(t *testing.T) {
 	listeners := startAnthropicConformanceServer(t, anthropicReportedUsage())
 
-	chat := postConformance(
-		t,
-		listeners.cursor+"/v1/chat/completions",
-		`{"model":"claude-future","messages":[{"role":"user","content":"hi"}]}`,
-	)
+	chat := postConformance(t, listeners.cursor+"/v1/chat/completions", `{"model":"claude-future","messages":[{"role":"user","content":"hi"}]}`)
 	if chat.status != http.StatusOK {
 		t.Fatalf("cursor chat status = %d; body=%s", chat.status, chat.body)
 	}
-
 	chatUsage := string(requireMember(t, decodeJSONObject(t, chat.body), "usage"))
 	wantChatUsage := `{"prompt_tokens":12,"completion_tokens":5,"total_tokens":17,"input_tokens":12,"output_tokens":5,"cache_write_tokens":2}`
 	if chatUsage != wantChatUsage {
 		t.Errorf("cursor chat usage = %s, want %s", chatUsage, wantChatUsage)
 	}
 
-	collected := postConformance(
-		t,
-		listeners.cursor+"/v1/responses",
-		`{"model":"claude-future","input":"hi"}`,
-	)
+	collected := postConformance(t, listeners.cursor+"/v1/responses", `{"model":"claude-future","input":"hi"}`)
 	if collected.status != http.StatusOK {
 		t.Fatalf("cursor responses status = %d; body=%s", collected.status, collected.body)
 	}
-
 	responsesUsage := string(requireMember(t, decodeJSONObject(t, collected.body), "usage"))
 	wantResponsesUsage := `{"input_tokens":12,"output_tokens":5,"total_tokens":17,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}`
 	if responsesUsage != wantResponsesUsage {

@@ -19,7 +19,6 @@ func composerOrigin(subagent bool) conversation.Origin {
 	if subagent {
 		return conversation.OriginSubagent
 	}
-
 	return conversation.OriginUnspecified
 }
 
@@ -42,20 +41,8 @@ func composerMetadataIndex(
 ) cursorstore.ComposerMetadataIndex {
 	index := cursorstore.BuildComposerMetadataIndex(ctx, db, root)
 	if index.Err != nil {
-		slog.ErrorContext(
-			ctx,
-			"providers.cursor.parser.composer_metadata_incomplete",
-			"concern",
-			concern,
-			"path",
-			root.GlobalDBPath,
-			"read",
-			len(index.ByComposerID),
-			"err",
-			index.Err,
-		)
+		slog.ErrorContext(ctx, "providers.cursor.parser.composer_metadata_incomplete", "concern", concern, "path", root.GlobalDBPath, "read", len(index.ByComposerID), "err", index.Err)
 	}
-
 	return index
 }
 
@@ -79,7 +66,6 @@ func stampCoveringMetadata(
 	if !hasMetadata {
 		return stamp
 	}
-
 	hasher := fnv.New64a()
 	_, _ = fmt.Fprintf(hasher, "%d\x00%+v", stamp.Size, metadata)
 	stamp.Size = int64(hasher.Sum64() & ((uint64(1) << 63) - 1))
@@ -87,17 +73,11 @@ func stampCoveringMetadata(
 	if metadataMtime.After(stamp.Mtime) {
 		stamp.Mtime = metadataMtime
 	}
-
 	return stamp
 }
 
 func legacyScanStamp(data cursorstore.WorkspaceDiscovery) conversation.FileStamp {
 	var metadata cursorstore.ComposerMetadata
 	metadata.WorkspaceRoot = data.WorkspaceRoot
-
-	return stampCoveringMetadata(
-		conversation.FileStamp{Size: data.Revision, Mtime: data.Mtime},
-		metadata,
-		true,
-	)
+	return stampCoveringMetadata(conversation.FileStamp{Size: data.Revision, Mtime: data.Mtime}, metadata, true)
 }

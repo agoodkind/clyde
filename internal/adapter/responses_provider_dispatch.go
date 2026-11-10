@@ -23,18 +23,13 @@ func responsesProviderPath(provider adapterresolver.ProviderID) string {
 	if provider == adapterresolver.ProviderAnthropic {
 		return "oauth"
 	}
-
 	return "direct"
 }
 
-func responsesProviderContext(
-	ctx context.Context,
-	resolved adapterresolver.ResolvedRequest,
-) context.Context {
+func responsesProviderContext(ctx context.Context, resolved adapterresolver.ResolvedRequest) context.Context {
 	if resolved.Provider == adapterresolver.ProviderAnthropic {
 		return anthropic.WithRequestID(ctx, resolved.RequestID)
 	}
-
 	return ctx
 }
 
@@ -47,75 +42,40 @@ func (s *Server) prepareResponsesProvider(
 	switch resolved.Provider {
 	case adapterresolver.ProviderCodex:
 		if s.codexProvider == nil {
-			return preparedResponsesProvider{}, s.responsesProviderError(
-				ctx,
-				"prepare",
-				resolved.Provider,
-				adaptercodex.ErrCodexProviderNotConfigured,
-			)
+			return preparedResponsesProvider{}, s.responsesProviderError(ctx, "prepare", resolved.Provider, adaptercodex.ErrCodexProviderNotConfigured)
 		}
-
 		prepared, err := s.codexProvider.Prepare(resolved)
 		if err != nil {
-			return preparedResponsesProvider{}, s.responsesProviderError(
-				ctx,
-				"prepare",
-				resolved.Provider,
-				err,
-			)
+			return preparedResponsesProvider{}, s.responsesProviderError(ctx, "prepare", resolved.Provider, err)
 		}
-
 		return preparedResponsesProvider{
-			provider:  adapterresolver.ProviderCodex,
-			codex:     &prepared,
-			anthropic: nil,
+			provider: adapterresolver.ProviderCodex, codex: &prepared, anthropic: nil,
 		}, nil
 	case adapterresolver.ProviderAnthropic:
 		if s.anthropicProvider == nil {
-			return preparedResponsesProvider{}, fmt.Errorf(
-				"prepare Anthropic Responses request: provider is not configured",
-			)
+			return preparedResponsesProvider{}, fmt.Errorf("prepare Anthropic Responses request: provider is not configured")
 		}
-
 		prepared, err := s.anthropicProvider.Prepare(ctx, resolved)
 		if err != nil {
-			return preparedResponsesProvider{}, s.responsesProviderError(
-				ctx,
-				"prepare",
-				resolved.Provider,
-				err,
-			)
+			return preparedResponsesProvider{}, s.responsesProviderError(ctx, "prepare", resolved.Provider, err)
 		}
-
 		return preparedResponsesProvider{
-			provider:  adapterresolver.ProviderAnthropic,
-			codex:     nil,
-			anthropic: &prepared,
+			provider: adapterresolver.ProviderAnthropic, codex: nil, anthropic: &prepared,
 		}, nil
 	case BackendClaude, BackendPassthroughOverride:
 		fallthrough
 	default:
-		return preparedResponsesProvider{}, fmt.Errorf(
-			"prepare Responses request: unsupported provider %q",
-			resolved.Provider,
-		)
+		return preparedResponsesProvider{}, fmt.Errorf("prepare Responses request: unsupported provider %q", resolved.Provider)
 	}
 }
 
 // Execute runs the concrete request selected by prepareResponsesProvider.
-func (p preparedResponsesProvider) Execute(
-	ctx context.Context,
-	w adapterprovider.EventWriter,
-	s *Server,
-) (adapterprovider.Result, error) {
+func (p preparedResponsesProvider) Execute(ctx context.Context, w adapterprovider.EventWriter, s *Server) (adapterprovider.Result, error) {
 	switch p.provider {
 	case adapterresolver.ProviderCodex:
 		if p.codex == nil || s.codexProvider == nil {
-			return adapterprovider.Result{}, fmt.Errorf(
-				"execute prepared Codex Responses request: provider is not configured",
-			)
+			return adapterprovider.Result{}, fmt.Errorf("execute prepared Codex Responses request: provider is not configured")
 		}
-
 		egressCtx, releaseEgress := s.codexEgressContext(
 			ctx,
 			p.codex.Resolved.RequestID,
@@ -124,61 +84,33 @@ func (p preparedResponsesProvider) Execute(
 		defer releaseEgress("codex.responses.done")
 		result, err := s.codexProvider.ExecutePrepared(egressCtx, *p.codex, w)
 		if err != nil {
-			return adapterprovider.Result{}, s.responsesProviderError(
-				ctx,
-				"execute",
-				p.provider,
-				err,
-			)
+			return adapterprovider.Result{}, s.responsesProviderError(ctx, "execute", p.provider, err)
 		}
-
 		return result, nil
 	case adapterresolver.ProviderAnthropic:
 		if p.anthropic == nil || s.anthropicProvider == nil {
-			return adapterprovider.Result{}, fmt.Errorf(
-				"execute prepared Anthropic Responses request: provider is not configured",
-			)
+			return adapterprovider.Result{}, fmt.Errorf("execute prepared Anthropic Responses request: provider is not configured")
 		}
-
 		result, err := s.anthropicProvider.ExecutePrepared(ctx, *p.anthropic, w)
 		if err != nil {
-			return adapterprovider.Result{}, s.responsesProviderError(
-				ctx,
-				"execute",
-				p.provider,
-				err,
-			)
+			return adapterprovider.Result{}, s.responsesProviderError(ctx, "execute", p.provider, err)
 		}
-
 		return result, nil
 	case BackendClaude, BackendPassthroughOverride:
 		fallthrough
 	default:
-		return adapterprovider.Result{}, fmt.Errorf(
-			"execute prepared Responses request: unsupported provider %q",
-			p.provider,
-		)
+		return adapterprovider.Result{}, fmt.Errorf("execute prepared Responses request: unsupported provider %q", p.provider)
 	}
 }
 
-func (s *Server) responsesProviderError(
-	ctx context.Context,
-	stage string,
-	providerID adapterresolver.ProviderID,
-	err error,
-) error {
+func (s *Server) responsesProviderError(ctx context.Context, stage string, providerID adapterresolver.ProviderID, err error) error {
 	if s.log != nil {
-		s.log.LogAttrs(
-			ctx,
-			slog.LevelWarn,
-			"adapter.responses.provider_failed",
-			slog.String("concern", "adapter.providers.responses"),
+		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.responses.provider_failed", slog.String("concern", "adapter.providers.responses"),
 			slog.String("stage", stage),
 			slog.String("provider", providerID.String()),
 			slog.String("error_type", fmt.Sprintf("%T", err)),
 		)
 	}
-
 	return err
 }
 
@@ -191,25 +123,15 @@ func responsesPreparedProviderError(
 	if providerID == adapterresolver.ProviderAnthropic {
 		return anthropicProviderAdapterError(err)
 	}
-
 	var aerr *adapterError
 	if providerID == adapterresolver.ProviderCodex {
 		aerr = codexProviderAdapterError(err)
 	} else {
-		aerr = mapUpstreamForFamily(
-			adapterRouteOpenAI,
-			providerID.String(),
-			0,
-			upstreamClassServerError,
-			"",
-			err.Error(),
-		)
+		aerr = mapUpstreamForFamily(adapterRouteOpenAI, providerID.String(), 0, upstreamClassServerError, "", err.Error())
 	}
-
 	aerr.Backend = resolved.Provider.String()
 	aerr.ModelAlias = alias
 	aerr.ResolvedModelName = resolved.Model
 	aerr.Cause = err
-
 	return aerr
 }

@@ -41,24 +41,20 @@ func (h *Hook) MatchRequestResponse(
 	if req.Method != http.MethodPost || !strings.HasSuffix(req.Path, messagesPathSuffix) {
 		return unmatched(), nil
 	}
-
 	// Claude Code declares its own compaction turn on the request. A pasted
 	// transcript reproduces the compaction prompt but sets no declaration, so
 	// this check precedes the body read and the decode.
 	if req.Purpose != mitm.RequestPurposeCompaction {
 		return unmatched(), nil
 	}
-
-	body, succeeded := readRequestBody(req.Body)
-	if !succeeded {
+	body, ok := readRequestBody(req.Body)
+	if !ok {
 		return unmatched(), nil
 	}
-
-	result, succeeded := h.splitter.Plan(body)
-	if !succeeded {
+	result, ok := h.splitter.Plan(body)
+	if !ok {
 		return unmatched(), nil
 	}
-
 	return mitm.RequestResponseHookMatch{
 		Matched:            true,
 		Transformer:        summaryInjector{splitter: h.splitter, injection: result.Injection},
@@ -73,20 +69,14 @@ func (h *Hook) MatchRequestResponse(
 func readRequestBody(source mitm.RequestResponseHookBody) ([]byte, bool) {
 	body, err := source.Bytes()
 	if err != nil {
-		slog.Warn(
-			"mitm.reorient_inject.request_body_read_failed",
-			"component",
-			reorientInjectComponent,
-			"concern",
-			reorientInjectConcern,
-			"err",
-			err,
+		slog.Warn("mitm.reorient_inject.request_body_read_failed",
+			"component", reorientInjectComponent,
+			"concern", reorientInjectConcern,
+			"err", err,
 		)
 		logFallback(fallbackBodyUnreadable, 0)
-
 		return nil, false
 	}
-
 	return body, true
 }
 
@@ -114,48 +104,28 @@ func (t summaryInjector) TransformResponse(
 		// unchanged.
 		return resp, nil
 	}
-
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		slog.WarnContext(
-			ctx,
-			"mitm.reorient_inject.response_body_read_failed",
-			"component",
-			reorientInjectComponent,
-			"concern",
-			reorientInjectConcern,
-			"err",
-			err,
+		slog.WarnContext(ctx, "mitm.reorient_inject.response_body_read_failed",
+			"component", reorientInjectComponent,
+			"concern", reorientInjectConcern,
+			"err", err,
 		)
-
 		return responseWithBody(resp, body), nil
 	}
-
 	injected, err := t.splitter.Inject(body, t.injection)
 	if err != nil {
-		slog.WarnContext(
-			ctx,
-			"mitm.reorient_inject.summary_unchanged",
-			"component",
-			reorientInjectComponent,
-			"concern",
-			reorientInjectConcern,
-			"err",
-			err,
+		slog.WarnContext(ctx, "mitm.reorient_inject.summary_unchanged",
+			"component", reorientInjectComponent,
+			"concern", reorientInjectConcern,
+			"err", err,
 		)
-
 		return responseWithBody(resp, body), nil
 	}
-
-	slog.InfoContext(
-		ctx,
-		"mitm.reorient_inject.matched",
-		"component",
-		reorientInjectComponent,
-		"concern",
-		reorientInjectConcern,
+	slog.InfoContext(ctx, "mitm.reorient_inject.matched",
+		"component", reorientInjectComponent,
+		"concern", reorientInjectConcern,
 	)
-
 	return responseWithBody(resp, injected), nil
 }
 
@@ -165,7 +135,6 @@ func streamingSuccess(resp mitm.ResponseHookResponse) bool {
 	if resp.StatusCode != http.StatusOK {
 		return false
 	}
-
 	return strings.Contains(
 		strings.ToLower(resp.Header.Get("Content-Type")),
 		eventStreamContentType,
@@ -175,7 +144,6 @@ func streamingSuccess(resp mitm.ResponseHookResponse) bool {
 func responseWithBody(resp mitm.ResponseHookResponse, body []byte) mitm.ResponseHookResponse {
 	header := resp.Header.Clone()
 	header.Del("Content-Length")
-
 	return mitm.ResponseHookResponse{
 		StatusCode:    resp.StatusCode,
 		Status:        resp.Status,

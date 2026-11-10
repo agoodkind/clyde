@@ -21,11 +21,9 @@ func TestResolveProjectRootsUsesEnvOverride(t *testing.T) {
 	if len(roots) != 2 {
 		t.Fatalf("ResolveProjectRoots returned %d roots, want 2", len(roots))
 	}
-
 	if roots[0].Path != firstRoot {
 		t.Fatalf("first root path = %q, want %q", roots[0].Path, firstRoot)
 	}
-
 	if roots[1].Path != secondRoot {
 		t.Fatalf("second root path = %q, want %q", roots[1].Path, secondRoot)
 	}
@@ -45,21 +43,9 @@ func TestDiscoverTranscriptFilesFindsMatchingTranscriptFiles(t *testing.T) {
 	)
 	writeTestFile(t, transcriptPath, `{"role":"user","message":{"content":[]}}`+"\n")
 
-	writeTestFile(
-		t,
-		filepath.Join(root, projectKey, "agent-transcripts", testConversationID, "junk.jsonl"),
-		"{}\n",
-	)
-	writeTestFile(
-		t,
-		filepath.Join(root, projectKey, "agent-transcripts", "other", "other.txt"),
-		"{}\n",
-	)
-	writeTestFile(
-		t,
-		filepath.Join(root, projectKey, "other", testConversationID, testConversationID+".jsonl"),
-		"{}\n",
-	)
+	writeTestFile(t, filepath.Join(root, projectKey, "agent-transcripts", testConversationID, "junk.jsonl"), "{}\n")
+	writeTestFile(t, filepath.Join(root, projectKey, "agent-transcripts", "other", "other.txt"), "{}\n")
+	writeTestFile(t, filepath.Join(root, projectKey, "other", testConversationID, testConversationID+".jsonl"), "{}\n")
 
 	files, err := DiscoverTranscriptFiles([]ProjectRoot{{Path: root}})
 	if err != nil {
@@ -69,15 +55,12 @@ func TestDiscoverTranscriptFilesFindsMatchingTranscriptFiles(t *testing.T) {
 	if len(files) != 1 {
 		t.Fatalf("DiscoverTranscriptFiles returned %d files, want 1: %#v", len(files), files)
 	}
-
 	if files[0].Path != transcriptPath {
 		t.Fatalf("Path = %q, want %q", files[0].Path, transcriptPath)
 	}
-
 	if files[0].ConversationID != testConversationID {
 		t.Fatalf("ConversationID = %q, want %q", files[0].ConversationID, testConversationID)
 	}
-
 	if files[0].ProjectKey != projectKey {
 		t.Fatalf("ProjectKey = %q, want %q", files[0].ProjectKey, projectKey)
 	}
@@ -88,7 +71,6 @@ func TestMatchTranscriptFileRejectsPathOutsideConfiguredRoot(t *testing.T) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatalf("MkdirAll(%q) returned error: %v", root, err)
 	}
-
 	t.Setenv(cursorProjectsDirsEnvVar, root)
 
 	outsidePath := filepath.Join(
@@ -103,7 +85,6 @@ func TestMatchTranscriptFileRejectsPathOutsideConfiguredRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MatchTranscriptFile returned error: %v", err)
 	}
-
 	if ok {
 		t.Fatalf("MatchTranscriptFile(%q) = %#v, true, want no match", outsidePath, file)
 	}
@@ -125,7 +106,6 @@ func writeTestFile(t *testing.T, path string, content string) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("MkdirAll(%q) returned error: %v", filepath.Dir(path), err)
 	}
-
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile(%q) returned error: %v", path, err)
 	}

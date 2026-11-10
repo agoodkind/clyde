@@ -18,7 +18,6 @@ func CurrentProviderStats(ctx context.Context) (ProviderStatsSnapshot, error) {
 	if err != nil {
 		return ProviderStatsSnapshot{}, err
 	}
-
 	defer func() { _ = client.conn.Close() }()
 	rpcCtx, cancel := context.WithTimeout(ctx, queryClientRPCTimeout)
 	defer cancel()
@@ -26,32 +25,15 @@ func CurrentProviderStats(ctx context.Context) (ProviderStatsSnapshot, error) {
 	if err != nil {
 		return ProviderStatsSnapshot{}, daemonRPCError(rpcCtx, "get provider stats", err)
 	}
-
 	providers := make([]ProviderStats, 0, len(response.GetProviders()))
 	for _, stats := range response.GetProviders() {
-		providers = append(
-			providers,
-			ProviderStats{
-				Provider:                   providerFromProto(stats.GetProvider()),
-				ProviderDetail:             stats.GetProviderDetail(),
-				Requests:                   int(stats.GetRequests()),
-				Inflight:                   int(stats.GetInflight()),
-				Streaming:                  int(stats.GetStreaming()),
-				InputTokens:                stats.GetInputTokens(),
-				OutputTokens:               stats.GetOutputTokens(),
-				CacheReadTokens:            stats.GetCacheReadTokens(),
-				CacheCreationTokens:        stats.GetCacheCreationTokens(),
-				HitRatio:                   stats.GetHitRatio(),
-				EstimatedCostMicrocents:    stats.GetEstimatedCostMicrocents(),
-				LastSeenUnix:               stats.GetLastSeenUnix(),
-				Error:                      stats.GetError(),
-				DerivedCacheCreationTokens: stats.GetDerivedCacheCreationTokens(),
-			},
-		)
+		providers = append(providers, ProviderStats{
+			Provider: providerFromProto(stats.GetProvider()), ProviderDetail: stats.GetProviderDetail(), Requests: int(stats.GetRequests()),
+			Inflight: int(stats.GetInflight()), Streaming: int(stats.GetStreaming()), InputTokens: stats.GetInputTokens(),
+			OutputTokens: stats.GetOutputTokens(), CacheReadTokens: stats.GetCacheReadTokens(), CacheCreationTokens: stats.GetCacheCreationTokens(),
+			HitRatio: stats.GetHitRatio(), EstimatedCostMicrocents: stats.GetEstimatedCostMicrocents(), LastSeenUnix: stats.GetLastSeenUnix(),
+			Error: stats.GetError(), DerivedCacheCreationTokens: stats.GetDerivedCacheCreationTokens(),
+		})
 	}
-
-	return ProviderStatsSnapshot{
-		Providers:    providers,
-		LoadedAtUnix: response.GetLoadedAtUnix(),
-	}, nil
+	return ProviderStatsSnapshot{Providers: providers, LoadedAtUnix: response.GetLoadedAtUnix()}, nil
 }

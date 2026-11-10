@@ -13,7 +13,6 @@ import (
 // subagent, or compaction.
 func TestClassifyRequestPurpose(t *testing.T) {
 	t.Parallel()
-
 	cases := []struct {
 		name  string
 		class string
@@ -29,20 +28,16 @@ func TestClassifyRequestPurpose(t *testing.T) {
 		{"empty class", "", mitm.RequestPurposeUnspecified},
 	}
 	for _, tc := range cases {
-		t.Run(
-			tc.name,
-			func(t *testing.T) {
-				t.Parallel()
-				headers := http.Header{}
-				if tc.class != "" {
-					headers.Set("x-claude-code-request-class", tc.class)
-				}
-
-				if got := classifyRequestPurpose(headers); got != tc.want {
-					t.Fatalf("classifyRequestPurpose(%q) = %q, want %q", tc.class, got, tc.want)
-				}
-			},
-		)
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			headers := http.Header{}
+			if tc.class != "" {
+				headers.Set("x-claude-code-request-class", tc.class)
+			}
+			if got := classifyRequestPurpose(headers); got != tc.want {
+				t.Fatalf("classifyRequestPurpose(%q) = %q, want %q", tc.class, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -56,7 +51,6 @@ func TestRouteProviderImplementsRequestClassifier(t *testing.T) {
 	if !ok {
 		t.Fatal("routeProvider must implement mitm.RequestClassifier")
 	}
-
 	headers := http.Header{}
 	headers.Set("x-claude-code-request-class", "compaction")
 	if got := classifier.ClassifyRequestPurpose(headers); got != mitm.RequestPurposeCompaction {

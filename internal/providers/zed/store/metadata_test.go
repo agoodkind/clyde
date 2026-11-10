@@ -13,15 +13,13 @@ func TestReadSidebarThreadsReturnsOrderedMetadataAndEmptyWhenMissing(t *testing.
 	if err != nil {
 		t.Fatalf("sql.Open returned error: %v", err)
 	}
-
 	t.Cleanup(func() { _ = db.Close() })
 
 	if rows, err := ReadSidebarThreads(t.Context(), db); err != nil || len(rows) != 0 {
 		t.Fatalf("ReadSidebarThreads on empty db = (%d, %v), want (0, nil)", len(rows), err)
 	}
 
-	_, err = db.Exec(
-		`
+	_, err = db.Exec(`
 		CREATE TABLE sidebar_threads(
 			session_id TEXT PRIMARY KEY,
 			agent_id TEXT,
@@ -35,8 +33,7 @@ func TestReadSidebarThreadsReturnsOrderedMetadataAndEmptyWhenMissing(t *testing.
 			main_worktree_paths TEXT,
 			main_worktree_paths_order TEXT
 		) STRICT;
-	`,
-	)
+	`)
 	if err != nil {
 		t.Fatalf("create sidebar_threads: %v", err)
 	}
@@ -61,7 +58,6 @@ func TestReadSidebarThreadsReturnsOrderedMetadataAndEmptyWhenMissing(t *testing.
 	if err != nil {
 		t.Fatalf("insert sidebar_threads row: %v", err)
 	}
-
 	olderUpdatedAt := time.Date(2026, time.June, 26, 8, 30, 0, 0, time.UTC).Format(time.RFC3339)
 	olderCreatedAt := time.Date(2026, time.June, 25, 8, 30, 0, 0, time.UTC).Format(time.RFC3339)
 	_, err = db.Exec(
@@ -87,19 +83,15 @@ func TestReadSidebarThreadsReturnsOrderedMetadataAndEmptyWhenMissing(t *testing.
 	if err != nil {
 		t.Fatalf("ReadSidebarThreads returned error: %v", err)
 	}
-
 	if len(rows) != 2 {
 		t.Fatalf("rows len = %d, want 2", len(rows))
 	}
-
 	if rows[0].TitleOverride != "User title" || !rows[0].Archived {
 		t.Fatalf("metadata = %#v", rows[0])
 	}
-
 	if rows[0].FolderPaths[0] != "/repo/b" || rows[0].MainWorktreePaths[0] != "/main/b" {
 		t.Fatalf("ordered paths = %#v / %#v", rows[0].FolderPaths, rows[0].MainWorktreePaths)
 	}
-
 	if rows[1].SessionID != "thread-0" || rows[1].Archived {
 		t.Fatalf("nullable archived metadata = %#v", rows[1])
 	}

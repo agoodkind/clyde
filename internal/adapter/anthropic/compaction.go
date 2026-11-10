@@ -63,7 +63,6 @@ func compactionRole(wire string) CompactionRole {
 	case CompactionRoleOther:
 		return CompactionRoleOther
 	}
-
 	return CompactionRoleOther
 }
 
@@ -109,40 +108,27 @@ func DecodeCompactionRequest(body []byte) (CompactionRequest, error) {
 	if err := json.Unmarshal(body, &wire); err != nil {
 		// The caller reports no match on this path and reads no error, so this
 		// is the only record that a body reached the decode and failed it.
-		slog.Warn(
-			"adapter.anthropic.compaction_decode_failed",
-			"concern",
-			string(anthropicRequestLog),
-			"component",
-			"adapter",
-			"body_bytes",
-			len(body),
-			"err",
-			err,
+		slog.Warn("adapter.anthropic.compaction_decode_failed",
+			"concern", string(anthropicRequestLog),
+			"component", "adapter",
+			"body_bytes", len(body),
+			"err", err,
 		)
-
 		return CompactionRequest{SessionID: "", Messages: nil},
 			fmt.Errorf("decode compaction request: %w", err)
 	}
-
 	messages := make([]CompactionMessage, 0, len(wire.Messages))
 	for _, message := range wire.Messages {
 		parts, _ := NormalizeContent(message.Content)
-
 		segments := make([]Segment, 0, len(parts))
 		for _, part := range parts {
 			segments = append(segments, segmentOfPart(part))
 		}
-
-		messages = append(
-			messages,
-			CompactionMessage{
-				Role:     compactionRole(message.Role),
-				Segments: segments,
-			},
-		)
+		messages = append(messages, CompactionMessage{
+			Role:     compactionRole(message.Role),
+			Segments: segments,
+		})
 	}
-
 	return CompactionRequest{
 		SessionID: compactionSessionID(wire.Metadata),
 		Messages:  messages,
@@ -164,7 +150,6 @@ func segmentOfPart(part content.Part) Segment {
 	case content.PartUnsupported:
 		return Segment{Kind: SegmentOther, Text: part.Text, ToolUseID: ""}
 	}
-
 	return Segment{Kind: SegmentOther, Text: part.Text, ToolUseID: ""}
 }
 
@@ -172,11 +157,9 @@ func compactionSessionID(metadata *compactionMetadata) string {
 	if metadata == nil || metadata.UserID == "" {
 		return ""
 	}
-
 	var userID compactionUserID
 	if err := json.Unmarshal([]byte(metadata.UserID), &userID); err != nil {
 		return ""
 	}
-
 	return strings.TrimSpace(userID.SessionID)
 }

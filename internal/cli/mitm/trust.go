@@ -50,7 +50,6 @@ func newTrustCmdWithDeps(
 	cmd.AddCommand(newTrustInstallCmd(f, registryFactory, loadConfig))
 	cmd.AddCommand(newTrustUninstallCmd(f, registryFactory))
 	cmd.AddCommand(newTrustStatusCmd(f, registryFactory, loadConfig))
-
 	return cmd
 }
 
@@ -68,48 +67,25 @@ func newTrustInstallCmd(
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
-				slog.WarnContext(
-					cmd.Context(),
-					"cli.mitm.trust.install.load_config_failed",
-					"concern",
-					"cli.mitm.truststore",
-					"err",
-					err,
-				)
-
+				slog.WarnContext(cmd.Context(), "cli.mitm.trust.install.load_config_failed", "concern", "cli.mitm.truststore", "err", err)
 				return fmt.Errorf("load config: %w", err)
 			}
-
 			reg := registryFactory()
 			if reg.Platform() == truststore.PlatformUnsupported {
 				return unsupportedPlatformError(reg)
 			}
-
 			if err := reg.Install(cfg.MITM.CA.CertPath); err != nil {
-				slog.WarnContext(
-					cmd.Context(),
-					"cli.mitm.trust.install.failed",
-					"concern",
-					"cli.mitm.truststore",
-					"platform",
-					string(reg.Platform()),
-					"cert_path",
-					cfg.MITM.CA.CertPath,
-					"err",
-					err,
-				)
-
+				slog.WarnContext(cmd.Context(), "cli.mitm.trust.install.failed", "concern", "cli.mitm.truststore", "platform", string(reg.Platform()),
+					"cert_path", cfg.MITM.CA.CertPath,
+					"err", err)
 				return fmt.Errorf("install ca: %w", err)
 			}
-
 			var out strings.Builder
 			fmt.Fprintf(&out, "installed: %s\n", cfg.MITM.CA.CertPath)
 			fmt.Fprintf(&out, "platform: %s\n", reg.Platform())
-
 			return response.WriteResult(cmd.Context(), f.IOStreams.Out, out.String())
 		},
 	}
-
 	return cmd
 }
 
@@ -128,30 +104,17 @@ func newTrustUninstallCmd(
 			if reg.Platform() == truststore.PlatformUnsupported {
 				return unsupportedPlatformError(reg)
 			}
-
 			if err := reg.Uninstall(); err != nil {
-				slog.WarnContext(
-					cmd.Context(),
-					"cli.mitm.trust.uninstall.failed",
-					"concern",
-					"cli.mitm.truststore",
-					"platform",
-					string(reg.Platform()),
-					"err",
-					err,
-				)
-
+				slog.WarnContext(cmd.Context(), "cli.mitm.trust.uninstall.failed", "concern", "cli.mitm.truststore", "platform", string(reg.Platform()),
+					"err", err)
 				return fmt.Errorf("uninstall ca: %w", err)
 			}
-
 			var out strings.Builder
 			fmt.Fprintf(&out, "uninstalled\n")
 			fmt.Fprintf(&out, "platform: %s\n", reg.Platform())
-
 			return response.WriteResult(cmd.Context(), f.IOStreams.Out, out.String())
 		},
 	}
-
 	return cmd
 }
 
@@ -169,58 +132,32 @@ func newTrustStatusCmd(
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
-				slog.WarnContext(
-					cmd.Context(),
-					"cli.mitm.trust.status.load_config_failed",
-					"concern",
-					"cli.mitm.truststore",
-					"err",
-					err,
-				)
-
+				slog.WarnContext(cmd.Context(), "cli.mitm.trust.status.load_config_failed", "concern", "cli.mitm.truststore", "err", err)
 				return fmt.Errorf("load config: %w", err)
 			}
-
 			reg := registryFactory()
 			status, statusErr := truststore.ReadStatus(reg, cfg.MITM.CA.CertPath)
 			if statusErr != nil {
-				slog.WarnContext(
-					cmd.Context(),
-					"cli.mitm.trust.status.read_failed",
-					"concern",
-					"cli.mitm.truststore",
-					"platform",
-					string(reg.Platform()),
-					"err",
-					statusErr,
-				)
+				slog.WarnContext(cmd.Context(), "cli.mitm.trust.status.read_failed", "concern", "cli.mitm.truststore", "platform", string(reg.Platform()),
+					"err", statusErr)
 				wrapped := fmt.Errorf("cli.mitm.trust: read truststore status: %w", statusErr)
 				var out strings.Builder
 				writeTrustStatus(&out, status, cfg.MITM.CA.CertPath, wrapped)
 				_ = response.WriteResult(cmd.Context(), f.IOStreams.Out, out.String())
-
 				return wrapped
 			}
-
 			var out strings.Builder
 			writeTrustStatus(&out, status, cfg.MITM.CA.CertPath, nil)
-
 			return response.WriteResult(cmd.Context(), f.IOStreams.Out, out.String())
 		},
 	}
-
 	return cmd
 }
 
 // writeTrustStatus renders the typed status as the human-readable
 // report. The format mirrors the existing `clyde mitm status` style:
 // one key per line, lowercase keys, fixed value column.
-func writeTrustStatus(
-	out io.Writer,
-	status truststore.InstallStatus,
-	certPath string,
-	statusErr error,
-) {
+func writeTrustStatus(out io.Writer, status truststore.InstallStatus, certPath string, statusErr error) {
 	fmt.Fprintf(out, "platform: %s\n", status.Platform)
 	fmt.Fprintf(out, "common_name: %s\n", status.CommonName)
 	fmt.Fprintf(out, "ca_cert_path: %s\n", certPath)
@@ -231,7 +168,6 @@ func writeTrustStatus(
 	if status.Detail != "" {
 		fmt.Fprintf(out, "detail: %s\n", status.Detail)
 	}
-
 	if statusErr != nil {
 		fmt.Fprintf(out, "error: %s\n", statusErr.Error())
 	}
@@ -241,7 +177,6 @@ func emptyFingerprint(fp truststore.Fingerprint) string {
 	if fp.IsZero() {
 		return "absent"
 	}
-
 	return fp.String()
 }
 
@@ -249,20 +184,7 @@ func emptyFingerprint(fp truststore.Fingerprint) string {
 // that names the runtime so the operator sees both the canonical
 // sentinel and the OS we are running on.
 func unsupportedPlatformError(reg truststore.Registry) error {
-	slog.Warn(
-		"cli.mitm.trust.unsupported_platform",
-		"concern",
-		"cli.mitm.truststore",
-		"goos",
-		runtime.GOOS,
-		"registry",
-		string(reg.Platform()),
-	)
-
-	return fmt.Errorf(
-		"%w: build target=%s registry=%s",
-		truststore.ErrUnsupportedPlatform,
-		runtime.GOOS,
-		reg.Platform(),
-	)
+	slog.Warn("cli.mitm.trust.unsupported_platform", "concern", "cli.mitm.truststore", "goos", runtime.GOOS, "registry", string(reg.Platform()))
+	return fmt.Errorf("%w: build target=%s registry=%s",
+		truststore.ErrUnsupportedPlatform, runtime.GOOS, reg.Platform())
 }

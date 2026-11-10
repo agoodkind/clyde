@@ -98,17 +98,14 @@ func DecodeCompactionInput(body []byte) (CompactionInput, bool) {
 	if !ok || len(rawItems) < 2 {
 		return empty, false
 	}
-
 	items := codexstore.NormalizeResponseInputItems(rawItems)
 	if len(items) != len(rawItems) {
 		return empty, false
 	}
-
 	retainStart, instructionStart, ok := compactionLayout(items)
 	if !ok {
 		return empty, false
 	}
-
 	// An unrecognized item kind in the counted range has no segment model.
 	// The v2 setup items before retainStart stay in the forwarded request
 	// whatever their kind.
@@ -117,16 +114,13 @@ func DecodeCompactionInput(body []byte) (CompactionInput, bool) {
 			return empty, false
 		}
 	}
-
 	if !rawCompactionPairsAreComplete(items[retainStart:instructionStart]) {
 		return empty, false
 	}
-
 	messages := make([]CompactionMessage, 0, len(items))
 	for _, item := range items {
 		messages = append(messages, compactionMessage(item))
 	}
-
 	return CompactionInput{
 		Messages:         messages,
 		RetainStart:      retainStart,
@@ -139,12 +133,10 @@ func decodeCompactionInputItems(body []byte) ([]json.RawMessage, bool) {
 	if !ok {
 		return nil, false
 	}
-
 	var rawItems []json.RawMessage
 	if json.Unmarshal(body[inputStart:inputEnd], &rawItems) != nil {
 		return nil, false
 	}
-
 	return rawItems, true
 }
 
@@ -160,44 +152,32 @@ func compactionLayout(items []transcript.CompactedContextItem) (int, int, bool) 
 		if !ok {
 			return 0, 0, false
 		}
-
 		transcriptStart, ok := rawResponsesCompactionV2TranscriptStart(items[:triggerIndex])
 		if !ok {
 			return 0, 0, false
 		}
-
 		transcriptItems := items[transcriptStart:triggerIndex]
 		completeEnd, ok := rawResponsesCompactionV2CompletePrefixEnd(transcriptItems)
 		if !ok {
 			return 0, 0, false
 		}
-
 		if !rawResponsesCompactionV2UnfinishedSuffixIsValid(transcriptItems[completeEnd:]) {
 			return 0, 0, false
 		}
-
 		return transcriptStart, transcriptStart + completeEnd, true
 	}
-
 	if !rawCompactionPromptIsValid(items[last]) {
 		return 0, 0, false
 	}
-
 	return 0, last, true
 }
 
 func compactionMessage(item transcript.CompactedContextItem) CompactionMessage {
 	switch item.Kind {
 	case transcript.CompactedContextItemKindMessage:
-		return CompactionMessage{
-			Role:     compactionRole(item.Message.Role),
-			Segments: compactionMessageSegments(item.Message),
-		}
+		return CompactionMessage{Role: compactionRole(item.Message.Role), Segments: compactionMessageSegments(item.Message)}
 	case transcript.CompactedContextItemKindReasoning:
-		return CompactionMessage{
-			Role:     CompactionRoleAssistant,
-			Segments: compactionReasoningSegments(item.Reasoning),
-		}
+		return CompactionMessage{Role: CompactionRoleAssistant, Segments: compactionReasoningSegments(item.Reasoning)}
 	case transcript.CompactedContextItemKindFunctionCall:
 		return atomicMessage(CompactionSegmentToolUse, item.FunctionCall.Arguments)
 	case transcript.CompactedContextItemKindCustomToolCall:
@@ -211,10 +191,7 @@ func compactionMessage(item transcript.CompactedContextItem) CompactionMessage {
 	case transcript.CompactedContextItemKindCustomToolCallOutput:
 		return compactionOutputMessage(item.CustomToolCallOutput.OutputRaw)
 	case transcript.CompactedContextItemKindToolSearchOutput:
-		return atomicMessage(
-			CompactionSegmentToolResult,
-			toolSearchOutputText(item.ToolSearchOutput.ToolsRaw),
-		)
+		return atomicMessage(CompactionSegmentToolResult, toolSearchOutputText(item.ToolSearchOutput.ToolsRaw))
 	case transcript.CompactedContextItemKindWebSearchCall,
 		transcript.CompactedContextItemKindImageGenerationCall,
 		transcript.CompactedContextItemKindCompaction,
@@ -244,25 +221,15 @@ func compactionMessageSegments(message *transcript.CompactedMessageItem) []Compa
 	if message == nil {
 		return nil
 	}
-
 	segments := make([]CompactionSegment, 0, len(message.Content))
 	for _, part := range message.Content {
 		switch rawCompactionMessageContentType(part.Type) {
-		case rawCompactionContentInputText,
-			rawCompactionContentOutputText,
-			rawCompactionContentText:
-			segments = append(
-				segments,
-				CompactionSegment{Kind: CompactionSegmentText, Text: part.Text, Atomic: false},
-			)
+		case rawCompactionContentInputText, rawCompactionContentOutputText, rawCompactionContentText:
+			segments = append(segments, CompactionSegment{Kind: CompactionSegmentText, Text: part.Text, Atomic: false})
 		default:
-			segments = append(
-				segments,
-				CompactionSegment{Kind: CompactionSegmentImage, Text: "", Atomic: true},
-			)
+			segments = append(segments, CompactionSegment{Kind: CompactionSegmentImage, Text: "", Atomic: true})
 		}
 	}
-
 	return segments
 }
 
@@ -272,22 +239,13 @@ func compactionReasoningSegments(reasoning *transcript.CompactedReasoningItem) [
 	if reasoning == nil {
 		return nil
 	}
-
 	segments := make([]CompactionSegment, 0, len(reasoning.Summary))
 	for _, summary := range reasoning.Summary {
-		segments = append(
-			segments,
-			CompactionSegment{Kind: CompactionSegmentThinking, Text: summary.Text, Atomic: true},
-		)
+		segments = append(segments, CompactionSegment{Kind: CompactionSegmentThinking, Text: summary.Text, Atomic: true})
 	}
-
 	if len(segments) == 0 {
-		segments = append(
-			segments,
-			CompactionSegment{Kind: CompactionSegmentThinking, Text: "", Atomic: true},
-		)
+		segments = append(segments, CompactionSegment{Kind: CompactionSegmentThinking, Text: "", Atomic: true})
 	}
-
 	return segments
 }
 
@@ -298,7 +256,6 @@ func toolSearchOutputText(tools []json.RawMessage) string {
 	if err != nil {
 		return ""
 	}
-
 	return string(encoded)
 }
 
@@ -315,12 +272,9 @@ func compactionOutputMessage(raw json.RawMessage) CompactionMessage {
 	var text string
 	if json.Unmarshal(raw, &text) == nil {
 		return CompactionMessage{
-			Role: CompactionRoleAssistant,
-			Segments: []CompactionSegment{
-				{Kind: CompactionSegmentToolResult, Text: text, Atomic: false},
-			},
+			Role:     CompactionRoleAssistant,
+			Segments: []CompactionSegment{{Kind: CompactionSegmentToolResult, Text: text, Atomic: false}},
 		}
 	}
-
 	return atomicMessage(CompactionSegmentToolResult, string(raw))
 }

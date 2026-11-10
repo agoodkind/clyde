@@ -13,7 +13,6 @@ import (
 
 func TestToolDisplayText(t *testing.T) {
 	t.Parallel()
-
 	tests := []struct {
 		name     string
 		tool     string
@@ -21,76 +20,22 @@ func TestToolDisplayText(t *testing.T) {
 		wantText string
 		wantLang string
 	}{
-		{
-			name:     "command",
-			tool:     "Bash",
-			input:    `{"command":"git status"}`,
-			wantText: "git status",
-			wantLang: "bash",
-		},
-		{
-			name:     "file path",
-			tool:     "Read",
-			input:    `{"file_path":"/repo/main.go"}`,
-			wantText: "/repo/main.go",
-			wantLang: "",
-		},
-		{
-			name:     "pattern",
-			tool:     "Grep",
-			input:    `{"pattern":"TODO"}`,
-			wantText: "TODO",
-			wantLang: "",
-		},
-		{
-			name:     "prompt",
-			tool:     "Task",
-			input:    `{"prompt":"inspect callers"}`,
-			wantText: "inspect callers",
-			wantLang: "",
-		},
-		{
-			name:     "url",
-			tool:     "WebFetch",
-			input:    `{"url":"https://example.com"}`,
-			wantText: "https://example.com",
-			wantLang: "",
-		},
-		{
-			name:     "query",
-			tool:     "WebSearch",
-			input:    `{"query":"adapter error"}`,
-			wantText: "adapter error",
-			wantLang: "",
-		},
-		{
-			name:     "a known tool whose keys do not match",
-			tool:     "TodoWrite",
-			input:    `{"other":"value"}`,
-			wantText: "",
-			wantLang: "",
-		},
+		{name: "command", tool: "Bash", input: `{"command":"git status"}`, wantText: "git status", wantLang: "bash"},
+		{name: "file path", tool: "Read", input: `{"file_path":"/repo/main.go"}`, wantText: "/repo/main.go", wantLang: ""},
+		{name: "pattern", tool: "Grep", input: `{"pattern":"TODO"}`, wantText: "TODO", wantLang: ""},
+		{name: "prompt", tool: "Task", input: `{"prompt":"inspect callers"}`, wantText: "inspect callers", wantLang: ""},
+		{name: "url", tool: "WebFetch", input: `{"url":"https://example.com"}`, wantText: "https://example.com", wantLang: ""},
+		{name: "query", tool: "WebSearch", input: `{"query":"adapter error"}`, wantText: "adapter error", wantLang: ""},
+		{name: "a known tool whose keys do not match", tool: "TodoWrite", input: `{"other":"value"}`, wantText: "", wantLang: ""},
 		{name: "empty", tool: "Bash", input: "", wantText: "", wantLang: ""},
 	}
 	for _, test := range tests {
-		t.Run(
-			test.name,
-			func(t *testing.T) {
-				display, language := toolDisplayText(
-					test.tool,
-					transcript.ToolInputJSON{Raw: json.RawMessage(test.input)},
-				)
-				if display != test.wantText || language != test.wantLang {
-					t.Fatalf(
-						"toolDisplayText() = %q, %q; want %q, %q",
-						display,
-						language,
-						test.wantText,
-						test.wantLang,
-					)
-				}
-			},
-		)
+		t.Run(test.name, func(t *testing.T) {
+			display, language := toolDisplayText(test.tool, transcript.ToolInputJSON{Raw: json.RawMessage(test.input)})
+			if display != test.wantText || language != test.wantLang {
+				t.Fatalf("toolDisplayText() = %q, %q; want %q, %q", display, language, test.wantText, test.wantLang)
+			}
+		})
 	}
 }
 
@@ -101,37 +46,25 @@ func TestClaudeFixtureFillsToolDisplay(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
-
-	messages, err := conversation.CollectMessages(
-		New().Stream(
-			path,
-			conversation.LoadOptions{
-				IncludeSystemPrompts:  false,
-				IncludeSystemMessages: false,
-				IncludeToolOutputs:    false,
-			},
-		),
-	)
+	messages, err := conversation.CollectMessages(New().Stream(path, conversation.LoadOptions{
+		IncludeSystemPrompts:  false,
+		IncludeSystemMessages: false,
+		IncludeToolOutputs:    false,
+	}))
 	if err != nil {
 		t.Fatalf("stream fixture: %v", err)
 	}
-
 	if len(messages) != 1 {
 		t.Fatalf("messages = %d, want 1", len(messages))
 	}
-
-	assertClaudeFixtureToolDisplay(
-		t,
-		messages[0].Tools,
-		[]string{
-			"git status",
-			"/repo/main.go",
-			"TODO",
-			"inspect callers",
-			"https://example.com",
-			"adapter error",
-		},
-	)
+	assertClaudeFixtureToolDisplay(t, messages[0].Tools, []string{
+		"git status",
+		"/repo/main.go",
+		"TODO",
+		"inspect callers",
+		"https://example.com",
+		"adapter error",
+	})
 }
 
 func assertClaudeFixtureToolDisplay(t *testing.T, tools []transcript.ToolCall, want []string) {
@@ -139,10 +72,8 @@ func assertClaudeFixtureToolDisplay(t *testing.T, tools []transcript.ToolCall, w
 	if len(tools) != len(want) {
 		t.Fatalf("tools = %d, want %d", len(tools), len(want))
 	}
-
 	withInput := 0
 	withDisplay := 0
-
 	for i, tool := range tools {
 		if tool.Input.Len() > 0 {
 			withInput++
@@ -150,12 +81,10 @@ func assertClaudeFixtureToolDisplay(t *testing.T, tools []transcript.ToolCall, w
 				withDisplay++
 			}
 		}
-
 		if tool.Display != want[i] {
 			t.Fatalf("tool %d display = %q, want %q", i, tool.Display, want[i])
 		}
 	}
-
 	if withDisplay*100 < withInput*90 {
 		t.Fatalf("fixture display coverage = %d/%d, want at least 90%%", withDisplay, withInput)
 	}
@@ -207,23 +136,16 @@ func TestAPlanAndAQuestionAreStored(t *testing.T) {
 	}
 
 	for _, testCase := range cases {
-		t.Run(
-			testCase.name,
-			func(t *testing.T) {
-				t.Parallel()
-				got, gotLang := toolDisplayText(
-					testCase.tool,
-					transcript.ToolInputJSON{Raw: []byte(testCase.input)},
-				)
-				if got != testCase.want {
-					t.Fatalf("display = %q, want %q", got, testCase.want)
-				}
-
-				if gotLang != testCase.wantLang {
-					t.Fatalf("language = %q, want %q", gotLang, testCase.wantLang)
-				}
-			},
-		)
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			got, gotLang := toolDisplayText(testCase.tool, transcript.ToolInputJSON{Raw: []byte(testCase.input)})
+			if got != testCase.want {
+				t.Fatalf("display = %q, want %q", got, testCase.want)
+			}
+			if gotLang != testCase.wantLang {
+				t.Fatalf("language = %q, want %q", gotLang, testCase.wantLang)
+			}
+		})
 	}
 }
 
@@ -240,18 +162,13 @@ func TestAToolAnotherServerDefinedKeepsItsInput(t *testing.T) {
 
 	foreign := `{"questions":[{"question":"Which approach?","options":["Script belt","Simple belt"]}]}`
 
-	got, gotLang := toolDisplayText(
-		"mcp__conductor__AskUserQuestion",
-		transcript.ToolInputJSON{Raw: []byte(foreign)},
-	)
+	got, gotLang := toolDisplayText("mcp__conductor__AskUserQuestion", transcript.ToolInputJSON{Raw: []byte(foreign)})
 	if got != foreign {
 		t.Fatalf("a foreign tool lost its input: %q", got)
 	}
-
 	if gotLang != "" {
 		t.Fatalf("a foreign tool claimed a language: %q", gotLang)
 	}
-
 	for _, word := range []string{"Which approach?", "Script belt", "Simple belt"} {
 		if !strings.Contains(got, word) {
 			t.Fatalf("the stored text cannot be searched for %q: %q", word, got)
@@ -277,27 +194,18 @@ func TestAToolAnotherServerDefinedKeepsItsInput(t *testing.T) {
 func TestAToolClaudeAddedLaterIsStillRead(t *testing.T) {
 	t.Parallel()
 
-	got, gotLang := toolDisplayText(
-		"Monitor",
-		transcript.ToolInputJSON{
-			Raw: []byte(
-				`{"command":"until curl -sf localhost:8080; do sleep 2; done","timeout_ms":60000}`,
-			),
-		},
-	)
+	got, gotLang := toolDisplayText("Monitor", transcript.ToolInputJSON{
+		Raw: []byte(`{"command":"until curl -sf localhost:8080; do sleep 2; done","timeout_ms":60000}`),
+	})
 	if got != "until curl -sf localhost:8080; do sleep 2; done" {
 		t.Fatalf("display = %q, want the command Monitor ran", got)
 	}
-
 	if gotLang != "bash" {
 		t.Fatalf("language = %q, want bash", gotLang)
 	}
 
 	for _, name := range []string{"TaskUpdate", "ScheduleWakeup", "SendMessage"} {
-		got, _ = toolDisplayText(
-			name,
-			transcript.ToolInputJSON{Raw: []byte(`{"prompt":"carry on"}`)},
-		)
+		got, _ = toolDisplayText(name, transcript.ToolInputJSON{Raw: []byte(`{"prompt":"carry on"}`)})
 		if got != "carry on" {
 			t.Fatalf("%s display = %q, want the prompt read through Claude's keys", name, got)
 		}
@@ -316,7 +224,6 @@ func TestAToolWhoseInputWillNotDecodeKeepsIt(t *testing.T) {
 	if got != raw {
 		t.Fatalf("an undecodable input was dropped: %q", got)
 	}
-
 	if gotLang != "" {
 		t.Fatalf("an undecodable input claimed a language: %q", gotLang)
 	}

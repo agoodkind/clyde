@@ -81,40 +81,33 @@ func NewProvider(deps adapterprovider.Deps, opts ProviderOptions) *Provider {
 	if now == nil {
 		now = time.Now
 	}
-
 	httpClient := deps.HTTPClient
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-
 	log := deps.Logger
 	if log == nil {
 		log = slog.Default()
 	}
-
 	idleTTL := opts.WsSessionIdleTTL
 	if idleTTL <= 0 {
 		idleTTL = defaultWsSessionIdleTTL
 	}
-
 	ConfigureCodexFileLogger(opts.FileLog)
 	wsReg := opts.WsSessionRegistry
-
 	return &Provider{
-		cfg:            deps.Config.Codex,
-		notices:        deps.Config.Notices,
-		auth:           deps.Auth,
-		log:            log,
-		httpClient:     httpClient,
-		now:            now,
-		sessionCache:   NewWebsocketSessionCache(log, idleTTL, wsReg),
-		wsRegistry:     wsReg,
-		workspaceProbe: NewWorkspaceProbe(),
-		accountID:      strings.TrimSpace(opts.AccountID),
-		fileLog:        opts.FileLog,
-		retryPolicies: appendBuiltinCodexRetryPolicies(
-			adapterretry.FromConfig(deps.Config.Retry),
-		),
+		cfg:                deps.Config.Codex,
+		notices:            deps.Config.Notices,
+		auth:               deps.Auth,
+		log:                log,
+		httpClient:         httpClient,
+		now:                now,
+		sessionCache:       NewWebsocketSessionCache(log, idleTTL, wsReg),
+		wsRegistry:         wsReg,
+		workspaceProbe:     NewWorkspaceProbe(),
+		accountID:          strings.TrimSpace(opts.AccountID),
+		fileLog:            opts.FileLog,
+		retryPolicies:      appendBuiltinCodexRetryPolicies(adapterretry.FromConfig(deps.Config.Retry)),
 		wireBaselineLoader: NewWireBaselineLoader(),
 		captureStore:       opts.CaptureStore,
 		stripWireFlags:     deps.Config.StripWireFlags,
@@ -138,78 +131,48 @@ type beforeAttemptContextKey struct{}
 // forward it to the websocket transport's retry loop. The hook is called
 // once per retry attempt so the caller can register each attempt as a
 // nested livetrack egress session.
-func WithBeforeAttempt(
-	ctx context.Context,
-	hook func(ctx context.Context, attemptNo int) (context.Context, func(string)),
-) context.Context {
+func WithBeforeAttempt(ctx context.Context, hook func(ctx context.Context, attemptNo int) (context.Context, func(string))) context.Context {
 	if hook == nil {
 		return ctx
 	}
-
 	return context.WithValue(ctx, beforeAttemptContextKey{}, hook)
 }
 
 // beforeAttemptFromContext extracts the BeforeAttempt hook from ctx.
 // Returns nil when the context carries no hook.
-func beforeAttemptFromContext(
-	ctx context.Context,
-) func(context.Context, int) (context.Context, func(string)) {
-	v, _ := ctx.Value(beforeAttemptContextKey{}).(func(context.Context, int) (
-		context.Context,
-		func(string),
-	))
-
+func beforeAttemptFromContext(ctx context.Context) func(context.Context, int) (context.Context, func(string)) {
+	v, _ := ctx.Value(beforeAttemptContextKey{}).(func(context.Context, int) (context.Context, func(string)))
 	return v
 }
 
 // Execute satisfies adapterprovider.Provider.Execute by preparing then
 // executing the exact provider-owned transport payload.
-func (p *Provider) Execute(
-	ctx context.Context,
-	req adapterresolver.ResolvedRequest,
-	w adapterprovider.EventWriter,
-) (adapterprovider.Result, error) {
+func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequest, w adapterprovider.EventWriter) (adapterprovider.Result, error) {
 	prepared, err := p.Prepare(req)
 	if err != nil {
 		return adapterprovider.Result{}, err
 	}
-
 	return p.ExecutePrepared(ctx, prepared, w)
 }
 
 // ExecutePrepared performs Codex runtime work and executes the exact payload
 // returned by Prepare without invoking the request builder again.
-func (p *Provider) ExecutePrepared(
-	ctx context.Context,
-	prepared PreparedRequest,
-	w adapterprovider.EventWriter,
-) (adapterprovider.Result, error) {
+func (p *Provider) ExecutePrepared(ctx context.Context, prepared PreparedRequest, w adapterprovider.EventWriter) (adapterprovider.Result, error) {
 	if p == nil {
 		return adapterprovider.Result{}, ErrCodexProviderNotConfigured
 	}
-
 	if p.auth == nil {
 		return adapterprovider.Result{}, adapterprovider.ErrAuthMissing
 	}
 
 	token, err := p.auth.Token(ctx)
 	if err != nil {
-		p.log.WarnContext(
-			ctx,
-			"adapter.codex.auth_lookup_failed",
-			"concern",
-			"adapter.providers.codex.request",
-			"component",
-			"adapter",
-			"subcomponent",
-			"codex_provider",
-			"err",
-			err.Error(),
+		p.log.WarnContext(ctx, "adapter.codex.auth_lookup_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
+			"subcomponent", "codex_provider",
+			"err", err.Error(),
 		)
-
 		return adapterprovider.Result{}, fmt.Errorf("codex provider: auth lookup: %w", err)
 	}
-
 	if strings.TrimSpace(token) == "" {
 		return adapterprovider.Result{}, adapterprovider.ErrAuthMissing
 	}
@@ -223,50 +186,59 @@ func (p *Provider) ExecutePrepared(
 		authRefresh = refresher.ForceRefresh
 	}
 
-	directCfg := p.preparedDirectConfig(ctx, prepared, token, authRefresh)
+	directCfg := DirectConfig{
+		NativePatchRepresentation:      "",
+		HTTPClient:                     p.httpClient,
+		BaseURL:                        codexBaseURL(p.cfg.BaseURL),
+		WebsocketEnabled:               p.cfg.WebsocketEnabled,
+		WebsocketURL:                   codexWebsocketURL(p.cfg.BaseURL),
+		Token:                          token,
+		AccountID:                      p.accountID,
+		RequestID:                      codexRequestID(prepared.Resolved),
+		CursorRequestID:                prepared.Resolved.Cursor.RequestID,
+		Correlation:                    prepared.Resolved.Correlation,
+		WorkspacePath:                  prepared.Resolved.Cursor.WorkspacePath,
+		WorkspaceProbe:                 p.workspaceProbe,
+		SessionCache:                   p.sessionCache,
+		Log:                            p.log,
+		FileLog:                        p.fileLog,
+		ReasoningSummary:               p.cfg.ReasoningSummary,
+		InboundThinkingMaterialization: codexSummaryRenderStrategy(p.cfg.Reasoning.ResolvedRoundTripSummary()),
+		RoundTripEncrypted:             RoundTripEncrypted(p.cfg.Reasoning.ResolvedRoundTripEncrypted()),
+		RoundTripSummary:               RoundTripSummary(p.cfg.Reasoning.ResolvedRoundTripSummary()),
+		RetryPolicies:                  p.retryPolicies,
+		// BeforeAttempt is injected by the adapter dispatch layer via
+		// context so the server can register each retry attempt as a
+		// nested livetrack egress session without changing this interface.
+		BeforeAttempt:  beforeAttemptFromContext(ctx),
+		AuthRefresh:    authRefresh,
+		WireIdentity:   p.resolveWireIdentity(ctx),
+		CaptureStore:   p.captureStore,
+		StripWireFlags: p.stripWireFlags,
+	}
 
-	warningWindows, usageWarningErr := ProbeUsageWarnings(
-		ctx,
-		usageWarningProbeConfig{
-			HTTPClient: directCfg.HTTPClient,
-			BaseURL:    directCfg.BaseURL,
-			Token:      directCfg.Token,
-			AccountID:  directCfg.AccountID,
-			Now:        p.now,
-		},
-	)
+	warningWindows, usageWarningErr := ProbeUsageWarnings(ctx, usageWarningProbeConfig{
+		HTTPClient: directCfg.HTTPClient,
+		BaseURL:    directCfg.BaseURL,
+		Token:      directCfg.Token,
+		AccountID:  directCfg.AccountID,
+		Now:        p.now,
+	})
 	if usageWarningErr != nil {
-		p.log.WarnContext(
-			ctx,
-			"adapter.codex.usage_warning_probe_failed",
-			"concern",
-			"adapter.providers.codex.request",
-			"component",
-			"adapter",
-			"subcomponent",
-			"codex_provider",
-			"request_id",
-			directCfg.RequestID,
-			"err",
-			usageWarningErr,
+		p.log.WarnContext(ctx, "adapter.codex.usage_warning_probe_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
+			"subcomponent", "codex_provider",
+			"request_id", directCfg.RequestID,
+			"err", usageWarningErr,
 		)
 	}
 
-	runResult, runErr := runPrepared(
-		ctx,
-		directCfg,
-		prepared.Transport,
-		&prepared.Resolved,
-		w.WriteEvent,
-	)
+	runResult, runErr := runPrepared(ctx, directCfg, prepared.Transport, &prepared.Resolved, w.WriteEvent)
 	if runErr != nil {
 		return adapterprovider.Result{}, runErr
 	}
-
 	if flushErr := w.Flush(); flushErr != nil {
 		return adapterprovider.Result{}, fmt.Errorf("flush codex provider events: %w", flushErr)
 	}
-
 	return adapterprovider.Result{
 		Usage:                      runResult.Usage,
 		FinishReason:               runResult.FinishReason,
@@ -277,56 +249,8 @@ func (p *Provider) ExecutePrepared(
 		ToolCallCount:              runResult.ToolCallCount,
 		ToolCallNames:              runResult.ToolCallNames,
 		HasSubagentToolCall:        runResult.HasSubagentToolCall,
-		UsageNoticeWindows:         warningWindows,
-		FinalResponse:              nil,
-		SystemFingerprint:          "",
-		ReasoningSummary:           "",
-		UsageNotices:               nil,
+		UsageNoticeWindows:         warningWindows, FinalResponse: nil, SystemFingerprint: "", ReasoningSummary: "", UsageNotices: nil,
 	}, nil
-}
-
-func (p *Provider) preparedDirectConfig(
-	ctx context.Context,
-	prepared PreparedRequest,
-	token string,
-	authRefresh func(context.Context) (string, error),
-) DirectConfig {
-	return DirectConfig{
-		NativePatchRepresentation: "",
-		HTTPClient:                p.httpClient,
-		BaseURL:                   codexBaseURL(p.cfg.BaseURL),
-		WebsocketEnabled:          p.cfg.WebsocketEnabled,
-		WebsocketURL:              codexWebsocketURL(p.cfg.BaseURL),
-		Token:                     token,
-		AccountID:                 p.accountID,
-		RequestID:                 codexRequestID(prepared.Resolved),
-		CursorRequestID:           prepared.Resolved.Cursor.RequestID,
-		Correlation:               prepared.Resolved.Correlation,
-		WorkspacePath:             prepared.Resolved.Cursor.WorkspacePath,
-		WorkspaceProbe:            p.workspaceProbe,
-		SessionCache:              p.sessionCache,
-		Log:                       p.log,
-		FileLog:                   p.fileLog,
-		ReasoningSummary:          p.cfg.ReasoningSummary,
-		InboundThinkingMaterialization: codexSummaryRenderStrategy(
-			p.cfg.Reasoning.ResolvedRoundTripSummary(),
-		),
-		RoundTripEncrypted: RoundTripEncrypted(
-			p.cfg.Reasoning.ResolvedRoundTripEncrypted(),
-		),
-		RoundTripSummary: RoundTripSummary(
-			p.cfg.Reasoning.ResolvedRoundTripSummary(),
-		),
-		RetryPolicies: p.retryPolicies,
-		// BeforeAttempt is injected by the adapter dispatch layer via
-		// context so the server can register each retry attempt as a
-		// nested livetrack egress session without changing this interface.
-		BeforeAttempt:  beforeAttemptFromContext(ctx),
-		AuthRefresh:    authRefresh,
-		WireIdentity:   p.resolveWireIdentity(ctx),
-		CaptureStore:   p.captureStore,
-		StripWireFlags: p.stripWireFlags,
-	}
 }
 
 // resolveWireIdentity projects the codex-cli outbound wire identity from
@@ -341,33 +265,21 @@ func (p *Provider) resolveWireIdentity(ctx context.Context) WireIdentity {
 	if p == nil || p.captureStore == nil {
 		return fallback
 	}
-
 	if p.wireBaselineLoader == nil {
 		p.wireBaselineLoader = NewWireBaselineLoader()
 	}
-
 	identity, err := p.wireBaselineLoader.Load(ctx, p.captureStore)
 	if err != nil {
 		if errors.Is(err, ErrCodexBaselineInvalid) {
-			p.log.WarnContext(
-				ctx,
-				"adapter.codex.wire_baseline.fallback_constants",
-				"concern",
-				codexWireBaselineConcern,
-				"component",
-				"adapter",
-				"subcomponent",
-				"codex_provider",
-				"err",
-				err.Error(),
+			p.log.WarnContext(ctx, "adapter.codex.wire_baseline.fallback_constants", "concern", codexWireBaselineConcern, "component", "adapter",
+				"subcomponent", "codex_provider",
+				"err", err.Error(),
 			)
 		}
-
 		// Missing baseline is the expected cold-start case; the loader
 		// already logged it at Debug. Either way fall back to constants.
 		return fallback
 	}
-
 	return identity
 }
 
@@ -375,7 +287,6 @@ func codexRequestID(req adapterresolver.ResolvedRequest) string {
 	if strings.TrimSpace(req.RequestID) != "" {
 		return strings.TrimSpace(req.RequestID)
 	}
-
 	return strings.TrimSpace(req.Cursor.RequestID)
 }
 
@@ -386,9 +297,7 @@ func codexRequestID(req adapterresolver.ResolvedRequest) string {
 // because that is the existing materialization for native upstream
 // reasoning fields. The encrypted_content lever is consumed in Phase 4
 // separately and is not threaded through this site.
-func codexSummaryRenderStrategy(
-	strategy config.CodexRoundTripSummary,
-) adapterrender.MaterializationStrategy {
+func codexSummaryRenderStrategy(strategy config.CodexRoundTripSummary) adapterrender.MaterializationStrategy {
 	switch strategy {
 	case config.CodexRoundTripSummaryDrop:
 		return adapterrender.MaterializeDrop
@@ -407,7 +316,6 @@ func ResponsesBaseURL(raw string) string {
 	if v := strings.TrimSpace(raw); v != "" {
 		return v
 	}
-
 	return "https://chatgpt.com/backend-api/codex/responses"
 }
 
@@ -426,7 +334,6 @@ func codexWebsocketURL(raw string) string {
 	case strings.HasPrefix(base, "http://"):
 		return "ws://" + strings.TrimPrefix(base, "http://")
 	}
-
 	return base
 }
 

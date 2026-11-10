@@ -73,12 +73,10 @@ func (r *wsFrameRecorder) add(message []byte) {
 	if r.cfg == nil {
 		return
 	}
-
 	if !r.cfg.store.RecordingEnabled() {
 		r.inbound = nil
 		return
 	}
-
 	r.inbound = append(r.inbound, message)
 }
 
@@ -88,31 +86,25 @@ func (r *wsFrameRecorder) record(status int) {
 	if r.cfg == nil || r.recorded {
 		return
 	}
-
 	if !r.cfg.store.RecordingEnabled() {
 		r.inbound = nil
 		return
 	}
-
 	r.recorded = true
-	recordCodexEgress(
-		r.cfg.store,
-		r.cfg.corr,
-		codexEgressRecord{
-			url:               r.cfg.url,
-			method:            "WEBSOCKET",
-			reqType:           "application/json",
-			respType:          "text/event-stream",
-			upstreamRequestID: "",
-			sessionID:         r.cfg.sessionID,
-			status:            status,
-			reqHeaders:        nil,
-			respHeaders:       nil,
-			reqBody:           r.cfg.outbound,
-			respBody:          joinFrames(r.inbound),
-			started:           r.cfg.started,
-		},
-	)
+	recordCodexEgress(r.cfg.store, r.cfg.corr, codexEgressRecord{
+		url:               r.cfg.url,
+		method:            "WEBSOCKET",
+		reqType:           "application/json",
+		respType:          "text/event-stream",
+		upstreamRequestID: "",
+		sessionID:         r.cfg.sessionID,
+		status:            status,
+		reqHeaders:        nil,
+		respHeaders:       nil,
+		reqBody:           r.cfg.outbound,
+		respBody:          joinFrames(r.inbound),
+		started:           r.cfg.started,
+	})
 }
 
 // recordCodexEgress writes one outbound Codex exchange to the capture store
@@ -122,16 +114,12 @@ func recordCodexEgress(store *capture.Store, corr correlation.Context, in codexE
 	if !store.RecordingEnabled() {
 		return
 	}
-
 	host, path := "", ""
 	if parsed, err := url.Parse(in.url); err == nil {
 		host = parsed.Host
 		path = parsed.Path
 	}
-
-	requestValues, requestValuesComplete := capture.SensitiveHTTPHeaderValuesWithStatus(
-		in.reqHeaders,
-	)
+	requestValues, requestValuesComplete := capture.SensitiveHTTPHeaderValuesWithStatus(in.reqHeaders)
 	bodyValues, bodyValuesComplete := capture.SensitiveHTTPBodyValuesWithStatus(in.reqBody)
 	requestValues = append(requestValues, bodyValues...)
 	requestValuesComplete = requestValuesComplete && bodyValuesComplete
@@ -142,62 +130,46 @@ func recordCodexEgress(store *capture.Store, corr correlation.Context, in codexE
 		requestValues,
 		requestValuesComplete,
 	)
-	store.RecordExchange(
-		corr,
-		capture.Exchange{
-			Client:             captureClientCodex,
-			Provider:           "codex",
-			Concern:            captureCodexConcern,
-			Host:               host,
-			Method:             in.method,
-			Path:               path,
-			Status:             in.status,
-			UpstreamRequestID:  in.upstreamRequestID,
-			SessionID:          in.sessionID,
-			ConversationID:     "",
-			ConversationSource: "",
-			RequestHeaders:     requestHeaders,
-			ResponseHeaders:    responseHeaders,
-			RequestBody:        requestBody,
-			ResponseBody:       responseBody,
-			RequestType:        in.reqType,
-			ResponseType:       in.respType,
-			Started:            in.started,
-		},
-	)
+	store.RecordExchange(corr, capture.Exchange{
+		Client:             captureClientCodex,
+		Provider:           "codex",
+		Concern:            captureCodexConcern,
+		Host:               host,
+		Method:             in.method,
+		Path:               path,
+		Status:             in.status,
+		UpstreamRequestID:  in.upstreamRequestID,
+		SessionID:          in.sessionID,
+		ConversationID:     "",
+		ConversationSource: "",
+		RequestHeaders:     requestHeaders,
+		ResponseHeaders:    responseHeaders,
+		RequestBody:        requestBody,
+		ResponseBody:       responseBody,
+		RequestType:        in.reqType,
+		ResponseType:       in.respType,
+		Started:            in.started,
+	})
 }
 
 // recordCodexHTTPEgress records one Codex HTTP Responses exchange to the
 // capture store from the outbound request, the upstream response, and the
 // (capped) streamed response body.
-func recordCodexHTTPEgress(
-	store *capture.Store,
-	corr correlation.Context,
-	req *http.Request,
-	resp *http.Response,
-	reqBody []byte,
-	respBody []byte,
-	conversationID string,
-	started time.Time,
-) {
-	recordCodexEgress(
-		store,
-		corr,
-		codexEgressRecord{
-			url:               req.URL.String(),
-			method:            req.Method,
-			reqType:           "application/json",
-			respType:          resp.Header.Get("Content-Type"),
-			upstreamRequestID: resp.Header.Get("X-Request-ID"),
-			sessionID:         conversationID,
-			status:            resp.StatusCode,
-			reqHeaders:        req.Header,
-			respHeaders:       resp.Header,
-			reqBody:           reqBody,
-			respBody:          respBody,
-			started:           started,
-		},
-	)
+func recordCodexHTTPEgress(store *capture.Store, corr correlation.Context, req *http.Request, resp *http.Response, reqBody, respBody []byte, conversationID string, started time.Time) {
+	recordCodexEgress(store, corr, codexEgressRecord{
+		url:               req.URL.String(),
+		method:            req.Method,
+		reqType:           "application/json",
+		respType:          resp.Header.Get("Content-Type"),
+		upstreamRequestID: resp.Header.Get("X-Request-Id"),
+		sessionID:         conversationID,
+		status:            resp.StatusCode,
+		reqHeaders:        req.Header,
+		respHeaders:       resp.Header,
+		reqBody:           reqBody,
+		respBody:          respBody,
+		started:           started,
+	})
 }
 
 // joinFrames concatenates websocket frames into one newline-delimited byte
@@ -205,18 +177,14 @@ func recordCodexHTTPEgress(
 // body, capped at codexCaptureBodyCap.
 func joinFrames(frames [][]byte) []byte {
 	var out bytes.Buffer
-
 	for i, frame := range frames {
 		if i > 0 {
 			out.WriteByte('\n')
 		}
-
 		if out.Len() >= codexCaptureBodyCap {
 			break
 		}
-
 		out.Write(frame)
 	}
-
 	return out.Bytes()
 }

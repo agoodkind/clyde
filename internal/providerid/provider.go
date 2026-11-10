@@ -93,7 +93,6 @@ func Parse(raw string) (Provider, bool) {
 		if strings.HasPrefix(string(label), passthroughOverridePrefix) {
 			return ProviderOpenAICompat, true
 		}
-
 		return ProviderUnspecified, false
 	}
 }
@@ -104,7 +103,6 @@ func MustParse(raw string) Provider {
 	if !ok {
 		return ProviderUnspecified
 	}
-
 	return provider
 }
 
@@ -153,16 +151,7 @@ func (p Provider) Valid() bool {
 	switch p {
 	case ProviderUnspecified:
 		return false
-	case ProviderClaude,
-		ProviderCodex,
-		ProviderAnthropic,
-		ProviderOpenAICompat,
-		ProviderMITM,
-		ProviderArtifact,
-		ProviderCursor,
-		ProviderConductor,
-		ProviderZed,
-		ProviderCopilot:
+	case ProviderClaude, ProviderCodex, ProviderAnthropic, ProviderOpenAICompat, ProviderMITM, ProviderArtifact, ProviderCursor, ProviderConductor, ProviderZed, ProviderCopilot:
 		return true
 	default:
 		return false

@@ -16,7 +16,6 @@ func TestResolveDataRootsUsesDefaultPlatformLocation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveDataRoots returned error: %v", err)
 	}
-
 	if len(roots) != 1 {
 		t.Fatalf("roots len = %d, want 1", len(roots))
 	}
@@ -26,11 +25,9 @@ func TestResolveDataRootsUsesDefaultPlatformLocation(t *testing.T) {
 	if root.RootDir != expectedRoot {
 		t.Fatalf("RootDir = %q, want %q", root.RootDir, expectedRoot)
 	}
-
 	if root.GlobalDBPath != filepath.Join(expectedRoot, "globalStorage", "state.vscdb") {
 		t.Fatalf("GlobalDBPath = %q", root.GlobalDBPath)
 	}
-
 	if root.WorkspaceStorageDir != filepath.Join(expectedRoot, "workspaceStorage") {
 		t.Fatalf("WorkspaceStorageDir = %q", root.WorkspaceStorageDir)
 	}
@@ -39,27 +36,21 @@ func TestResolveDataRootsUsesDefaultPlatformLocation(t *testing.T) {
 func TestResolveDataRootsUsesPlatformPathListOverride(t *testing.T) {
 	rootA := filepath.Join(t.TempDir(), "cursor-a")
 	rootB := filepath.Join(t.TempDir(), "cursor-b")
-	override := " " + rootA + " " + string(os.PathListSeparator) + " " + rootB + string(
-		os.PathListSeparator,
-	) + rootA + " "
+	override := " " + rootA + " " + string(os.PathListSeparator) + " " + rootB + string(os.PathListSeparator) + rootA + " "
 
 	roots, err := ResolveDataRoots(t.Context(), override)
 	if err != nil {
 		t.Fatalf("ResolveDataRoots returned error: %v", err)
 	}
-
 	if len(roots) != 2 {
 		t.Fatalf("roots len = %d, want 2", len(roots))
 	}
-
 	if roots[0].RootDir != rootA {
 		t.Fatalf("roots[0].RootDir = %q, want %q", roots[0].RootDir, rootA)
 	}
-
 	if roots[1].RootDir != rootB {
 		t.Fatalf("roots[1].RootDir = %q, want %q", roots[1].RootDir, rootB)
 	}
-
 	if roots[0].GlobalDBPath != filepath.Join(rootA, "globalStorage", "state.vscdb") {
 		t.Fatalf("roots[0].GlobalDBPath = %q", roots[0].GlobalDBPath)
 	}
@@ -82,18 +73,12 @@ func TestListWorkspaceEntriesListsEveryWorkspaceHoldingADatabase(t *testing.T) {
 	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll workspaceDir: %v", err)
 	}
-
 	stateDBPath := filepath.Join(workspaceDir, "state.vscdb")
 	if err := os.WriteFile(stateDBPath, []byte("sqlite"), 0o644); err != nil {
 		t.Fatalf("WriteFile state db: %v", err)
 	}
-
 	workspaceJSONPath := filepath.Join(workspaceDir, "workspace.json")
-	if err := os.WriteFile(
-		workspaceJSONPath,
-		[]byte(`{"folder":"file:///tmp/repo"}`),
-		0o644,
-	); err != nil {
+	if err := os.WriteFile(workspaceJSONPath, []byte(`{"folder":"file:///tmp/repo"}`), 0o644); err != nil {
 		t.Fatalf("WriteFile workspace json: %v", err)
 	}
 
@@ -101,12 +86,7 @@ func TestListWorkspaceEntriesListsEveryWorkspaceHoldingADatabase(t *testing.T) {
 	if err := os.MkdirAll(missingStateDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll missingStateDir: %v", err)
 	}
-
-	if err := os.WriteFile(
-		filepath.Join(missingStateDir, "workspace.json"),
-		[]byte(`{"folder":"file:///tmp/skip"}`),
-		0o644,
-	); err != nil {
+	if err := os.WriteFile(filepath.Join(missingStateDir, "workspace.json"), []byte(`{"folder":"file:///tmp/skip"}`), 0o644); err != nil {
 		t.Fatalf("WriteFile skipped workspace json: %v", err)
 	}
 
@@ -114,7 +94,6 @@ func TestListWorkspaceEntriesListsEveryWorkspaceHoldingADatabase(t *testing.T) {
 	if err := os.MkdirAll(emptyWindowDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll emptyWindowDir: %v", err)
 	}
-
 	emptyWindowDBPath := filepath.Join(emptyWindowDir, "state.vscdb")
 	if err := os.WriteFile(emptyWindowDBPath, []byte("sqlite"), 0o644); err != nil {
 		t.Fatalf("WriteFile empty window state db: %v", err)
@@ -124,64 +103,39 @@ func TestListWorkspaceEntriesListsEveryWorkspaceHoldingADatabase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListWorkspaceEntries returned error: %v", err)
 	}
-
 	if listing.StorageDirMissing {
 		t.Fatal("StorageDirMissing = true for a directory that exists")
 	}
-
 	if listing.Unreadable != 0 {
 		t.Fatalf("Unreadable = %d, want 0", listing.Unreadable)
 	}
-
 	if len(listing.Entries) != 2 {
-		t.Fatalf(
-			"entries len = %d, want the folder workspace and the empty window: %#v",
-			len(listing.Entries),
-			listing.Entries,
-		)
+		t.Fatalf("entries len = %d, want the folder workspace and the empty window: %#v", len(listing.Entries), listing.Entries)
 	}
 
 	byHash := make(map[string]WorkspaceEntry)
-
 	for _, entry := range listing.Entries {
 		byHash[entry.WorkspaceHash] = entry
 	}
-
 	folderEntry, ok := byHash["hash-a"]
 	if !ok {
 		t.Fatalf("hash-a missing from %#v", listing.Entries)
 	}
-
 	if folderEntry.StateDBPath != stateDBPath {
 		t.Fatalf("StateDBPath = %q, want %q", folderEntry.StateDBPath, stateDBPath)
 	}
-
 	if folderEntry.WorkspaceJSONPath != workspaceJSONPath {
-		t.Fatalf(
-			"WorkspaceJSONPath = %q, want %q",
-			folderEntry.WorkspaceJSONPath,
-			workspaceJSONPath,
-		)
+		t.Fatalf("WorkspaceJSONPath = %q, want %q", folderEntry.WorkspaceJSONPath, workspaceJSONPath)
 	}
-
 	emptyWindowEntry, ok := byHash["empty-window"]
 	if !ok {
 		t.Fatalf("empty-window missing from %#v", listing.Entries)
 	}
-
 	if emptyWindowEntry.StateDBPath != emptyWindowDBPath {
-		t.Fatalf(
-			"empty window StateDBPath = %q, want %q",
-			emptyWindowEntry.StateDBPath,
-			emptyWindowDBPath,
-		)
+		t.Fatalf("empty window StateDBPath = %q, want %q", emptyWindowEntry.StateDBPath, emptyWindowDBPath)
 	}
-
 	if emptyWindowEntry.WorkspaceJSONPath != "" {
-		t.Fatalf(
-			"empty window WorkspaceJSONPath = %q, want empty",
-			emptyWindowEntry.WorkspaceJSONPath,
-		)
+		t.Fatalf("empty window WorkspaceJSONPath = %q, want empty", emptyWindowEntry.WorkspaceJSONPath)
 	}
 }
 
@@ -203,18 +157,12 @@ func TestListWorkspaceEntriesSeparatesAMissingDirectoryFromAnUnreadableOne(t *te
 	if err != nil {
 		t.Fatalf("ListWorkspaceEntries returned error: %v", err)
 	}
-
 	if !listing.StorageDirMissing {
 		t.Fatal("StorageDirMissing = false for a directory that does not exist")
 	}
-
 	if listing.Unreadable != 0 {
-		t.Fatalf(
-			"Unreadable = %d, want 0 for a directory that is simply not there",
-			listing.Unreadable,
-		)
+		t.Fatalf("Unreadable = %d, want 0 for a directory that is simply not there", listing.Unreadable)
 	}
-
 	if len(listing.Entries) != 0 {
 		t.Fatalf("entries len = %d, want 0", len(listing.Entries))
 	}
@@ -224,35 +172,24 @@ func TestListWorkspaceEntriesSeparatesAMissingDirectoryFromAnUnreadableOne(t *te
 	if err := os.MkdirAll(unreadableDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll denied workspace: %v", err)
 	}
-
 	deniedDBPath := filepath.Join(unreadableDir, "state.vscdb")
 	if err := os.WriteFile(deniedDBPath, []byte("sqlite"), 0o644); err != nil {
 		t.Fatalf("WriteFile denied state db: %v", err)
 	}
-
 	denyStatOrSkip(t, unreadableDir, deniedDBPath)
 
 	denied, err := root.ListWorkspaceEntries()
 	if err != nil {
 		t.Fatalf("ListWorkspaceEntries returned error: %v", err)
 	}
-
 	if denied.StorageDirMissing {
 		t.Fatal("StorageDirMissing = true for a directory that exists")
 	}
-
 	if denied.Unreadable != 1 {
-		t.Fatalf(
-			"Unreadable = %d, want the workspace whose contents could not be examined counted",
-			denied.Unreadable,
-		)
+		t.Fatalf("Unreadable = %d, want the workspace whose contents could not be examined counted", denied.Unreadable)
 	}
-
 	if len(denied.Entries) != 0 {
-		t.Fatalf(
-			"entries = %#v, want the unreadable workspace not listed as usable",
-			denied.Entries,
-		)
+		t.Fatalf("entries = %#v, want the unreadable workspace not listed as usable", denied.Entries)
 	}
 }
 
@@ -266,13 +203,8 @@ func TestWorkspaceDescriptorPathKeepsADescriptorItCannotStat(t *testing.T) {
 	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll workspace: %v", err)
 	}
-
 	descriptorPath := filepath.Join(workspaceDir, "workspace.json")
-	if err := os.WriteFile(
-		descriptorPath,
-		[]byte(`{"folder":"file:///tmp/repo"}`),
-		0o644,
-	); err != nil {
+	if err := os.WriteFile(descriptorPath, []byte(`{"folder":"file:///tmp/repo"}`), 0o644); err != nil {
 		t.Fatalf("WriteFile descriptor: %v", err)
 	}
 
@@ -285,7 +217,6 @@ func TestWorkspaceDescriptorPathKeepsADescriptorItCannotStat(t *testing.T) {
 	if err := os.MkdirAll(emptyWindowDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll empty window: %v", err)
 	}
-
 	if got := workspaceDescriptorPath(emptyWindowDir); got != "" {
 		t.Fatalf("descriptor path = %q, want empty for a workspace that has none", got)
 	}
@@ -293,9 +224,7 @@ func TestWorkspaceDescriptorPathKeepsADescriptorItCannotStat(t *testing.T) {
 	// A descriptor whose directory denies metadata access is not the same answer.
 	denyStatOrSkip(t, workspaceDir, descriptorPath)
 	if got := workspaceDescriptorPath(workspaceDir); got == "" {
-		t.Fatal(
-			"a descriptor that could not be stat'd reported as absent, so the conversation indexes with an empty workspace root",
-		)
+		t.Fatal("a descriptor that could not be stat'd reported as absent, so the conversation indexes with an empty workspace root")
 	}
 }
 
@@ -313,14 +242,9 @@ func denyStatOrSkip(t *testing.T, dir string, pathInside string) {
 	if err := os.Chmod(dir, 0o000); err != nil {
 		t.Fatalf("Chmod %s: %v", dir, err)
 	}
-
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
 	if _, err := os.Stat(pathInside); err == nil {
-		t.Skipf(
-			"this runner stats %s despite mode 0000 on %s, so the denial this test needs did not happen",
-			pathInside,
-			dir,
-		)
+		t.Skipf("this runner stats %s despite mode 0000 on %s, so the denial this test needs did not happen", pathInside, dir)
 	}
 }
 
@@ -341,7 +265,6 @@ func TestListWorkspaceEntriesCountsADatabaseLinkItCannotFollow(t *testing.T) {
 	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll linked workspace: %v", err)
 	}
-
 	unmounted := filepath.Join(t.TempDir(), "volume-not-mounted", "state.vscdb")
 	if err := os.Symlink(unmounted, filepath.Join(workspaceDir, "state.vscdb")); err != nil {
 		t.Fatalf("Symlink state db: %v", err)
@@ -351,26 +274,17 @@ func TestListWorkspaceEntriesCountsADatabaseLinkItCannotFollow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListWorkspaceEntries returned error: %v", err)
 	}
-
 	if len(listing.Entries) != 0 {
 		t.Fatalf("entries = %#v, want the link not listed as a usable workspace", listing.Entries)
 	}
-
 	if listing.Unreadable != 1 {
-		t.Fatalf(
-			"Unreadable = %d, want the workspace whose database link would not resolve counted",
-			listing.Unreadable,
-		)
+		t.Fatalf("Unreadable = %d, want the workspace whose database link would not resolve counted", listing.Unreadable)
 	}
 }
 
 func TestReadWorkspaceFolderPathStripsFileScheme(t *testing.T) {
 	workspaceJSONPath := filepath.Join(t.TempDir(), "workspace.json")
-	if err := os.WriteFile(
-		workspaceJSONPath,
-		[]byte(`{"folder":"file:///Users/alice/source/cursor%20repo"}`),
-		0o644,
-	); err != nil {
+	if err := os.WriteFile(workspaceJSONPath, []byte(`{"folder":"file:///Users/alice/source/cursor%20repo"}`), 0o644); err != nil {
 		t.Fatalf("WriteFile workspace json: %v", err)
 	}
 
@@ -378,7 +292,6 @@ func TestReadWorkspaceFolderPathStripsFileScheme(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadWorkspaceFolderPath returned error: %v", err)
 	}
-
 	want := filepath.FromSlash("/Users/alice/source/cursor repo")
 	if folderPath != want {
 		t.Fatalf("folderPath = %q, want %q", folderPath, want)
@@ -387,11 +300,7 @@ func TestReadWorkspaceFolderPathStripsFileScheme(t *testing.T) {
 
 func TestReadWorkspaceFolderPathStripsUppercaseFileScheme(t *testing.T) {
 	workspaceJSONPath := filepath.Join(t.TempDir(), "workspace.json")
-	if err := os.WriteFile(
-		workspaceJSONPath,
-		[]byte(`{"folder":"FILE:///Users/alice/source/cursor%20repo"}`),
-		0o644,
-	); err != nil {
+	if err := os.WriteFile(workspaceJSONPath, []byte(`{"folder":"FILE:///Users/alice/source/cursor%20repo"}`), 0o644); err != nil {
 		t.Fatalf("WriteFile workspace json: %v", err)
 	}
 
@@ -399,7 +308,6 @@ func TestReadWorkspaceFolderPathStripsUppercaseFileScheme(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadWorkspaceFolderPath returned error: %v", err)
 	}
-
 	want := filepath.FromSlash("/Users/alice/source/cursor repo")
 	if folderPath != want {
 		t.Fatalf("folderPath = %q, want %q", folderPath, want)
@@ -412,12 +320,10 @@ func TestRemoteWorkspaceAuthoritySurvivesDescriptorRead(t *testing.T) {
 	if err := os.WriteFile(descriptor, body, 0o600); err != nil {
 		t.Fatal(err)
 	}
-
 	got, err := ReadWorkspaceFolderPath(descriptor)
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	if got != "vscode-remote://ssh-remote%2Bexample/path" {
 		t.Fatalf("workspace identity = %q", got)
 	}

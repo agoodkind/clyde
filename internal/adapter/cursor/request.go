@@ -50,7 +50,6 @@ type Request struct {
 func NewUntranslatedRequest(req adapteropenai.ChatRequest) Request {
 	var out Request
 	out.OpenAI = req
-
 	return out
 }
 
@@ -62,8 +61,7 @@ func TranslateRequest(req adapteropenai.ChatRequest) Request {
 		User:           strings.TrimSpace(req.User),
 		RequestID:      metadataString(req.Metadata, "cursorRequestId"),
 		ConversationID: metadataString(req.Metadata, "cursorConversationId"),
-		GenerationID: metadataString(
-			req.Metadata,
+		GenerationID: metadataString(req.Metadata,
 			"cursorGenerationId",
 			"cursor_generation_id",
 			"generationId",
@@ -71,26 +69,14 @@ func TranslateRequest(req adapteropenai.ChatRequest) Request {
 			"requestId",
 			"request_id",
 		),
-		WorkspacePath:      workspacePath(req),
-		NormalizedModel:    NormalizeModelAlias(req.Model),
-		Metadata:           metadataMap(req.Metadata),
-		RawToolNames:       nil,
-		Mode:               "",
-		CanSwitchMode:      false,
-		CanSpawnAgent:      false,
-		PathKind:           "",
-		HasSubagentTool:    false,
-		HasSwitchModeTool:  false,
-		HasAskQuestionTool: false,
-		HasCreatePlanTool:  false,
-		HasApplyPatchTool:  false,
-		MCPToolNames:       nil,
+		WorkspacePath:   workspacePath(req),
+		NormalizedModel: NormalizeModelAlias(req.Model),
+		Metadata:        metadataMap(req.Metadata), RawToolNames: nil, Mode: "", CanSwitchMode: false, CanSpawnAgent: false, PathKind: "", HasSubagentTool: false, HasSwitchModeTool: false, HasAskQuestionTool: false, HasCreatePlanTool: false, HasApplyPatchTool: false, MCPToolNames: nil,
 	}
 	translated.RawToolNames = rawToolNames(req)
 	translated.Mode = requestMode(translated.RawToolNames)
 	translated.CanSwitchMode = hasRawToolName(translated.RawToolNames, "SwitchMode")
-	translated.CanSpawnAgent = hasRawToolName(translated.RawToolNames, "Subagent") ||
-		hasRawToolName(translated.RawToolNames, "Task")
+	translated.CanSpawnAgent = hasRawToolName(translated.RawToolNames, "Subagent") || hasRawToolName(translated.RawToolNames, "Task")
 	translated.HasSubagentTool = translated.CanSpawnAgent
 	translated.HasSwitchModeTool = translated.CanSwitchMode
 	translated.HasAskQuestionTool = hasRawToolName(translated.RawToolNames, "AskQuestion")
@@ -98,7 +84,6 @@ func TranslateRequest(req adapteropenai.ChatRequest) Request {
 	translated.HasApplyPatchTool = hasRawToolName(translated.RawToolNames, "ApplyPatch")
 	translated.MCPToolNames = collectMCPToolNames(translated.RawToolNames)
 	translated.PathKind = RequestPath(translated)
-
 	return translated
 }
 
@@ -111,19 +96,15 @@ func collectMCPToolNames(toolNames []string) []string {
 	if len(toolNames) == 0 {
 		return nil
 	}
-
 	out := make([]string, 0, 2)
-
 	for _, name := range toolNames {
 		if isMCPToolName(name) {
 			out = append(out, name)
 		}
 	}
-
 	if len(out) == 0 {
 		return nil
 	}
-
 	return out
 }
 
@@ -141,9 +122,7 @@ func isMCPToolName(name string) bool {
 	case mcpToolCallTool, mcpToolFetchResource:
 		return true
 	}
-
 	lowered := strings.ToLower(name)
-
 	return strings.Contains(lowered, "mcp")
 }
 
@@ -158,20 +137,18 @@ func (r Request) Context() Context {
 }
 
 func metadataString(raw json.RawMessage, keys ...string) string {
-	metadata := metadataMap(raw)
-	if len(metadata) == 0 {
+	m := metadataMap(raw)
+	if len(m) == 0 {
 		return ""
 	}
-
 	for _, key := range keys {
-		if v, ok := metadata[key]; ok {
+		if v, ok := m[key]; ok {
 			var s string
 			if json.Unmarshal(v, &s) == nil && strings.TrimSpace(s) != "" {
 				return strings.TrimSpace(s)
 			}
 		}
 	}
-
 	return ""
 }
 
@@ -179,12 +156,10 @@ func metadataMap(raw json.RawMessage) map[string]json.RawMessage {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil
 	}
-
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return nil
 	}
-
 	return m
 }
 
@@ -194,40 +169,32 @@ func metadataHasAny(m map[string]json.RawMessage, keys ...string) bool {
 		if !ok {
 			continue
 		}
-
 		var asBool bool
 		if json.Unmarshal(raw, &asBool) == nil {
 			if asBool {
 				return true
 			}
-
 			continue
 		}
-
 		var asString string
 		if json.Unmarshal(raw, &asString) == nil {
 			trimmed := strings.TrimSpace(asString)
 			if trimmed != "" && trimmed != "false" {
 				return true
 			}
-
 			continue
 		}
-
 		var asNumber float64
 		if json.Unmarshal(raw, &asNumber) == nil {
 			if asNumber != 0 {
 				return true
 			}
-
 			continue
 		}
-
 		if string(raw) != "null" {
 			return true
 		}
 	}
-
 	return false
 }
 
@@ -238,13 +205,11 @@ func rawToolNames(req adapteropenai.ChatRequest) []string {
 			names = append(names, name)
 		}
 	}
-
 	for _, fn := range req.Functions {
 		if name := strings.TrimSpace(fn.Name); name != "" {
 			names = append(names, name)
 		}
 	}
-
 	return names
 }
 
@@ -252,7 +217,6 @@ func requestMode(toolNames []string) Mode {
 	if hasRawToolName(toolNames, "CreatePlan") {
 		return ModePlan
 	}
-
 	return ModeAgent
 }
 
@@ -283,14 +247,12 @@ func DeriveChatKey(req adapteropenai.ChatRequest) string {
 	if firstUser == "" {
 		return ""
 	}
-
 	model := strings.TrimSpace(req.Model)
 	hasher := sha256.New()
 	hasher.Write([]byte(model))
 	hasher.Write([]byte{0})
 	hasher.Write([]byte(firstUser))
 	sum := hasher.Sum(nil)
-
 	return hex.EncodeToString(sum[:8])
 }
 
@@ -302,10 +264,8 @@ func firstUserMessageContent(messages []adapteropenai.ChatMessage) string {
 		if msg.Role != "user" {
 			continue
 		}
-
 		return decodeUserMessageText(msg.Content)
 	}
-
 	return ""
 }
 
@@ -318,19 +278,16 @@ func decodeUserMessageText(content json.RawMessage) string {
 	if err := json.Unmarshal(content, &plain); err == nil && plain != "" {
 		return plain
 	}
-
 	var parts []map[string]json.RawMessage
 	if err := json.Unmarshal(content, &parts); err != nil {
 		return ""
 	}
-
 	for _, part := range parts {
 		text := firstTextPart(part)
 		if text != "" {
 			return text
 		}
 	}
-
 	return ""
 }
 
@@ -342,21 +299,17 @@ func firstTextPart(part map[string]json.RawMessage) string {
 	if !ok {
 		return ""
 	}
-
 	var partType string
 	if err := json.Unmarshal(typeRaw, &partType); err != nil || partType != "text" {
 		return ""
 	}
-
 	textRaw, ok := part["text"]
 	if !ok {
 		return ""
 	}
-
 	var partText string
 	if err := json.Unmarshal(textRaw, &partText); err != nil {
 		return ""
 	}
-
 	return partText
 }

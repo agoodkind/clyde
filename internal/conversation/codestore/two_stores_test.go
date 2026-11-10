@@ -37,29 +37,13 @@ func TestTwoStoresKeepEachOthersRows(t *testing.T) {
 	root := t.TempDir()
 	first, model := openCollection(t, root)
 	defer first.Close()
-	upsert(
-		t,
-		first,
-		testRow(t, model, "first-a", "claude:first", "alpha row written by the first store"),
-	)
+	upsert(t, first, testRow(t, model, "first-a", "claude:first", "alpha row written by the first store"))
 
 	second, _ := openCollection(t, root)
 	defer second.Close()
-	upsert(
-		t,
-		second,
-		testRow(t, model, "second-b", "claude:second", "bravo row written by the second store"),
-	)
-	upsert(
-		t,
-		first,
-		testRow(t, model, "first-c", "claude:first", "gamma row written by the first store"),
-	)
-	upsert(
-		t,
-		second,
-		testRow(t, model, "second-d", "claude:second", "delta row written by the second store"),
-	)
+	upsert(t, second, testRow(t, model, "second-b", "claude:second", "bravo row written by the second store"))
+	upsert(t, first, testRow(t, model, "first-c", "claude:first", "gamma row written by the first store"))
+	upsert(t, second, testRow(t, model, "second-d", "claude:second", "delta row written by the second store"))
 
 	want := map[string]string{
 		"first-a":  "alpha row written by the first store",
@@ -90,17 +74,12 @@ func TestStoreReadsAndWritesAfterAnotherStoreCompacts(t *testing.T) {
 
 	repeated := make([]collection.Row, 0, twoStoresCompactRows)
 	row := testRow(t, model, "rewritten", "claude:first", "row written many times")
-
 	for range twoStoresCompactRows {
 		repeated = append(repeated, row)
 	}
-
 	upsert(t, first, repeated...)
 
-	want := map[string]string{
-		"kept":      "row before compaction",
-		"rewritten": "row written many times",
-	}
+	want := map[string]string{"kept": "row before compaction", "rewritten": "row written many times"}
 	requireStoreContents(t, second, want)
 	upsert(t, second, testRow(t, model, "later", "claude:second", "row after compaction"))
 	want["later"] = "row after compaction"
@@ -126,47 +105,27 @@ func TestStoreReadWaitsForAnotherStoreLock(t *testing.T) {
 	}
 	finished := make(chan readResult, 1)
 	go func() {
-		hits, queryErr := store.Query(
-			context.Background(),
-			collection.QueryRequest{
-				Collection:  testCollection,
-				Filter:      nil,
-				Limit:       0,
-				Declaration: declaration(),
-			},
-		)
+		hits, queryErr := store.Query(context.Background(), collection.QueryRequest{Collection: testCollection, Filter: nil, Limit: 0, Declaration: declaration()})
 		finished <- readResult{hits: hits, err: queryErr}
 	}()
 	select {
 	case result := <-finished:
-		t.Fatalf(
-			"Query finished while the test owned the exclusive kernel lock. It returned error %v.",
-			result.err,
-		)
+		t.Fatalf("Query finished while the test owned the exclusive kernel lock. It returned error %v.", result.err)
 	case <-time.After(readWaitObservation):
 	}
-
 	if err := lock.Close(); err != nil {
 		t.Fatalf("The test could not release the exclusive kernel lock: %v.", err)
 	}
-
 	select {
 	case result := <-finished:
 		if result.err != nil {
-			t.Fatalf(
-				"The read failed after the test released the exclusive kernel lock: %v.",
-				result.err,
-			)
+			t.Fatalf("The read failed after the test released the exclusive kernel lock: %v.", result.err)
 		}
-
 		if len(result.hits) != 1 {
 			t.Fatalf("The read returned %d rows instead of the expected one row.", len(result.hits))
 		}
 	case <-time.After(lockTestResumeLimit):
-		t.Fatalf(
-			"The read did not finish within %v after the test released the exclusive kernel lock.",
-			lockTestResumeLimit,
-		)
+		t.Fatalf("The read did not finish within %v after the test released the exclusive kernel lock.", lockTestResumeLimit)
 	}
 }
 
@@ -184,16 +143,7 @@ func TestStoreLockWaitEndsWhenRequestCancels(t *testing.T) {
 
 	requests := map[string]func(context.Context) error{
 		"read": func(ctx context.Context) error {
-			_, err := store.Query(
-				ctx,
-				collection.QueryRequest{
-					Collection:  testCollection,
-					Filter:      nil,
-					Limit:       0,
-					Declaration: declaration(),
-				},
-			)
-
+			_, err := store.Query(ctx, collection.QueryRequest{Collection: testCollection, Filter: nil, Limit: 0, Declaration: declaration()})
 			return err
 		},
 		"write": func(ctx context.Context) error {
@@ -201,39 +151,26 @@ func TestStoreLockWaitEndsWhenRequestCancels(t *testing.T) {
 		},
 	}
 	for name, request := range requests {
-		t.Run(
-			name,
-			func(t *testing.T) {
-				ctx, cancel := context.WithCancel(context.Background())
-				defer cancel()
-				finished := make(chan error, 1)
-				go func() { finished <- request(ctx) }()
-				select {
-				case err := <-finished:
-					t.Fatalf(
-						"The request finished before the test canceled its context. It returned error %v.",
-						err,
-					)
-				case <-time.After(readWaitObservation):
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			finished := make(chan error, 1)
+			go func() { finished <- request(ctx) }()
+			select {
+			case err := <-finished:
+				t.Fatalf("The request finished before the test canceled its context. It returned error %v.", err)
+			case <-time.After(readWaitObservation):
+			}
+			cancel()
+			select {
+			case err := <-finished:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("The canceled request returned %v; the test expected an error matching context.Canceled.", err)
 				}
-
-				cancel()
-				select {
-				case err := <-finished:
-					if !errors.Is(err, context.Canceled) {
-						t.Fatalf(
-							"The canceled request returned %v; the test expected an error matching context.Canceled.",
-							err,
-						)
-					}
-				case <-time.After(lockTestResumeLimit):
-					t.Fatalf(
-						"The request did not end within %v after cancellation.",
-						lockTestResumeLimit,
-					)
-				}
-			},
-		)
+			case <-time.After(lockTestResumeLimit):
+				t.Fatalf("The request did not end within %v after cancellation.", lockTestResumeLimit)
+			}
+		})
 	}
 }
 
@@ -247,12 +184,7 @@ func TestStoreRejectsRequestsAfterClose(t *testing.T) {
 	if _, err := store.Load(ctx, testCollection); !errors.Is(err, codestore.ErrStoreClosed) {
 		t.Fatalf("Load returned %v instead of ErrStoreClosed after Close.", err)
 	}
-
-	ensure := collection.EnsureRequest{
-		Collection:  testCollection,
-		Declaration: declaration(),
-		Dimension:   staticembed.Dimensions,
-	}
+	ensure := collection.EnsureRequest{Collection: testCollection, Declaration: declaration(), Dimension: staticembed.Dimensions}
 	if err := store.EnsureCollection(ctx, ensure); !errors.Is(err, codestore.ErrStoreClosed) {
 		t.Fatalf("EnsureCollection returned %v instead of ErrStoreClosed after Close.", err)
 	}
@@ -265,95 +197,60 @@ func TestStoreRejectsRequestsAfterClose(t *testing.T) {
 func TestStoreCloseEndsRequestsWaitingForCollectionLock(t *testing.T) {
 	requests := map[string]func(*codestore.Store, collection.Row) error{
 		"read": func(store *codestore.Store, _ collection.Row) error {
-			_, err := store.Query(
-				context.Background(),
-				collection.QueryRequest{
-					Collection:  testCollection,
-					Filter:      nil,
-					Limit:       0,
-					Declaration: declaration(),
-				},
-			)
-
+			_, err := store.Query(context.Background(), collection.QueryRequest{Collection: testCollection, Filter: nil, Limit: 0, Declaration: declaration()})
 			return err
 		},
 		"write": func(store *codestore.Store, row collection.Row) error {
-			return store.Upsert(
-				context.Background(),
-				testCollection,
-				declaration(),
-				[]collection.Row{row},
-			)
+			return store.Upsert(context.Background(), testCollection, declaration(), []collection.Row{row})
 		},
 	}
-
 	for _, loaded := range []bool{true, false} {
 		for name, request := range requests {
-			t.Run(
-				fmt.Sprintf("%s loaded=%t", name, loaded),
-				func(t *testing.T) {
-					root := t.TempDir()
-					store, model := openCollection(t, root)
-					row := testRow(t, model, "kept", "claude:first", "row before the lock")
-					upsert(t, store, row)
-					if !loaded {
-						store.Close()
-						reopened, err := codestore.Open(root, staticembed.ModelName)
-						if err != nil {
-							t.Fatalf("codestore.Open failed to open the store: %v.", err)
-						}
-
-						store = reopened
+			t.Run(fmt.Sprintf("%s loaded=%t", name, loaded), func(t *testing.T) {
+				root := t.TempDir()
+				store, model := openCollection(t, root)
+				row := testRow(t, model, "kept", "claude:first", "row before the lock")
+				upsert(t, store, row)
+				if !loaded {
+					store.Close()
+					reopened, err := codestore.Open(root, staticembed.ModelName)
+					if err != nil {
+						t.Fatalf("codestore.Open failed to open the store: %v.", err)
 					}
+					store = reopened
+				}
+				lock := takeCollectionLock(t, root)
+				defer func() { _ = lock.Close() }()
 
-					lock := takeCollectionLock(t, root)
-					defer func() { _ = lock.Close() }()
-
-					finished := make(chan error, 1)
-					go func() { finished <- request(store, row) }()
-					select {
-					case err := <-finished:
-						t.Fatalf(
-							"The request returned %v before the test released the exclusive kernel lock.",
-							err,
-						)
-					case <-time.After(readWaitObservation):
+				finished := make(chan error, 1)
+				go func() { finished <- request(store, row) }()
+				select {
+				case err := <-finished:
+					t.Fatalf("The request returned %v before the test released the exclusive kernel lock.", err)
+				case <-time.After(readWaitObservation):
+				}
+				closed := make(chan struct{})
+				go func() {
+					store.Close()
+					close(closed)
+				}()
+				select {
+				case <-closed:
+				case <-time.After(lockTestResumeLimit):
+					t.Fatalf("Close did not finish within %v while the request waited for the exclusive kernel lock.", lockTestResumeLimit)
+				}
+				if err := lock.Close(); err != nil {
+					t.Fatalf("The test could not release the exclusive kernel lock: %v.", err)
+				}
+				select {
+				case err := <-finished:
+					if !errors.Is(err, codestore.ErrStoreClosed) {
+						t.Fatalf("The waiting request returned %v instead of ErrStoreClosed.", err)
 					}
-
-					closed := make(chan struct{})
-					go func() {
-						store.Close()
-						close(closed)
-					}()
-					select {
-					case <-closed:
-					case <-time.After(lockTestResumeLimit):
-						t.Fatalf(
-							"Close did not finish within %v while the request waited for the exclusive kernel lock.",
-							lockTestResumeLimit,
-						)
-					}
-
-					if err := lock.Close(); err != nil {
-						t.Fatalf("The test could not release the exclusive kernel lock: %v.", err)
-					}
-
-					select {
-					case err := <-finished:
-						if !errors.Is(err, codestore.ErrStoreClosed) {
-							t.Fatalf(
-								"The waiting request returned %v instead of ErrStoreClosed.",
-								err,
-							)
-						}
-					case <-time.After(lockTestResumeLimit):
-						t.Fatalf(
-							"The request did not end within %v after the test released the exclusive kernel lock.",
-							lockTestResumeLimit,
-						)
-					}
-				},
-			)
+				case <-time.After(lockTestResumeLimit):
+					t.Fatalf("The request did not end within %v after the test released the exclusive kernel lock.", lockTestResumeLimit)
+				}
+			})
 		}
 	}
 }
@@ -369,21 +266,13 @@ func TestEnsureCollectionCreatesNothingAfterCancellation(t *testing.T) {
 		t.Fatalf("codestore.Open failed to open the store: %v.", err)
 	}
 	defer store.Close()
-	ensure := collection.EnsureRequest{
-		Collection:  testCollection,
-		Declaration: declaration(),
-		Dimension:   staticembed.Dimensions,
-	}
+	ensure := collection.EnsureRequest{Collection: testCollection, Declaration: declaration(), Dimension: staticembed.Dimensions}
 
 	canceled, cancelNow := context.WithCancel(context.Background())
 	cancelNow()
 	if err := store.EnsureCollection(canceled, ensure); !errors.Is(err, context.Canceled) {
-		t.Fatalf(
-			"EnsureCollection returned %v; the test expected an error matching context.Canceled.",
-			err,
-		)
+		t.Fatalf("EnsureCollection returned %v; the test expected an error matching context.Canceled.", err)
 	}
-
 	requireNoCollection(t, root)
 
 	lock := createCollectionLock(t, root)
@@ -394,30 +283,21 @@ func TestEnsureCollectionCreatesNothingAfterCancellation(t *testing.T) {
 	go func() { finished <- store.EnsureCollection(waiting, ensure) }()
 	select {
 	case err := <-finished:
-		t.Fatalf(
-			"EnsureCollection returned %v before the test released the exclusive kernel lock.",
-			err,
-		)
+		t.Fatalf("EnsureCollection returned %v before the test released the exclusive kernel lock.", err)
 	case <-time.After(readWaitObservation):
 	}
-
 	cancelWait()
 	if err := lock.Close(); err != nil {
 		t.Fatalf("The test could not release the exclusive kernel lock: %v.", err)
 	}
-
 	select {
 	case err := <-finished:
 		if !errors.Is(err, context.Canceled) {
-			t.Fatalf(
-				"EnsureCollection returned %v; the test expected an error matching context.Canceled.",
-				err,
-			)
+			t.Fatalf("EnsureCollection returned %v; the test expected an error matching context.Canceled.", err)
 		}
 	case <-time.After(lockTestResumeLimit):
 		t.Fatalf("EnsureCollection did not end within %v after cancellation.", lockTestResumeLimit)
 	}
-
 	requireNoCollection(t, root)
 }
 
@@ -437,19 +317,12 @@ func TestEnsureCollectionCreatesNothingAfterCancellationDuringStoreWait(t *testi
 	defer func() { _ = lock.Close() }()
 	waiting, cancelWait := context.WithCancel(context.Background())
 	defer cancelWait()
-	ensure := collection.EnsureRequest{
-		Collection:  testCollection,
-		Declaration: declaration(),
-		Dimension:   staticembed.Dimensions,
-	}
+	ensure := collection.EnsureRequest{Collection: testCollection, Declaration: declaration(), Dimension: staticembed.Dimensions}
 	finished := make(chan error, 1)
 	go func() { finished <- store.EnsureCollection(waiting, ensure) }()
 	select {
 	case err := <-finished:
-		t.Fatalf(
-			"EnsureCollection returned %v before the test released the exclusive kernel lock.",
-			err,
-		)
+		t.Fatalf("EnsureCollection returned %v before the test released the exclusive kernel lock.", err)
 	case <-time.After(readWaitObservation):
 	}
 
@@ -457,31 +330,21 @@ func TestEnsureCollectionCreatesNothingAfterCancellationDuringStoreWait(t *testi
 	if err := os.Mkdir(otherDirectory, 0o700); err != nil {
 		t.Fatalf("The test could not create the other collection directory: %v.", err)
 	}
-
 	pipePath := filepath.Join(otherDirectory, "collection.json.tmp")
 	if err := syscall.Mkfifo(pipePath, 0o600); err != nil {
 		t.Fatalf("The test could not create the named pipe: %v.", err)
 	}
-
 	// A nonblocking open succeeds before a writer exists.
 	pipe, err := os.OpenFile(pipePath, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		t.Fatalf("The test could not open the named pipe: %v.", err)
 	}
-
 	defer func() { _ = pipe.Close() }()
 	otherEnsure := collection.EnsureRequest{
 		Collection: otherCreationCollection,
 		Declaration: collection.Declaration{
 			ItemIDColumn: "",
-			Scalars: []collection.ScalarColumn{
-				{
-					Name:      strings.Repeat("c", fullPipeHeaderBytes),
-					Type:      collection.ScalarTypeString,
-					Nullable:  true,
-					MaxLength: 0,
-				},
-			},
+			Scalars:      []collection.ScalarColumn{{Name: strings.Repeat("c", fullPipeHeaderBytes), Type: collection.ScalarTypeString, Nullable: true, MaxLength: 0}},
 		},
 		Dimension: staticembed.Dimensions,
 	}
@@ -492,7 +355,6 @@ func TestEnsureCollectionCreatesNothingAfterCancellationDuringStoreWait(t *testi
 	if err := lock.Close(); err != nil {
 		t.Fatalf("The test could not release the exclusive kernel lock: %v.", err)
 	}
-
 	waitForHeldCollectionLock(t, root)
 	cancelWait()
 	drained := make(chan error, 1)
@@ -503,24 +365,18 @@ func TestEnsureCollectionCreatesNothingAfterCancellationDuringStoreWait(t *testi
 	select {
 	case err := <-finished:
 		if !errors.Is(err, context.Canceled) {
-			t.Fatalf(
-				"EnsureCollection returned %v; the test expected an error matching context.Canceled.",
-				err,
-			)
+			t.Fatalf("EnsureCollection returned %v; the test expected an error matching context.Canceled.", err)
 		}
 	case <-time.After(lockTestResumeLimit):
 		t.Fatalf("EnsureCollection did not end within %v after cancellation.", lockTestResumeLimit)
 	}
-
 	requireNoCollection(t, root)
 	if err := <-drained; err != nil {
 		t.Fatalf("The test could not read the named pipe: %v.", err)
 	}
-
 	if err := pipe.Close(); err != nil {
 		t.Fatalf("The test could not close the named pipe: %v.", err)
 	}
-
 	finishOtherCreation(t, otherDirectory, otherFinished)
 }
 
@@ -530,27 +386,19 @@ func TestEnsureCollectionCreatesNothingAfterCancellationDuringStoreWait(t *testi
 func finishOtherCreation(t *testing.T, directory string, finished <-chan error) {
 	t.Helper()
 	deadline := time.Now().Add(lockTestResumeLimit)
-
 	for {
 		select {
 		case <-finished:
 			return
 		default:
 		}
-
 		// The header can be absent because the request can fail before renaming the pipe.
-		if header, err := os.OpenFile(
-			filepath.Join(directory, "collection.json"),
-			os.O_RDWR,
-			0,
-		); err == nil {
+		if header, err := os.OpenFile(filepath.Join(directory, "collection.json"), os.O_RDWR, 0); err == nil {
 			_ = header.Close()
 		}
-
 		if time.Now().After(deadline) {
 			t.Fatalf("The other request did not end within %v.", lockTestResumeLimit)
 		}
-
 		time.Sleep(lockPollDelay)
 	}
 }
@@ -565,27 +413,21 @@ func waitForPipeWriter(t *testing.T, pipe *os.File) {
 	if err := syscall.SetNonblock(descriptor, true); err != nil {
 		t.Fatalf("The test could not enable nonblocking reads on the named pipe: %v.", err)
 	}
-
 	firstByte := make([]byte, 1)
 	deadline := time.Now().Add(lockTestResumeLimit)
-
 	for {
 		count, err := syscall.Read(descriptor, firstByte)
 		if count > 0 {
 			break
 		}
-
 		if err != nil && !errors.Is(err, syscall.EAGAIN) && !errors.Is(err, syscall.EINTR) {
 			t.Fatalf("The test could not read the named pipe: %v.", err)
 		}
-
 		if time.Now().After(deadline) {
 			t.Fatalf("The test did not read the first header byte within %v.", lockTestResumeLimit)
 		}
-
 		time.Sleep(lockPollDelay)
 	}
-
 	if err := syscall.SetNonblock(descriptor, false); err != nil {
 		t.Fatalf("The test could not enable blocking reads on the named pipe: %v.", err)
 	}
@@ -599,11 +441,9 @@ func waitForHeldCollectionLock(t *testing.T, root string) {
 	if err != nil {
 		t.Fatalf("The test could not open the collection lock file: %v.", err)
 	}
-
 	defer func() { _ = probe.Close() }()
 	deadline := time.Now().Add(lockTestResumeLimit)
 	heldSince := time.Time{}
-
 	for {
 		lockErr := syscall.Flock(int(probe.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 		switch {
@@ -619,11 +459,9 @@ func waitForHeldCollectionLock(t *testing.T, root string) {
 		case time.Since(heldSince) >= readWaitObservation:
 			return
 		}
-
 		if time.Now().After(deadline) {
 			t.Fatalf("The request did not keep the collection lock within %v.", lockTestResumeLimit)
 		}
-
 		time.Sleep(lockPollDelay)
 	}
 }
@@ -638,63 +476,40 @@ func TestEnsureCollectionCreatesNothingAfterClose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("codestore.Open failed to open the store: %v.", err)
 	}
-
 	lock := createCollectionLock(t, root)
 	defer func() { _ = lock.Close() }()
-	ensure := collection.EnsureRequest{
-		Collection:  testCollection,
-		Declaration: declaration(),
-		Dimension:   staticembed.Dimensions,
-	}
+	ensure := collection.EnsureRequest{Collection: testCollection, Declaration: declaration(), Dimension: staticembed.Dimensions}
 	finished := make(chan error, 1)
 	go func() { finished <- store.EnsureCollection(context.Background(), ensure) }()
 	select {
 	case err := <-finished:
-		t.Fatalf(
-			"EnsureCollection returned %v before the test released the exclusive kernel lock.",
-			err,
-		)
+		t.Fatalf("EnsureCollection returned %v before the test released the exclusive kernel lock.", err)
 	case <-time.After(readWaitObservation):
 	}
-
 	store.Close()
 	if err := lock.Close(); err != nil {
 		t.Fatalf("The test could not release the exclusive kernel lock: %v.", err)
 	}
-
 	select {
 	case err := <-finished:
 		if !errors.Is(err, codestore.ErrStoreClosed) {
-			t.Fatalf(
-				"EnsureCollection returned %v; the test expected an error matching ErrStoreClosed.",
-				err,
-			)
+			t.Fatalf("EnsureCollection returned %v; the test expected an error matching ErrStoreClosed.", err)
 		}
 	case <-time.After(lockTestResumeLimit):
-		t.Fatalf(
-			"EnsureCollection did not end within %v after the test released the lock.",
-			lockTestResumeLimit,
-		)
+		t.Fatalf("EnsureCollection did not end within %v after the test released the lock.", lockTestResumeLimit)
 	}
-
 	requireNoCollection(t, root)
 }
 
 func createCollectionLock(t *testing.T, root string) *os.File {
 	t.Helper()
-	lock, err := os.OpenFile(
-		filepath.Join(root, testCollection+".lock"),
-		os.O_CREATE|os.O_RDWR,
-		0o600,
-	)
+	lock, err := os.OpenFile(filepath.Join(root, testCollection+".lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		t.Fatalf("The test could not create the collection lock file: %v.", err)
 	}
-
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
 		t.Fatalf("The test does not own the exclusive kernel lock: %v.", err)
 	}
-
 	return lock
 }
 
@@ -719,22 +534,18 @@ func TestStoreFailsWhenCurrentGenerationFilesAreMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("The test could not read the collection header: %v.", err)
 	}
-
 	var header map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &header); err != nil {
 		t.Fatalf("The test could not parse the collection header: %v.", err)
 	}
-
 	header["generation"] = json.RawMessage("7")
 	changed, err := json.Marshal(header)
 	if err != nil {
 		t.Fatalf("The test could not encode the collection header: %v.", err)
 	}
-
 	if err := os.WriteFile(headerPath, changed, 0o600); err != nil {
 		t.Fatalf("The test could not write the collection header: %v.", err)
 	}
-
 	filesBefore := directoryNames(t, directory)
 
 	reopened, err := codestore.Open(root, staticembed.ModelName)
@@ -742,19 +553,11 @@ func TestStoreFailsWhenCurrentGenerationFilesAreMissing(t *testing.T) {
 		t.Fatalf("codestore.Open failed to open the store: %v.", err)
 	}
 	defer reopened.Close()
-	if _, err := reopened.Load(context.Background(), testCollection); !errors.Is(
-		err,
-		os.ErrNotExist,
-	) {
+	if _, err := reopened.Load(context.Background(), testCollection); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("Load returned %v instead of a missing file error.", err)
 	}
-
 	if filesAfter := directoryNames(t, directory); !slices.Equal(filesAfter, filesBefore) {
-		t.Fatalf(
-			"After Load, the collection directory contains %v; the test expected %v.",
-			filesAfter,
-			filesBefore,
-		)
+		t.Fatalf("After Load, the collection directory contains %v; the test expected %v.", filesAfter, filesBefore)
 	}
 }
 
@@ -764,7 +567,6 @@ func TestStoreKeepsFilesWhenGenerationZeroIsIncomplete(t *testing.T) {
 	cases := map[string]func(t *testing.T, directory string){
 		"the row log and data file do not exist": func(t *testing.T, directory string) {
 			t.Helper()
-
 			for _, name := range []string{"rows.log", "data.log"} {
 				if err := os.Remove(filepath.Join(directory, name)); err != nil {
 					t.Fatalf("The test could not remove the generation file: %v.", err)
@@ -779,57 +581,35 @@ func TestStoreKeepsFilesWhenGenerationZeroIsIncomplete(t *testing.T) {
 		},
 		"only generation 3 files exist": func(t *testing.T, directory string) {
 			t.Helper()
-
 			for _, prefix := range []string{"rows", "data"} {
-				if err := os.Rename(
-					filepath.Join(directory, prefix+".log"),
-					filepath.Join(directory, prefix+".3.log"),
-				); err != nil {
+				if err := os.Rename(filepath.Join(directory, prefix+".log"), filepath.Join(directory, prefix+".3.log")); err != nil {
 					t.Fatalf("The test failed to rename the generation file: %v.", err)
 				}
 			}
 		},
 	}
 	for name, damage := range cases {
-		t.Run(
-			name,
-			func(t *testing.T) {
-				root := t.TempDir()
-				store, model := openCollection(t, root)
-				upsert(
-					t,
-					store,
-					testRow(t, model, "kept", "claude:first", "row in generation zero"),
-				)
-				store.Close()
-				directory := filepath.Join(root, testCollection)
-				damage(t, directory)
-				filesBefore := directoryNames(t, directory)
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			store, model := openCollection(t, root)
+			upsert(t, store, testRow(t, model, "kept", "claude:first", "row in generation zero"))
+			store.Close()
+			directory := filepath.Join(root, testCollection)
+			damage(t, directory)
+			filesBefore := directoryNames(t, directory)
 
-				reopened, err := codestore.Open(root, staticembed.ModelName)
-				if err != nil {
-					t.Fatalf("codestore.Open failed to open the store: %v.", err)
-				}
-				defer reopened.Close()
-				if _, err := reopened.Load(context.Background(), testCollection); !errors.Is(
-					err,
-					os.ErrNotExist,
-				) {
-					t.Fatalf("Load returned %v instead of a missing file error.", err)
-				}
-
-				if filesAfter := directoryNames(
-					t,
-					directory,
-				); !slices.Equal(filesAfter, filesBefore) {
-					t.Fatalf(
-						"After Load, the collection directory contains %v; the test expected %v.",
-						filesAfter,
-						filesBefore,
-					)
-				}
-			},
-		)
+			reopened, err := codestore.Open(root, staticembed.ModelName)
+			if err != nil {
+				t.Fatalf("codestore.Open failed to open the store: %v.", err)
+			}
+			defer reopened.Close()
+			if _, err := reopened.Load(context.Background(), testCollection); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("Load returned %v instead of a missing file error.", err)
+			}
+			if filesAfter := directoryNames(t, directory); !slices.Equal(filesAfter, filesBefore) {
+				t.Fatalf("After Load, the collection directory contains %v; the test expected %v.", filesAfter, filesBefore)
+			}
+		})
 	}
 }
 
@@ -841,71 +621,43 @@ func TestEnsureCollectionKeepsGenerationFilesWithoutHeader(t *testing.T) {
 		"generation 0 files exist": func(_ *testing.T, _ string) {},
 		"only generation 3 files exist": func(t *testing.T, directory string) {
 			t.Helper()
-
 			for _, prefix := range []string{"rows", "data"} {
-				if err := os.Rename(
-					filepath.Join(directory, prefix+".log"),
-					filepath.Join(directory, prefix+".3.log"),
-				); err != nil {
+				if err := os.Rename(filepath.Join(directory, prefix+".log"), filepath.Join(directory, prefix+".3.log")); err != nil {
 					t.Fatalf("The test failed to rename the generation file: %v.", err)
 				}
 			}
 		},
 	}
 	for name, arrange := range cases {
-		t.Run(
-			name,
-			func(t *testing.T) {
-				root := t.TempDir()
-				store, model := openCollection(t, root)
-				upsert(
-					t,
-					store,
-					testRow(t, model, "kept", "claude:first", "row before the header removal"),
-				)
-				store.Close()
-				directory := filepath.Join(root, testCollection)
-				if err := os.Remove(filepath.Join(directory, "collection.json")); err != nil {
-					t.Fatalf("The test failed to remove the collection header: %v.", err)
-				}
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			store, model := openCollection(t, root)
+			upsert(t, store, testRow(t, model, "kept", "claude:first", "row before the header removal"))
+			store.Close()
+			directory := filepath.Join(root, testCollection)
+			if err := os.Remove(filepath.Join(directory, "collection.json")); err != nil {
+				t.Fatalf("The test failed to remove the collection header: %v.", err)
+			}
+			arrange(t, directory)
+			filesBefore := directoryContents(t, directory)
 
-				arrange(t, directory)
-				filesBefore := directoryContents(t, directory)
-
-				reopened, err := codestore.Open(root, staticembed.ModelName)
-				if err != nil {
-					t.Fatalf("codestore.Open failed to open the store: %v.", err)
-				}
-				defer reopened.Close()
-				ctx := context.Background()
-				if _, err := reopened.Load(ctx, testCollection); err == nil ||
-					errors.Is(err, collection.ErrCollectionMissing) {
-					t.Errorf(
-						"Load returned %v instead of an error that does not match ErrCollectionMissing.",
-						err,
-					)
-				}
-
-				ensure := collection.EnsureRequest{
-					Collection:  testCollection,
-					Declaration: declaration(),
-					Dimension:   staticembed.Dimensions,
-				}
-				if err := reopened.EnsureCollection(ctx, ensure); err == nil ||
-					errors.Is(err, collection.ErrCollectionMissing) {
-					t.Errorf(
-						"EnsureCollection returned %v instead of an error that does not match ErrCollectionMissing.",
-						err,
-					)
-				}
-
-				if !maps.EqualFunc(directoryContents(t, directory), filesBefore, bytes.Equal) {
-					t.Fatalf(
-						"EnsureCollection changed a file name or file contents in the collection directory.",
-					)
-				}
-			},
-		)
+			reopened, err := codestore.Open(root, staticembed.ModelName)
+			if err != nil {
+				t.Fatalf("codestore.Open failed to open the store: %v.", err)
+			}
+			defer reopened.Close()
+			ctx := context.Background()
+			if _, err := reopened.Load(ctx, testCollection); err == nil || errors.Is(err, collection.ErrCollectionMissing) {
+				t.Errorf("Load returned %v instead of an error that does not match ErrCollectionMissing.", err)
+			}
+			ensure := collection.EnsureRequest{Collection: testCollection, Declaration: declaration(), Dimension: staticembed.Dimensions}
+			if err := reopened.EnsureCollection(ctx, ensure); err == nil || errors.Is(err, collection.ErrCollectionMissing) {
+				t.Errorf("EnsureCollection returned %v instead of an error that does not match ErrCollectionMissing.", err)
+			}
+			if !maps.EqualFunc(directoryContents(t, directory), filesBefore, bytes.Equal) {
+				t.Fatalf("EnsureCollection changed a file name or file contents in the collection directory.")
+			}
+		})
 	}
 }
 
@@ -918,20 +670,14 @@ func TestEnsureCollectionFinishesInterruptedCreation(t *testing.T) {
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		t.Fatalf("The test failed to create the collection directory: %v.", err)
 	}
-
 	for _, name := range []string{"rows.log", "data.log"} {
 		if err := os.WriteFile(filepath.Join(directory, name), nil, 0o600); err != nil {
 			t.Fatalf("The test failed to create the generation file: %v.", err)
 		}
 	}
-
 	store, model := openCollection(t, root)
 	defer store.Close()
-	upsert(
-		t,
-		store,
-		testRow(t, model, "kept", "claude:first", "row after the interrupted creation"),
-	)
+	upsert(t, store, testRow(t, model, "kept", "claude:first", "row after the interrupted creation"))
 	requireStoreContents(t, store, map[string]string{"kept": "row after the interrupted creation"})
 }
 
@@ -947,7 +693,6 @@ func TestStoreRejectsWriteAfterDataFileIsRemoved(t *testing.T) {
 	if err := os.Remove(filepath.Join(directory, "data.log")); err != nil {
 		t.Fatalf("The test failed to remove the data file: %v.", err)
 	}
-
 	rowLogSize := fileSize(t, rowLogPath(root))
 
 	row := testRow(t, model, "later", "claude:first", "row after the removal")
@@ -955,13 +700,8 @@ func TestStoreRejectsWriteAfterDataFileIsRemoved(t *testing.T) {
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("Upsert returned %v instead of an error matching os.ErrNotExist.", err)
 	}
-
 	if got := fileSize(t, rowLogPath(root)); got != rowLogSize {
-		t.Fatalf(
-			"The row log contains %d bytes after Upsert failed; the test expected %d bytes.",
-			got,
-			rowLogSize,
-		)
+		t.Fatalf("The row log contains %d bytes after Upsert failed; the test expected %d bytes.", got, rowLogSize)
 	}
 }
 
@@ -978,12 +718,10 @@ func TestStoreWritesToReplacementDataFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("The test failed to read the data file: %v.", err)
 	}
-
 	replacementPath := dataPath + ".replacement"
 	if err := os.WriteFile(replacementPath, content, 0o600); err != nil {
 		t.Fatalf("The test failed to write the replacement data file: %v.", err)
 	}
-
 	if err := os.Rename(replacementPath, dataPath); err != nil {
 		t.Fatalf("The test failed to replace the original data file with the copy: %v.", err)
 	}
@@ -994,14 +732,7 @@ func TestStoreWritesToReplacementDataFile(t *testing.T) {
 		t.Fatalf("codestore.Open failed to open the store: %v.", err)
 	}
 	defer reopened.Close()
-	requireStoreContents(
-		t,
-		reopened,
-		map[string]string{
-			"kept":  "row before the replacement",
-			"later": "row after the replacement",
-		},
-	)
+	requireStoreContents(t, reopened, map[string]string{"kept": "row before the replacement", "later": "row after the replacement"})
 }
 
 // TestStoreKeepsRowLogWhenDataFileIsShorter shortens the data file by one byte.
@@ -1016,7 +747,6 @@ func TestStoreKeepsRowLogWhenDataFileIsShorter(t *testing.T) {
 			if err := os.WriteFile(replacement, shorter, 0o600); err != nil {
 				t.Fatalf("os.WriteFile failed to write the shorter data file: %v.", err)
 			}
-
 			if err := os.Rename(replacement, path); err != nil {
 				t.Fatalf("os.Rename failed to replace the data file: %v.", err)
 			}
@@ -1029,96 +759,66 @@ func TestStoreKeepsRowLogWhenDataFileIsShorter(t *testing.T) {
 		},
 	}
 	for name, shorten := range cases {
-		t.Run(
-			name,
-			func(t *testing.T) {
-				root := t.TempDir()
-				store, model := openCollection(t, root)
-				defer store.Close()
-				want := map[string]string{
-					"kept": "row before the shorter file",
-					"last": "last row before the shorter file",
-				}
-				upsert(t, store, testRow(t, model, "kept", "claude:first", want["kept"]))
-				upsert(t, store, testRow(t, model, "last", "claude:first", want["last"]))
-				directory := filepath.Join(root, testCollection)
-				dataPath := filepath.Join(directory, "data.log")
-				original, err := os.ReadFile(dataPath)
-				if err != nil {
-					t.Fatalf("os.ReadFile failed to read the data file: %v.", err)
-				}
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			store, model := openCollection(t, root)
+			defer store.Close()
+			want := map[string]string{"kept": "row before the shorter file", "last": "last row before the shorter file"}
+			upsert(t, store, testRow(t, model, "kept", "claude:first", want["kept"]))
+			upsert(t, store, testRow(t, model, "last", "claude:first", want["last"]))
+			directory := filepath.Join(root, testCollection)
+			dataPath := filepath.Join(directory, "data.log")
+			original, err := os.ReadFile(dataPath)
+			if err != nil {
+				t.Fatalf("os.ReadFile failed to read the data file: %v.", err)
+			}
+			shorten(t, dataPath, original[:len(original)-1])
+			filesBefore := directoryContents(t, directory)
 
-				shorten(t, dataPath, original[:len(original)-1])
-				filesBefore := directoryContents(t, directory)
+			ctx := context.Background()
+			query := collection.QueryRequest{Collection: testCollection, Declaration: declaration(), Filter: nil, Limit: 0}
+			if _, err := store.Query(ctx, query); err == nil {
+				t.Errorf("Query did not return an error after the test shortened the data file.")
+			}
+			later := testRow(t, model, "later", "claude:first", "row after the shorter file")
+			if err := store.Upsert(ctx, testCollection, declaration(), []collection.Row{later}); err == nil {
+				t.Errorf("Upsert did not return an error after the test shortened the data file.")
+			}
+			reopened, err := codestore.Open(root, staticembed.ModelName)
+			if err != nil {
+				t.Fatalf("codestore.Open failed to open the store: %v.", err)
+			}
+			defer reopened.Close()
+			if _, err := reopened.Load(ctx, testCollection); err == nil {
+				t.Errorf("Load did not return an error after the test shortened the data file.")
+			}
+			if !maps.EqualFunc(directoryContents(t, directory), filesBefore, bytes.Equal) {
+				t.Fatalf("A request changed a file name or file contents in the collection directory.")
+			}
 
-				ctx := context.Background()
-				query := collection.QueryRequest{
-					Collection:  testCollection,
-					Declaration: declaration(),
-					Filter:      nil,
-					Limit:       0,
-				}
-				if _, err := store.Query(ctx, query); err == nil {
-					t.Errorf(
-						"Query did not return an error after the test shortened the data file.",
-					)
-				}
-
-				later := testRow(t, model, "later", "claude:first", "row after the shorter file")
-				if err := store.Upsert(
-					ctx,
-					testCollection,
-					declaration(),
-					[]collection.Row{later},
-				); err == nil {
-					t.Errorf(
-						"Upsert did not return an error after the test shortened the data file.",
-					)
-				}
-
-				reopened, err := codestore.Open(root, staticembed.ModelName)
-				if err != nil {
-					t.Fatalf("codestore.Open failed to open the store: %v.", err)
-				}
-				defer reopened.Close()
-				if _, err := reopened.Load(ctx, testCollection); err == nil {
-					t.Errorf("Load did not return an error after the test shortened the data file.")
-				}
-
-				if !maps.EqualFunc(directoryContents(t, directory), filesBefore, bytes.Equal) {
-					t.Fatalf(
-						"A request changed a file name or file contents in the collection directory.",
-					)
-				}
-
-				if err := os.WriteFile(dataPath, original, 0o600); err != nil {
-					t.Fatalf("os.WriteFile failed to restore the data file: %v.", err)
-				}
-
-				restored, err := codestore.Open(root, staticembed.ModelName)
-				if err != nil {
-					t.Fatalf("codestore.Open failed to open the store: %v.", err)
-				}
-				defer restored.Close()
-				requireStoreContents(t, restored, want)
-			},
-		)
+			if err := os.WriteFile(dataPath, original, 0o600); err != nil {
+				t.Fatalf("os.WriteFile failed to restore the data file: %v.", err)
+			}
+			restored, err := codestore.Open(root, staticembed.ModelName)
+			if err != nil {
+				t.Fatalf("codestore.Open failed to open the store: %v.", err)
+			}
+			defer restored.Close()
+			requireStoreContents(t, restored, want)
+		})
 	}
 }
 
 func directoryContents(t *testing.T, directory string) map[string][]byte {
 	t.Helper()
 	contents := make(map[string][]byte)
-
 	for _, name := range directoryNames(t, directory) {
 		content, err := os.ReadFile(filepath.Join(directory, name))
 		if err != nil {
 			t.Fatalf("The test failed to read a collection file: %v.", err)
 		}
-
 		contents[name] = content
 	}
-
 	return contents
 }
 
@@ -1128,11 +828,9 @@ func takeCollectionLock(t *testing.T, root string) *os.File {
 	if err != nil {
 		t.Fatalf("The test could not open the collection lock file: %v.", err)
 	}
-
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
 		t.Fatalf("The test could not take the exclusive kernel lock: %v.", err)
 	}
-
 	return lock
 }
 
@@ -1142,12 +840,10 @@ func directoryNames(t *testing.T, directory string) []string {
 	if err != nil {
 		t.Fatalf("The test could not list the collection directory: %v.", err)
 	}
-
 	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		names = append(names, entry.Name())
 	}
-
 	return names
 }
 

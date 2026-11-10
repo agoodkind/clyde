@@ -53,7 +53,6 @@ func (r *Registry[M]) drainWith(ctx context.Context, reason string, opts DrainOp
 			Duration:    0,
 		}
 	}
-
 	started := r.now()
 	r.emitDrainStarted(ctx, reason)
 
@@ -71,17 +70,14 @@ func (r *Registry[M]) drainWith(ctx context.Context, reason string, opts DrainOp
 			Duration:    duration,
 		}
 		r.emitDrainComplete(ctx, result)
-
 		return result
 	}
 
 	r.state.Store(uint32(StateForcing))
-
 	entries, sessions := r.snapshotEntriesForForce()
 	for _, sess := range sessions {
 		r.emitForceCloseEvent(ctx, sess, reason)
 	}
-
 	// Force-close fan-out runs against a context derived from the
 	// drain ctx but stripped of its cancellation, so an already-
 	// expired drain ctx does not short-circuit the closers. Each
@@ -95,7 +91,6 @@ func (r *Registry[M]) drainWith(ctx context.Context, reason string, opts DrainOp
 	if len(errs) > 0 {
 		combinedErrs = append(combinedErrs, errs...)
 	}
-
 	result := DrainResult{
 		Reason:      reason,
 		Final:       StateClosed,
@@ -105,7 +100,6 @@ func (r *Registry[M]) drainWith(ctx context.Context, reason string, opts DrainOp
 		Duration:    duration,
 	}
 	r.emitDrainComplete(ctx, result)
-
 	return result
 }
 
@@ -120,37 +114,22 @@ func (r *Registry[M]) drainWith(ctx context.Context, reason string, opts DrainOp
 // is taken under the registry lock and the matched sessions are
 // removed from the maps in the same critical section, mirroring the
 // snapshotEntriesForForce contract used by the deadline path.
-func (r *Registry[M]) runIdleGraceFastPath(
-	ctx context.Context,
-	reason string,
-	opts DrainOptions,
-) (int, []error) {
+func (r *Registry[M]) runIdleGraceFastPath(ctx context.Context, reason string, opts DrainOptions) (int, []error) {
 	if opts.IdleGrace <= 0 {
 		return 0, nil
 	}
-
 	now := r.now()
 	entries, sessions := r.snapshotIdleEntries(now, opts.IdleGrace)
 	if len(entries) == 0 {
 		return 0, nil
 	}
-
 	r.emitIdleForceClosed(ctx, reason, len(entries), opts.IdleGrace)
-
 	for _, sess := range sessions {
 		r.emitForceCloseEvent(ctx, sess, "drain.idle_grace_exceeded")
 	}
-
 	forceCtx := context.WithoutCancel(ctx)
-	errs := closerFanOut(
-		forceCtx,
-		r.parallelClose,
-		r.closerGrace,
-		entries,
-		"drain.idle_grace_exceeded",
-	)
+	errs := closerFanOut(forceCtx, r.parallelClose, r.closerGrace, entries, "drain.idle_grace_exceeded")
 	r.markEntriesReleased(sessions)
-
 	return len(entries), errs
 }
 
@@ -159,46 +138,36 @@ func (r *Registry[M]) runIdleGraceFastPath(
 // from the registry maps under the registry lock. The split mirrors
 // snapshotEntriesForForce so the same close fan-out helper handles
 // both paths.
-func (r *Registry[M]) snapshotIdleEntries(
-	now time.Time,
-	grace time.Duration,
-) ([]sessionEntry, []*Session[M]) {
+func (r *Registry[M]) snapshotIdleEntries(now time.Time, grace time.Duration) ([]sessionEntry, []*Session[M]) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	entries := make([]sessionEntry, 0)
-
 	sessions := make([]*Session[M], 0)
 	for _, sess := range r.sessions {
 		if sess.IdleSince(now) <= grace {
 			continue
 		}
-
 		entries = append(entries, toSessionEntry(sess))
 		sessions = append(sessions, sess)
 	}
-
 	for _, sess := range sessions {
 		delete(r.sessions, sess.ID)
 		if sess.ParentID == "" {
 			continue
 		}
-
 		siblings := r.parents[sess.ParentID]
-
 		filtered := siblings[:0]
 		for _, child := range siblings {
 			if child != sess.ID {
 				filtered = append(filtered, child)
 			}
 		}
-
 		if len(filtered) == 0 {
 			delete(r.parents, sess.ParentID)
 		} else {
 			r.parents[sess.ParentID] = filtered
 		}
 	}
-
 	return entries, sessions
 }
 
@@ -208,16 +177,10 @@ func (r *Registry[M]) snapshotIdleEntries(
 // force-close. The base logger already carries the component and
 // concern attributes set in [New]; kind here is the same subsystem
 // label so the message is self-describing when grepped in isolation.
-func (r *Registry[M]) emitIdleForceClosed(
-	ctx context.Context,
-	reason string,
-	count int,
-	grace time.Duration,
-) {
+func (r *Registry[M]) emitIdleForceClosed(ctx context.Context, reason string, count int, grace time.Duration) {
 	if r.log == nil {
 		return
 	}
-
 	attrs := []slog.Attr{
 		slog.String("kind", r.component),
 		slog.Int("count", count),
@@ -225,31 +188,21 @@ func (r *Registry[M]) emitIdleForceClosed(
 		slog.String("reason", reason),
 	}
 	attrs = appendCorrelationAttrsCtxOnly(attrs, ctx)
-	r.log.LogAttrs(
-		ctx,
-		slog.LevelInfo,
-		"livetrack.drain.idle_force_closed",
-		append(
-			[]slog.Attr{
-				// waitForIdle polls Count at PollEvery until it reaches zero or ctx
-				// fires. Returns the final count (zero on the idle path, the
-				// remaining count on the deadline path so the caller knows how many
-				// sessions to force-close).
-				slog.String("concern", "livetrack"),
-			},
-			attrs...,
-		)...,
-	)
+	r.log.LogAttrs(ctx, slog.LevelInfo, "livetrack.drain.idle_force_closed", append([]slog.Attr{
+		// waitForIdle polls Count at PollEvery until it reaches zero or ctx
+		// fires. Returns the final count (zero on the idle path, the
+		// remaining count on the deadline path so the caller knows how many
+		// sessions to force-close).
+		slog.String("concern", "livetrack"),
+	}, attrs...)...)
 }
 
 func (r *Registry[M]) waitForIdle(ctx context.Context) int {
 	if r.Count() == 0 {
 		return 0
 	}
-
 	ticker := time.NewTicker(r.pollEvery)
 	defer ticker.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -270,16 +223,13 @@ func (r *Registry[M]) snapshotEntriesForForce() ([]sessionEntry, []*Session[M]) 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	entries := make([]sessionEntry, 0, len(r.sessions))
-
 	sessions := make([]*Session[M], 0, len(r.sessions))
 	for _, sess := range r.sessions {
 		entries = append(entries, toSessionEntry(sess))
 		sessions = append(sessions, sess)
 	}
-
 	r.sessions = make(map[string]*Session[M])
 	r.parents = make(map[string][]string)
-
 	return entries, sessions
 }
 

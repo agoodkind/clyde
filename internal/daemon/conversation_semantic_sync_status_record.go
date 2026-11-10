@@ -11,7 +11,6 @@ func (f *conversationSemanticFreshness) workerStarted() {
 	if f == nil {
 		return
 	}
-
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.status.started = true
@@ -22,7 +21,6 @@ func (f *conversationSemanticFreshness) passStarted(started time.Time) {
 	if f == nil {
 		return
 	}
-
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.status.state = semanticSyncPassStateRunning
@@ -41,13 +39,11 @@ func (f *conversationSemanticFreshness) passFinished(
 	if f == nil {
 		return
 	}
-
 	reporter, reports := client.(semanticIngestStatusReporter)
 	var reported vectorsearch.IngestStatus
 	if reports {
 		reported = reporter.IngestStatus(collectionID)
 	}
-
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.status.state = state
@@ -58,7 +54,6 @@ func (f *conversationSemanticFreshness) passFinished(
 		f.status.lastErrorText = passErr.Error()
 		f.status.lastErrorAt = clock.Now()
 	}
-
 	if reports {
 		f.status.recordIngestStatus(reported)
 	}
@@ -68,7 +63,6 @@ func (f *conversationSemanticFreshness) recordSyncError(err error) {
 	if f == nil || err == nil {
 		return
 	}
-
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.status.lastErrorText = err.Error()
@@ -85,12 +79,10 @@ func (f *conversationSemanticFreshness) recordUpsert(
 	if f == nil {
 		return
 	}
-
 	reporter, reports := client.(semanticIngestStatusReporter)
 	if !reports {
 		return
 	}
-
 	reported := reporter.IngestStatus(collectionID)
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -98,7 +90,6 @@ func (f *conversationSemanticFreshness) recordUpsert(
 	if !reported.LastUpsertKnown || reported.LastUpsert.JobID != jobID {
 		return
 	}
-
 	f.status.lastUpsert = semanticSyncUpsertCounters{
 		rowsWritten:     int64(reported.LastUpsert.RowsWritten),
 		vectorsReused:   int64(reported.LastUpsert.VectorsReused),
@@ -117,10 +108,8 @@ func (f *conversationSemanticFreshness) syncStatus() conversationSemanticSyncSta
 	if f == nil {
 		return newConversationSemanticSyncStatus(time.Time{})
 	}
-
 	f.mu.Lock()
 	defer f.mu.Unlock()
-
 	return f.status
 }
 
@@ -128,7 +117,6 @@ func (w *conversationSemanticSyncWorker) beginPassStatus() time.Time {
 	started := clock.Now()
 	w.passBlocked = false
 	w.freshness.passStarted(started)
-
 	return started
 }
 
@@ -141,18 +129,9 @@ func (w *conversationSemanticSyncWorker) finishPassStatus(started time.Time, pas
 		state = semanticSyncPassStateBlocked
 		activeJobID = w.activeJobID
 	}
-
 	var client conversationSemanticClient
 	if w.resolveClient != nil {
 		client = w.resolveClient()
 	}
-
-	w.freshness.passFinished(
-		state,
-		clock.Now().Sub(started),
-		activeJobID,
-		passErr,
-		client,
-		w.collectionID,
-	)
+	w.freshness.passFinished(state, clock.Now().Sub(started), activeJobID, passErr, client, w.collectionID)
 }

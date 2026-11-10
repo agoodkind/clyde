@@ -100,17 +100,14 @@ func ConversationProviderList() string {
 
 func formatConversationProviderList(titleCase bool) string {
 	providers := daemon.ConversationProviders()
-
 	labels := make([]string, 0, len(providers))
 	for _, provider := range providers {
 		label := provider.String()
 		if titleCase && label != "" {
 			label = strings.ToUpper(label[:1]) + label[1:]
 		}
-
 		labels = append(labels, label)
 	}
-
 	return formatEnglishList(labels)
 }
 
@@ -151,18 +148,11 @@ func conversationInfoOp() Operation[conversationInfoInput, conversationInfoPaylo
 		Long:       "Print one conversation's record metadata, message and tool counts, compaction count, and compaction segment stack.",
 		Examples:   []string{"clyde conversation info claude:1a2b3c"},
 		Args: []Arg[conversationInfoInput]{
-			PositionalArg(
-				"conversation_id",
-				"Conversation id, native id, title, or artifact path.",
-				func(in *conversationInfoInput, v string) { in.ConversationID = v },
-			),
+			PositionalArg("conversation_id", "Conversation id, native id, title, or artifact path.",
+				func(in *conversationInfoInput, v string) { in.ConversationID = v }),
 		},
-		Params: nil,
-		New: func() conversationInfoInput {
-			return conversationInfoInput{
-				ConversationID: "",
-			}
-		},
+		Params:         nil,
+		New:            func() conversationInfoInput { return conversationInfoInput{ConversationID: ""} },
 		MCPTaskSupport: "",
 		MCPTaskRun:     nil,
 		mcpTaskResult:  nil,
@@ -174,17 +164,9 @@ func conversationInfoOp() Operation[conversationInfoInput, conversationInfoPaylo
 		runResult: func(ctx context.Context, p conversationInfoPayload) (Result, error) {
 			info, err := daemon.GetConversationInfo(ctx, p.ConversationID)
 			if err != nil {
-				return nil, logFail(
-					ctx,
-					surfaceFromContext(ctx),
-					"info_failed",
-					"get conversation info",
-					err,
-				)
+				return nil, logFail(ctx, surfaceFromContext(ctx), "info_failed", "get conversation info", err)
 			}
-
 			text := formatConversationInfo(info)
-
 			return valueResult{
 				Payload: conversationInfoOutputFromDomain(info),
 				Text:    text,
@@ -202,112 +184,37 @@ func conversationInfoOp() Operation[conversationInfoInput, conversationInfoPaylo
 // metadata.
 func searchParams() []Param[searchInput] {
 	return []Param[searchInput]{
-		StringParam(
-			"query",
-			"Text or semantic query to find in transcript messages.",
-			"",
-			false,
-			func(in *searchInput, v string) { in.Query = v },
-		),
-		StringParam(
-			"backend",
-			"Search backend: milvus or local. Omit to use the configured backend.",
-			"",
-			false,
-			func(in *searchInput, v string) { in.Backend = v },
-		),
-		StringParam(
-			"provider",
-			"Provider filter: "+formatConversationProviderList(false)+".",
-			"",
-			false,
-			func(in *searchInput, v string) { in.Provider = v },
-		),
-		StringParam(
-			"workspace",
-			"Workspace root filter.",
-			"",
-			false,
-			func(in *searchInput, v string) { in.WorkspaceRoot = v },
-		),
-		StringParam(
-			"roles",
-			"Comma-separated message roles to keep, such as user or assistant.",
-			"",
-			false,
-			func(in *searchInput, v string) { in.Roles = v },
-		),
-		StringParam(
-			"after",
-			"Keep messages at or after this time (RFC3339 or YYYY-MM-DD).",
-			"",
-			false,
-			func(in *searchInput, v string) { in.After = v },
-		),
-		StringParam(
-			"before",
-			"Keep messages before this time (RFC3339 or YYYY-MM-DD).",
-			"",
-			false,
-			func(in *searchInput, v string) { in.Until = v },
-		),
-		IntParam(
-			"limit",
-			"Maximum matches or conversations to return.",
-			conv.DefaultSearchLimit,
-			func(in *searchInput, v int) { in.Limit = v },
-		),
-		IntParam(
-			"offset",
-			"Result offset for the next page.",
-			0,
-			func(in *searchInput, v int) { in.Offset = v },
-		),
-		IntParam(
-			"around",
-			"Message index to center a read window on.",
-			-1,
-			func(in *searchInput, v int) { in.Around = v },
-		),
-		IntParam(
-			"window",
-			"Messages before and after for a context window.",
-			5,
-			func(in *searchInput, v int) { in.Window = v },
-		),
-		StringParam(
-			"load_rules",
-			"Loading-rules tag from the search hit being read around, so the window counts over "+
-				"the same message sequence its message index refers to. Leave empty for hits without one.",
-			"",
-			false,
-			func(in *searchInput, v string) { in.LoadRules = v },
-		),
-		StringParam(
-			"cursor",
-			"Continuation cursor from a previous search result's next_cursor, with the same query and filters. "+
-				"Requires query. The current search source returns no next_cursor and refuses a cursor; page with offset.",
-			"",
-			false,
-			func(in *searchInput, v string) { in.Cursor = v },
-		),
-		FloatParam(
-			"min_score",
-			"Drop hits scoring below this relevance floor.",
-			0,
-			func(in *searchInput, v float64) { in.MinScore = v },
-		),
-		archivedSearchParam(),
+		StringParam("query", "Text or semantic query to find in transcript messages.", "", false,
+			func(in *searchInput, v string) { in.Query = v }),
+		StringParam("backend", "Search backend: milvus or local. Omit to use the configured backend.", "", false,
+			func(in *searchInput, v string) { in.Backend = v }),
+		StringParam("provider", "Provider filter: "+formatConversationProviderList(false)+".", "", false,
+			func(in *searchInput, v string) { in.Provider = v }),
+		StringParam("workspace", "Workspace root filter.", "", false,
+			func(in *searchInput, v string) { in.WorkspaceRoot = v }),
+		StringParam("roles", "Comma-separated message roles to keep, such as user or assistant.", "", false,
+			func(in *searchInput, v string) { in.Roles = v }),
+		StringParam("after", "Keep messages at or after this time (RFC3339 or YYYY-MM-DD).", "", false,
+			func(in *searchInput, v string) { in.After = v }),
+		StringParam("before", "Keep messages before this time (RFC3339 or YYYY-MM-DD).", "", false,
+			func(in *searchInput, v string) { in.Until = v }),
+		IntParam("limit", "Maximum matches or conversations to return.", conv.DefaultSearchLimit,
+			func(in *searchInput, v int) { in.Limit = v }),
+		IntParam("offset", "Result offset for the next page.", 0,
+			func(in *searchInput, v int) { in.Offset = v }),
+		IntParam("around", "Message index to center a read window on.", -1,
+			func(in *searchInput, v int) { in.Around = v }),
+		IntParam("window", "Messages before and after for a context window.", 5,
+			func(in *searchInput, v int) { in.Window = v }),
+		StringParam("load_rules", "Loading-rules tag from the search hit being read around, so the window counts over the same message sequence its message index refers to. Leave empty for hits without one.", "", false,
+			func(in *searchInput, v string) { in.LoadRules = v }),
+		StringParam("cursor", "Continuation cursor from a previous search result's next_cursor, with the same query and filters. Requires query. The current search source returns no next_cursor and refuses a cursor; page with offset.", "", false,
+			func(in *searchInput, v string) { in.Cursor = v }),
+		FloatParam("min_score", "Drop hits scoring below this relevance floor.", 0,
+			func(in *searchInput, v float64) { in.MinScore = v }),
+		BoolParam("include_archived", "Include archived conversations.", false,
+			func(in *searchInput, v bool) { in.IncludeArchived = v }),
 	}
-}
-
-func archivedSearchParam() Param[searchInput] {
-	return BoolParam(
-		"include_archived",
-		"Include archived conversations.",
-		false,
-		func(in *searchInput, v bool) { in.IncludeArchived = v },
-	)
 }
 
 func newSearchInput() searchInput {
@@ -333,7 +240,6 @@ func newSearchInput() searchInput {
 
 func searchOp() Operation[searchInput, searchPayload] {
 	browseCommand := cli.ConversationBrowseCommand()
-
 	return Operation[searchInput, searchPayload]{
 		Name:       Name{Canonical: "search", CLIOverride: cli.ConversationSearchName},
 		Group:      conversationGroup,
@@ -349,11 +255,8 @@ func searchOp() Operation[searchInput, searchPayload] {
 			browseCommand + " --provider zed --limit 20",
 		},
 		Args: []Arg[searchInput]{
-			OptionalPositionalArg(
-				"conversation_id",
-				"Conversation id, native id, title, or artifact path to scope or read.",
-				func(in *searchInput, v string) { in.ConversationID = v },
-			),
+			OptionalPositionalArg("conversation_id", "Conversation id, native id, title, or artifact path to scope or read.",
+				func(in *searchInput, v string) { in.ConversationID = v }),
 		},
 		Params:         searchParams(),
 		New:            newSearchInput,
@@ -379,17 +282,14 @@ func (op searchCommand) cobraCommand(f *cli.Factory) *cobra.Command {
 		if searchCommandHasNoInput(cmd, args) {
 			return nil
 		}
-
 		return prepare(cmd, args)
 	}
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		if searchCommandHasNoInput(cmd, args) {
 			return cmd.Help()
 		}
-
 		return run(cmd, args)
 	}
-
 	return cmd
 }
 
@@ -404,27 +304,15 @@ func prepareSearch(in searchInput) (searchPayload, error) {
 	query := strings.TrimSpace(in.Query)
 	conversation := strings.TrimSpace(in.ConversationID)
 	if err := conv.SearchBackend(in.Backend).Validate(); err != nil {
-		slog.Warn(
-			"clispec.search.invalid_backend",
-			"concern",
-			"cli.conversation",
-			"component",
-			"clispec",
-			"err",
-			err,
-		)
-
+		slog.Warn("clispec.search.invalid_backend", "concern", "cli.conversation", "component", "clispec", "err", err)
 		return searchPayload{}, fmt.Errorf("prepare search: %w", err)
 	}
-
 	if in.Backend != "" && query == "" {
 		return searchPayload{}, fmt.Errorf("backend requires a query")
 	}
-
 	if in.Around >= 0 && conversation == "" {
 		return searchPayload{}, fmt.Errorf("around requires a conversation to center on")
 	}
-
 	if strings.TrimSpace(in.Cursor) != "" && query == "" {
 		return searchPayload{}, fmt.Errorf("cursor requires a query to continue")
 	}
@@ -435,100 +323,44 @@ func prepareSearch(in searchInput) (searchPayload, error) {
 		if err != nil {
 			return searchPayload{}, err
 		}
-
 		mode := searchModeDiscover
-
 		return searchPayload{
-			Mode:       mode,
-			SearchOpts: opts,
-			ListOpts: conv.ListOptions{
-				Limit:           0,
-				Offset:          0,
-				Provider:        providerid.ProviderUnspecified,
-				WorkspaceRoot:   "",
-				Query:           "",
-				IncludeArchived: false,
-				All:             false,
-			},
+			Mode:         mode,
+			SearchOpts:   opts,
+			ListOpts:     conv.ListOptions{Limit: 0, Offset: 0, Provider: providerid.ProviderUnspecified, WorkspaceRoot: "", Query: "", IncludeArchived: false, All: false},
 			Conversation: conversation,
 			Around:       in.Around,
 			Window:       in.Window,
 			LoadRules:    strings.TrimSpace(in.LoadRules),
 		}, nil
 	case conversation != "":
-		return prepareReadSearch(in, conversation), nil
+		mode := searchModeReadConversation
+		if in.Around >= 0 {
+			mode = searchModeReadWindow
+		}
+		return searchPayload{
+			Mode:         mode,
+			SearchOpts:   conv.SearchConversationsOptions{Query: "", Backend: "", Limit: 0, Offset: 0, Provider: providerid.ProviderUnspecified, WorkspaceRoot: "", IncludeArchived: false, Roles: nil, FromUnix: nil, UntilUnix: nil, MinScore: 0, PerConversationLimit: 0, ConversationID: "", ContextWindow: 0, Cursor: ""},
+			ListOpts:     conv.ListOptions{Limit: 0, Offset: 0, Provider: providerid.ProviderUnspecified, WorkspaceRoot: "", Query: "", IncludeArchived: false, All: false},
+			Conversation: conversation,
+			Around:       in.Around,
+			Window:       in.Window,
+			LoadRules:    strings.TrimSpace(in.LoadRules),
+		}, nil
 	default:
 		opts, err := listOptionsFromInput(in)
 		if err != nil {
 			return searchPayload{}, err
 		}
-
 		return searchPayload{
-			Mode: searchModeBrowse,
-			SearchOpts: conv.SearchConversationsOptions{
-				Query:                "",
-				Backend:              "",
-				Limit:                0,
-				Offset:               0,
-				Provider:             providerid.ProviderUnspecified,
-				WorkspaceRoot:        "",
-				IncludeArchived:      false,
-				Roles:                nil,
-				FromUnix:             nil,
-				UntilUnix:            nil,
-				MinScore:             0,
-				PerConversationLimit: 0,
-				ConversationID:       "",
-				ContextWindow:        0,
-				Cursor:               "",
-			},
+			Mode:         searchModeBrowse,
+			SearchOpts:   conv.SearchConversationsOptions{Query: "", Backend: "", Limit: 0, Offset: 0, Provider: providerid.ProviderUnspecified, WorkspaceRoot: "", IncludeArchived: false, Roles: nil, FromUnix: nil, UntilUnix: nil, MinScore: 0, PerConversationLimit: 0, ConversationID: "", ContextWindow: 0, Cursor: ""},
 			ListOpts:     opts,
 			Conversation: "",
 			Around:       in.Around,
 			Window:       in.Window,
 			LoadRules:    strings.TrimSpace(in.LoadRules),
 		}, nil
-	}
-}
-
-func prepareReadSearch(input searchInput, conversation string) searchPayload {
-	mode := searchModeReadConversation
-	if input.Around >= 0 {
-		mode = searchModeReadWindow
-	}
-
-	return searchPayload{
-		Mode: mode,
-		SearchOpts: conv.SearchConversationsOptions{
-			Query:                "",
-			Backend:              "",
-			Limit:                0,
-			Offset:               0,
-			Provider:             providerid.ProviderUnspecified,
-			WorkspaceRoot:        "",
-			IncludeArchived:      false,
-			Roles:                nil,
-			FromUnix:             nil,
-			UntilUnix:            nil,
-			MinScore:             0,
-			PerConversationLimit: 0,
-			ConversationID:       "",
-			ContextWindow:        0,
-			Cursor:               "",
-		},
-		ListOpts: conv.ListOptions{
-			Limit:           0,
-			Offset:          0,
-			Provider:        providerid.ProviderUnspecified,
-			WorkspaceRoot:   "",
-			Query:           "",
-			IncludeArchived: false,
-			All:             false,
-		},
-		Conversation: conversation,
-		Around:       input.Around,
-		Window:       input.Window,
-		LoadRules:    strings.TrimSpace(input.LoadRules),
 	}
 }
 
@@ -539,25 +371,15 @@ func runSearchResult(ctx context.Context, p searchPayload) (Result, error) {
 		if err != nil {
 			return nil, logOperationError(ctx, "search conversations", err)
 		}
-
 		return valueResult{
 			Payload: searchConversationsOutputFromDomain(result),
 			Text:    formatSearchConversationsResult(result, p.SearchOpts.Query),
 		}, nil
 	case searchModeReadWindow:
-		text, err := daemon.GetConversationContext(
-			ctx,
-			p.Conversation,
-			"",
-			p.Around,
-			p.Window,
-			p.Window,
-			p.LoadRules,
-		)
+		text, err := daemon.GetConversationContext(ctx, p.Conversation, "", p.Around, p.Window, p.Window, p.LoadRules)
 		if err != nil {
 			return nil, logOperationError(ctx, "get conversation context", err)
 		}
-
 		return valueResult{
 			Payload: getContextOutput{
 				ConversationID: p.Conversation,
@@ -574,7 +396,6 @@ func runSearchResult(ctx context.Context, p searchPayload) (Result, error) {
 		if err != nil {
 			return nil, logOperationError(ctx, "get conversation", err)
 		}
-
 		return valueResult{
 			Payload: getConversationOutput{
 				ConversationID: p.Conversation,
@@ -588,7 +409,6 @@ func runSearchResult(ctx context.Context, p searchPayload) (Result, error) {
 		if err != nil {
 			return nil, logOperationError(ctx, "list conversations", err)
 		}
-
 		return valueResult{
 			Payload: listConversationsOutputFromDomain(result),
 			Text:    formatListResult(result),
@@ -603,7 +423,6 @@ func listOptionsFromInput(in searchInput) (conv.ListOptions, error) {
 	if err != nil {
 		return conv.ListOptions{}, err
 	}
-
 	return conv.ListOptions{
 		Limit:           in.Limit,
 		Offset:          in.Offset,
@@ -620,17 +439,14 @@ func searchConversationsOptionsFromInput(in searchInput) (conv.SearchConversatio
 	if err != nil {
 		return conv.SearchConversationsOptions{}, err
 	}
-
 	fromUnix, err := timeBoundUnix(in.After, "after")
 	if err != nil {
 		return conv.SearchConversationsOptions{}, err
 	}
-
 	untilUnix, err := timeBoundUnix(in.Until, "before")
 	if err != nil {
 		return conv.SearchConversationsOptions{}, err
 	}
-
 	return conv.SearchConversationsOptions{
 		Query:                in.Query,
 		Backend:              conv.SearchBackend(in.Backend),
@@ -656,16 +472,13 @@ func splitRoles(raw string) []string {
 	if strings.TrimSpace(raw) == "" {
 		return nil
 	}
-
 	parts := strings.Split(raw, ",")
-
 	roles := make([]string, 0, len(parts))
 	for _, part := range parts {
 		if trimmed := strings.TrimSpace(part); trimmed != "" {
 			roles = append(roles, trimmed)
 		}
 	}
-
 	return roles
 }
 
@@ -680,21 +493,14 @@ func timeBoundUnix(raw string, flagName string) (*int64, error) {
 	if trimmed == "" {
 		return nil, nil
 	}
-
 	hostZone := clock.Now().Location()
-
 	for _, layout := range timeBoundLayouts {
 		if parsed, err := time.ParseInLocation(layout, trimmed, hostZone); err == nil {
 			bound := parsed.Unix()
 			return &bound, nil
 		}
 	}
-
-	return nil, fmt.Errorf(
-		"parse %s %q: want RFC3339, YYYY-MM-DD HH:MM, or YYYY-MM-DD",
-		flagName,
-		trimmed,
-	)
+	return nil, fmt.Errorf("parse %s %q: want RFC3339, YYYY-MM-DD HH:MM, or YYYY-MM-DD", flagName, trimmed)
 }
 
 func providerFilter(raw string) (conv.Provider, error) {
@@ -702,12 +508,10 @@ func providerFilter(raw string) (conv.Provider, error) {
 	if raw == "" {
 		return providerid.ProviderUnspecified, nil
 	}
-
 	provider, ok := providerid.Parse(raw)
 	if !ok || !provider.Valid() {
 		return providerid.ProviderUnspecified, fmt.Errorf("unsupported provider %q", raw)
 	}
-
 	return provider, nil
 }
 
@@ -716,13 +520,11 @@ func cleanWorkspaceRoot(raw string) string {
 	if raw == "" {
 		return ""
 	}
-
 	expanded := homedir.Expand(raw)
 	absolute, err := filepath.Abs(expanded)
 	if err == nil {
 		expanded = absolute
 	}
-
 	return filepath.Clean(expanded)
 }
 
@@ -738,30 +540,28 @@ func formatListResult(result conv.ListResult) string {
 		out.WriteString("\nNo conversations found.\n")
 		return out.String()
 	}
-
 	out.WriteString("\n")
 	writeConversationRecordHeader(&out)
-
 	for _, record := range result.Records {
 		writeConversationRecordRow(&out, record)
 	}
-
 	return out.String()
 }
 
 func formatSearchConversationsResult(result conv.SearchConversationsResult, query string) string {
 	var out strings.Builder
 	if len(result.Matches) == 0 {
-		fmt.Fprintf(&out, "No conversation results found for query: %q\n", query)
-
+		fmt.Fprintf(
+			&out,
+			"No conversation results found for query: %q\n",
+			query,
+		)
 		return out.String()
 	}
-
 	resultLabel := "results"
 	if len(result.Matches) == 1 {
 		resultLabel = "result"
 	}
-
 	fmt.Fprintf(
 		&out,
 		"Found %d conversation %s for query: %q\n\n",
@@ -769,13 +569,11 @@ func formatSearchConversationsResult(result conv.SearchConversationsResult, quer
 		resultLabel,
 		query,
 	)
-
 	for index, match := range result.Matches {
 		role := match.Role
 		if role == "" {
 			role = "unknown"
 		}
-
 		fmt.Fprintf(&out, "%d. Conversation message\n", index+1)
 		fmt.Fprintf(&out, "   Conversation: %s\n", match.Record.ID)
 		fmt.Fprintf(&out, "   Message index: %d\n", match.MessageIndex)
@@ -783,12 +581,10 @@ func formatSearchConversationsResult(result conv.SearchConversationsResult, quer
 		fmt.Fprintf(&out, "   Timestamp: %s\n", matchTimestampText(match.Timestamp))
 		fmt.Fprintf(&out, "   Rank: %d\n", index+1)
 		snippet := strings.TrimSpace(match.Snippet)
-
 		fence := "```"
 		for strings.Contains(snippet, fence) {
 			fence += "`"
 		}
-
 		fmt.Fprintf(&out, "   Content:\n%s\n", fence)
 		out.WriteString(snippet)
 		fmt.Fprintf(&out, "\n%s\n", fence)
@@ -796,7 +592,6 @@ func formatSearchConversationsResult(result conv.SearchConversationsResult, quer
 			out.WriteString("\n")
 		}
 	}
-
 	if result.HasMore {
 		if result.NextCursor != "" {
 			fmt.Fprintf(&out, "\nMore: --cursor %s\n", result.NextCursor)
@@ -804,7 +599,6 @@ func formatSearchConversationsResult(result conv.SearchConversationsResult, quer
 			fmt.Fprintf(&out, "\nMore: --offset %d\n", result.NextOffset)
 		}
 	}
-
 	return out.String()
 }
 
@@ -836,13 +630,8 @@ func formatConversationInfo(info conv.Info) string {
 		out.WriteString("\nNo compaction segments found.\n")
 		return out.String()
 	}
-
 	out.WriteString("\n")
-	out.WriteString(
-		"segment\thas_summary\tstart_message_index\tend_message_index\t" +
-			"summary_message_index\tsummary_timestamp\tvisible_messages\ttool_calls\texport_selector\n",
-	)
-
+	out.WriteString("segment\thas_summary\tstart_message_index\tend_message_index\tsummary_message_index\tsummary_timestamp\tvisible_messages\ttool_calls\texport_selector\n")
 	for _, segment := range info.Segments {
 		summaryIndex := ""
 		summaryTimestamp := ""
@@ -850,7 +639,6 @@ func formatConversationInfo(info conv.Info) string {
 			summaryIndex = strconv.Itoa(segment.SummaryMessageIndex)
 			summaryTimestamp = formatTime(segment.SummaryTimestamp)
 		}
-
 		fmt.Fprintf(
 			&out,
 			"%d\t%t\t%d\t%d\t%s\t%s\t%d\t%d\t%d\n",
@@ -865,15 +653,11 @@ func formatConversationInfo(info conv.Info) string {
 			segment.Index,
 		)
 	}
-
 	return out.String()
 }
 
 func writeConversationRecordHeader(out *strings.Builder) {
-	out.WriteString(
-		"conversation_id\tprovider\tnative_id\ttitle\tworkspace_root\tartifact_path\t" +
-			"artifact_kind\tmodel\tcreated_at\tupdated_at\tsize_bytes\tarchived\n",
-	)
+	out.WriteString("conversation_id\tprovider\tnative_id\ttitle\tworkspace_root\tartifact_path\tartifact_kind\tmodel\tcreated_at\tupdated_at\tsize_bytes\tarchived\n")
 }
 
 func writeConversationRecordRow(out *strings.Builder, record conv.Record) {
@@ -903,24 +687,11 @@ func formatTime(value time.Time) string {
 	if value.IsZero() {
 		return ""
 	}
-
 	return value.UTC().Format(time.RFC3339)
 }
 
 func logOperationError(ctx context.Context, operation string, err error) error {
-	slog.WarnContext(
-		ctx,
-		"clispec.operation.failed",
-		"concern",
-		"cli.conversation",
-		"component",
-		"clispec",
-		"operation",
-		operation,
-		"err",
-		err,
-	)
-
+	slog.WarnContext(ctx, "clispec.operation.failed", "concern", "cli.conversation", "component", "clispec", "operation", operation, "err", err)
 	return fmt.Errorf("%s: %w", operation, err)
 }
 
@@ -930,35 +701,12 @@ func logOperationError(ctx context.Context, operation string, err error) error {
 func logFail(ctx context.Context, surface Surface, shortEvent, operation string, err error) error {
 	switch surface {
 	case SurfaceMCP:
-		slog.WarnContext(
-			ctx,
-			"mcp.conversation."+shortEvent,
-			"concern",
-			"mcp.server.context",
-			"component",
-			"mcpserver",
-			"operation",
-			operation,
-			"err",
-			err,
-		)
+		slog.WarnContext(ctx, "mcp.conversation."+shortEvent, "concern", "mcp.server.context", "component", "mcpserver", "operation", operation, "err", err)
 	case SurfaceCLI:
 		fallthrough
 	default:
-		slog.WarnContext(
-			ctx,
-			"cli.conversation."+shortEvent,
-			"concern",
-			"cli.conversation",
-			"component",
-			"cli",
-			"operation",
-			operation,
-			"err",
-			err,
-		)
+		slog.WarnContext(ctx, "cli.conversation."+shortEvent, "concern", "cli.conversation", "component", "cli", "operation", operation, "err", err)
 	}
-
 	return fmt.Errorf("%s: %w", operation, err)
 }
 
@@ -974,6 +722,5 @@ func matchTimestampText(stamp time.Time) string {
 	if stamp.IsZero() {
 		return unknownTimestampText
 	}
-
 	return stamp.Format("2006-01-02 15:04 MST")
 }

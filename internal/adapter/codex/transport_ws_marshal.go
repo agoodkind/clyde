@@ -49,21 +49,12 @@ func MarshalResponseCreateWsRequest(req ResponseCreateWsRequest) ([]byte, error)
 	envelope := responseCreateWsEnvelope(req)
 	raw, err := json.Marshal(envelope)
 	if err != nil {
-		slog.Warn(
-			"adapter.codex.ws.marshal_request_failed",
-			"concern",
-			"adapter.providers.codex.request",
-			"err",
-			err,
-		)
-
+		slog.Warn("adapter.codex.ws.marshal_request_failed", "concern", "adapter.providers.codex.request", "err", err)
 		return nil, fmt.Errorf("marshal websocket response.create request: %w", err)
 	}
-
 	if !forceEmptyInput && !forceEmptyTools {
 		return raw, nil
 	}
-
 	return patchEmptyArrayFields(raw, forceEmptyInput, forceEmptyTools)
 }
 
@@ -73,37 +64,19 @@ func MarshalResponseCreateWsRequest(req ResponseCreateWsRequest) ([]byte, error)
 func patchEmptyArrayFields(raw []byte, forceInput, forceTools bool) ([]byte, error) {
 	var payload map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		slog.Warn(
-			"adapter.codex.ws.unmarshal_request_failed",
-			"concern",
-			"adapter.providers.codex.request",
-			"err",
-			err,
-		)
-
+		slog.Warn("adapter.codex.ws.unmarshal_request_failed", "concern", "adapter.providers.codex.request", "err", err)
 		return nil, fmt.Errorf("unmarshal websocket response.create request: %w", err)
 	}
-
 	if forceInput {
 		payload["input"] = json.RawMessage("[]")
 	}
-
 	if forceTools {
 		payload["tools"] = json.RawMessage("[]")
 	}
-
 	rewritten, err := json.Marshal(payload)
 	if err != nil {
-		slog.Warn(
-			"adapter.codex.ws.remarshal_request_failed",
-			"concern",
-			"adapter.providers.codex.request",
-			"err",
-			err,
-		)
-
+		slog.Warn("adapter.codex.ws.remarshal_request_failed", "concern", "adapter.providers.codex.request", "err", err)
 		return nil, fmt.Errorf("marshal rewritten websocket response.create request: %w", err)
 	}
-
 	return rewritten, nil
 }

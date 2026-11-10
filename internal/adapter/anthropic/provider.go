@@ -21,22 +21,18 @@ func WithRequestID(ctx context.Context, requestID string) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-
 	if strings.TrimSpace(requestID) == "" {
 		return ctx
 	}
-
 	return context.WithValue(ctx, requestIDContextKey{}, requestID)
 }
 
 func requestIDFromContext(ctx context.Context, defaultRequestID string) string {
 	if ctx != nil {
-		if value, ok := ctx.Value(requestIDContextKey{}).(string); ok &&
-			strings.TrimSpace(value) != "" {
+		if value, ok := ctx.Value(requestIDContextKey{}).(string); ok && strings.TrimSpace(value) != "" {
 			return strings.TrimSpace(value)
 		}
 	}
-
 	return strings.TrimSpace(defaultRequestID)
 }
 
@@ -55,15 +51,12 @@ func (e *ExecuteError) Error() string {
 	if e == nil {
 		return ""
 	}
-
 	if e.Message != "" {
 		return e.Message
 	}
-
 	if e.Cause != nil {
 		return e.Cause.Error()
 	}
-
 	return "anthropic provider execution failed"
 }
 
@@ -72,36 +65,23 @@ func (e *ExecuteError) Unwrap() error {
 	if e == nil {
 		return nil
 	}
-
 	return e.Cause
 }
 
 // Provider is the Anthropic direct-OAuth implementation of the
 // upstream-agnostic adapter/provider.Provider contract.
 type Provider struct {
-	log     *slog.Logger
-	prepare func(context.Context, adapterresolver.ResolvedRequest, string) (
-		PreparedRequest,
-		error,
-	)
-	executePrepared func(context.Context, PreparedRequest, adapterprovider.EventWriter) (
-		adapterprovider.Result,
-		error,
-	)
+	log             *slog.Logger
+	prepare         func(context.Context, adapterresolver.ResolvedRequest, string) (PreparedRequest, error)
+	executePrepared func(context.Context, PreparedRequest, adapterprovider.EventWriter) (adapterprovider.Result, error)
 }
 
 // ProviderOptions binds the construction-time Anthropic-only
 // dependencies the root adapter currently supplies for the OpenAI
 // ingress adapter.
 type ProviderOptions struct {
-	Prepare func(context.Context, adapterresolver.ResolvedRequest, string) (
-		PreparedRequest,
-		error,
-	)
-	ExecutePrepared func(context.Context, PreparedRequest, adapterprovider.EventWriter) (
-		adapterprovider.Result,
-		error,
-	)
+	Prepare         func(context.Context, adapterresolver.ResolvedRequest, string) (PreparedRequest, error)
+	ExecutePrepared func(context.Context, PreparedRequest, adapterprovider.EventWriter) (adapterprovider.Result, error)
 	// FileLog controls rotation for the dedicated anthropic.jsonl
 	// sidecar sink. Mirrors the Codex provider's FileLog wiring so the
 	// resolved logpolicy SinkAnthropicSidecar rotation flows through one
@@ -115,9 +95,7 @@ func NewProvider(deps adapterprovider.Deps, opts ProviderOptions) *Provider {
 	if log == nil {
 		log = slog.Default()
 	}
-
 	ConfigureAnthropicFileLogger(opts.FileLog)
-
 	return &Provider{
 		log:             log.With("component", "adapter", "subcomponent", "anthropic_provider"),
 		prepare:         opts.Prepare,
@@ -133,35 +111,24 @@ func (p *Provider) ID() adapterresolver.ProviderID {
 // Prepare builds the provider-owned Anthropic request before output headers
 // commit. It delegates to the server-owned wire projection callback without
 // performing transport execution.
-func (p *Provider) Prepare(
-	ctx context.Context,
-	req adapterresolver.ResolvedRequest,
-) (PreparedRequest, error) {
+func (p *Provider) Prepare(ctx context.Context, req adapterresolver.ResolvedRequest) (PreparedRequest, error) {
 	if p == nil || p.prepare == nil {
 		return PreparedRequest{}, &ExecuteError{
 			Status:  http.StatusInternalServerError,
 			Code:    "anthropic_prepare_unconfigured",
-			Message: "adapter built without anthropic request preparation; set adapter.direct_oauth=true and restart",
-			Cause:   nil,
+			Message: "adapter built without anthropic request preparation; set adapter.direct_oauth=true and restart", Cause: nil,
 		}
 	}
-
 	reqID := requestIDFromContext(ctx, req.Cursor.RequestID)
-
 	return p.prepare(ctx, req, reqID)
 }
 
 // Execute is part of Clyde's typed adapter surface.
-func (p *Provider) Execute(
-	ctx context.Context,
-	req adapterresolver.ResolvedRequest,
-	w adapterprovider.EventWriter,
-) (adapterprovider.Result, error) {
+func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequest, w adapterprovider.EventWriter) (adapterprovider.Result, error) {
 	prepared, err := p.Prepare(ctx, req)
 	if err != nil {
 		return adapterprovider.Result{}, err
 	}
-
 	return p.ExecutePrepared(ctx, prepared, w)
 }
 
@@ -169,39 +136,20 @@ func (p *Provider) Execute(
 // provider-owned execution path. Future native `/v1/messages` ingress
 // can call this directly after it decodes and validates the public
 // Anthropic wire shape.
-func (p *Provider) ExecutePrepared(
-	ctx context.Context,
-	req PreparedRequest,
-	w adapterprovider.EventWriter,
-) (adapterprovider.Result, error) {
+func (p *Provider) ExecutePrepared(ctx context.Context, req PreparedRequest, w adapterprovider.EventWriter) (adapterprovider.Result, error) {
 	if p == nil || p.executePrepared == nil {
 		result := adapterprovider.Result{
 			Usage: emptyOpenAIUsage(),
 
-			FinalResponse:              nil,
-			FinishReason:               "",
-			SystemFingerprint:          "",
-			ReasoningSignaled:          false,
-			ReasoningVisible:           false,
-			ReasoningSummary:           "",
-			DerivedCacheCreationTokens: 0,
-			UpstreamResponseID:         "",
-			ToolCallCount:              0,
-			ToolCallNames:              nil,
-			HasSubagentToolCall:        false,
-			UsageNoticeWindows:         nil,
-			UsageNotices:               nil,
+			FinalResponse: nil, FinishReason: "", SystemFingerprint: "", ReasoningSignaled: false, ReasoningVisible: false, ReasoningSummary: "", DerivedCacheCreationTokens: 0, UpstreamResponseID: "", ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, UsageNoticeWindows: nil, UsageNotices: nil,
 		}
 		executeErr := &ExecuteError{
 			Status:  http.StatusInternalServerError,
 			Code:    "oauth_unconfigured",
-			Message: "adapter built without anthropic execution provider; set adapter.direct_oauth=true and restart",
-			Cause:   nil,
+			Message: "adapter built without anthropic execution provider; set adapter.direct_oauth=true and restart", Cause: nil,
 		}
-
 		return result, executeErr
 	}
-
 	return p.executePrepared(ctx, req, w)
 }
 

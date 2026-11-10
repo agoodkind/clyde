@@ -14,31 +14,16 @@ func TestDeriveChatKeyStableAcrossTurnsOfSameChat(t *testing.T) {
 	turn1 := adapteropenai.ChatRequest{
 		Model: "clyde-codex-5.5-high",
 		Messages: []adapteropenai.ChatMessage{
-			{
-				Role: "system",
-				Content: mustMarshalString(
-					t,
-					"You are an AI coding assistant, powered by clyde-codex-5.5-high.",
-				),
-			},
+			{Role: "system", Content: mustMarshalString(t, "You are an AI coding assistant, powered by clyde-codex-5.5-high.")},
 			{Role: "user", Content: first},
 		},
 	}
 	turn2 := adapteropenai.ChatRequest{
 		Model: "clyde-codex-5.5-high",
 		Messages: []adapteropenai.ChatMessage{
-			{
-				Role: "system",
-				Content: mustMarshalString(
-					t,
-					"You are an AI coding assistant, powered by clyde-codex-5.5-high.\n<timestamp>2026-05-05T16:00:00Z</timestamp>\n<file>main.go</file>",
-				),
-			},
+			{Role: "system", Content: mustMarshalString(t, "You are an AI coding assistant, powered by clyde-codex-5.5-high.\n<timestamp>2026-05-05T16:00:00Z</timestamp>\n<file>main.go</file>")},
 			{Role: "user", Content: first},
-			{
-				Role:    "assistant",
-				Content: mustMarshalString(t, "I'll start by listing the packages."),
-			},
+			{Role: "assistant", Content: mustMarshalString(t, "I'll start by listing the packages.")},
 			{Role: "user", Content: mustMarshalString(t, "Continue.")},
 		},
 	}
@@ -48,11 +33,9 @@ func TestDeriveChatKeyStableAcrossTurnsOfSameChat(t *testing.T) {
 	if key1 == "" {
 		t.Fatalf("turn1 key empty")
 	}
-
 	if key1 != key2 {
 		t.Fatalf("keys diverged across turns: turn1=%q turn2=%q", key1, key2)
 	}
-
 	if len(key1) != 16 {
 		t.Fatalf("key length=%d want 16", len(key1))
 	}
@@ -121,7 +104,6 @@ func TestDeriveChatKeyHandlesMultipartContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal multipart: %v", err)
 	}
-
 	multipart := adapteropenai.ChatRequest{
 		Model: "clyde-codex-5.5-high",
 		Messages: []adapteropenai.ChatMessage{
@@ -131,10 +113,7 @@ func TestDeriveChatKeyHandlesMultipartContent(t *testing.T) {
 	plain := adapteropenai.ChatRequest{
 		Model: "clyde-codex-5.5-high",
 		Messages: []adapteropenai.ChatMessage{
-			{
-				Role:    "user",
-				Content: mustMarshalString(t, "What is the time complexity of mergesort?"),
-			},
+			{Role: "user", Content: mustMarshalString(t, "What is the time complexity of mergesort?")},
 		},
 	}
 	if DeriveChatKey(multipart) != DeriveChatKey(plain) {
@@ -148,6 +127,5 @@ func mustMarshalString(t *testing.T, s string) json.RawMessage {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-
 	return b
 }

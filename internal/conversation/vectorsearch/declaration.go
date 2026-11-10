@@ -42,18 +42,8 @@ func Declaration() collection.Declaration {
 			nullableStringColumn(providerColumn, providerMaxLength),
 			nullableStringColumn(workspaceRootColumn, workspaceRootMaxLength),
 			{Name: archivedColumn, Type: collection.ScalarTypeBool, Nullable: true, MaxLength: 0},
-			{
-				Name:      timestampUnixColumn,
-				Type:      collection.ScalarTypeInt64,
-				Nullable:  true,
-				MaxLength: 0,
-			},
-			{
-				Name:      messageIndexColumn,
-				Type:      collection.ScalarTypeInt64,
-				Nullable:  true,
-				MaxLength: 0,
-			},
+			{Name: timestampUnixColumn, Type: collection.ScalarTypeInt64, Nullable: true, MaxLength: 0},
+			{Name: messageIndexColumn, Type: collection.ScalarTypeInt64, Nullable: true, MaxLength: 0},
 			nullableStringColumn(loadRulesColumn, loadRulesMaxLength),
 		},
 	}

@@ -9,23 +9,18 @@ import (
 
 func TestExportTranscriptRequestIncludesToolSummaries(t *testing.T) {
 	t.Parallel()
-	req := exportTranscriptRequest(
-		"claude:probe",
-		conversation.ExportOptions{
-			Format:       conversation.ExportFormatMarkdown,
-			HistoryStart: 0,
-			Whitespace:   conversation.WhitespacePreserve,
-			Content:      conversation.NewContentKindSet(conversation.ContentKindToolSummaries),
-		},
-	)
+	req := exportTranscriptRequest("claude:probe", conversation.ExportOptions{
+		Format:       conversation.ExportFormatMarkdown,
+		HistoryStart: 0,
+		Whitespace:   conversation.WhitespacePreserve,
+		Content:      conversation.NewContentKindSet(conversation.ContentKindToolSummaries),
+	})
 	if !req.GetIncludeToolSummaries() {
 		t.Fatal("IncludeToolSummaries = false, want true")
 	}
-
 	if req.GetIncludeToolCalls() {
 		t.Fatal("IncludeToolCalls = true, want false")
 	}
-
 	if req.GetIncludeToolOutputs() {
 		t.Fatal("IncludeToolOutputs = true, want false")
 	}
@@ -33,15 +28,12 @@ func TestExportTranscriptRequestIncludesToolSummaries(t *testing.T) {
 
 func TestExportTranscriptRequestCarriesMaxLines(t *testing.T) {
 	t.Parallel()
-	req := exportTranscriptRequest(
-		"claude:probe",
-		conversation.ExportOptions{
-			Format:     conversation.ExportFormatMarkdown,
-			Whitespace: conversation.WhitespacePreserve,
-			Content:    conversation.NewContentKindSet(conversation.ContentKindChat),
-			MaxLines:   1200,
-		},
-	)
+	req := exportTranscriptRequest("claude:probe", conversation.ExportOptions{
+		Format:     conversation.ExportFormatMarkdown,
+		Whitespace: conversation.WhitespacePreserve,
+		Content:    conversation.NewContentKindSet(conversation.ContentKindChat),
+		MaxLines:   1200,
+	})
 	if req.GetMaxLines() != 1200 {
 		t.Fatalf("MaxLines = %d, want 1200", req.GetMaxLines())
 	}
@@ -49,20 +41,16 @@ func TestExportTranscriptRequestCarriesMaxLines(t *testing.T) {
 
 func TestExportTranscriptRequestCarriesMaxTokens(t *testing.T) {
 	t.Parallel()
-	req := exportTranscriptRequest(
-		"claude:probe",
-		conversation.ExportOptions{
-			Format:     conversation.ExportFormatMarkdown,
-			Whitespace: conversation.WhitespacePreserve,
-			Content:    conversation.NewContentKindSet(conversation.ContentKindChat),
-			MaxTokens:  "200k",
-			TokenModel: "gpt-4o",
-		},
-	)
+	req := exportTranscriptRequest("claude:probe", conversation.ExportOptions{
+		Format:     conversation.ExportFormatMarkdown,
+		Whitespace: conversation.WhitespacePreserve,
+		Content:    conversation.NewContentKindSet(conversation.ContentKindChat),
+		MaxTokens:  "200k",
+		TokenModel: "gpt-4o",
+	})
 	if req.GetMaxTokens() != "200k" {
 		t.Fatalf("MaxTokens = %q, want %q", req.GetMaxTokens(), "200k")
 	}
-
 	if req.GetTokenModel() != "gpt-4o" {
 		t.Fatalf("TokenModel = %q, want %q", req.GetTokenModel(), "gpt-4o")
 	}
@@ -77,7 +65,6 @@ func TestContentKindSetFromExportRequestIncludesToolSummaries(t *testing.T) {
 	if !set.Has(conversation.ContentKindChat) {
 		t.Fatal("content set missing chat")
 	}
-
 	if !set.Has(conversation.ContentKindToolSummaries) {
 		t.Fatal("content set missing tool summaries")
 	}
@@ -93,11 +80,9 @@ func TestContentKindSetFromExportRequestUsesToolPrecedence(t *testing.T) {
 	if !set.Has(conversation.ContentKindToolOutputs) {
 		t.Fatal("content set missing tool outputs")
 	}
-
 	if set.Has(conversation.ContentKindToolCalls) {
 		t.Fatal("content set kept tool calls when tool outputs was selected")
 	}
-
 	if set.Has(conversation.ContentKindToolSummaries) {
 		t.Fatal("content set kept tool summaries when tool outputs was selected")
 	}

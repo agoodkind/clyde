@@ -25,20 +25,12 @@ func ReadWorkspaceInventory(ctx context.Context, root DataRoot) WorkspaceInvento
 	listing, err := root.ListWorkspaceEntries()
 	inventory := WorkspaceInventory{Entries: nil, Err: err}
 	if listing.Unreadable > 0 {
-		inventory.Err = errors.Join(
-			inventory.Err,
-			fmt.Errorf("%d cursor workspaces unreadable", listing.Unreadable),
-		)
+		inventory.Err = errors.Join(inventory.Err, fmt.Errorf("%d cursor workspaces unreadable", listing.Unreadable))
 	}
-
 	for _, entry := range listing.DiscoveryEntries() {
 		data := ReadWorkspaceDiscovery(ctx, entry)
-		inventory.Entries = append(
-			inventory.Entries,
-			WorkspaceDiscoveryEntry{Entry: entry, Data: data},
-		)
+		inventory.Entries = append(inventory.Entries, WorkspaceDiscoveryEntry{Entry: entry, Data: data})
 		inventory.Err = errors.Join(inventory.Err, data.RegistryErr)
 	}
-
 	return inventory
 }

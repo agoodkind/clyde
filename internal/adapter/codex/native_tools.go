@@ -13,12 +13,7 @@ import (
 // caller-provided name and parameters pass through verbatim: the tool
 // name and its JSON-schema parameters are opaque application content
 // owned by whoever declared the tool, so clyde does not rewrite them.
-func FunctionToolSpec(
-	name string,
-	description string,
-	parameters json.RawMessage,
-	strict *bool,
-) codexwire.ToolSpec {
+func FunctionToolSpec(name, description string, parameters json.RawMessage, strict *bool) codexwire.ToolSpec {
 	spec := codexwire.ToolSpec{
 		Type: codexwire.ToolSpecTypeFunction,
 		Name: strings.TrimSpace(name),
@@ -26,7 +21,6 @@ func FunctionToolSpec(
 	if desc := strings.TrimSpace(description); desc != "" {
 		spec.Description = desc
 	}
-
 	if len(parameters) > 0 && string(parameters) != "null" {
 		// Validate the parameters value parses as JSON; preserve the
 		// caller's raw bytes so the spec round-trips byte-identically.
@@ -35,12 +29,10 @@ func FunctionToolSpec(
 			spec.Parameters = append(json.RawMessage(nil), parameters...)
 		}
 	}
-
 	if strict != nil {
 		v := *strict
 		spec.Strict = &v
 	}
-
 	return spec
 }
 
@@ -61,12 +53,10 @@ func CustomToolSpec(name, description string, format *codexwire.ToolFormat) code
 	if desc := strings.TrimSpace(description); desc != "" {
 		spec.Description = desc
 	}
-
 	if format != nil {
 		copied := *format
 		spec.Format = &copied
 	}
-
 	return spec
 }
 
@@ -83,7 +73,6 @@ func CustomToolCallOutputItem(callID, name, text string) codexwire.InputItem {
 	if toolName == "" {
 		toolName = codexApplyPatchToolType
 	}
-
 	return codexwire.InputItem{
 		Type:   codexwire.ItemTypeCustomToolCallOutput,
 		CallID: strings.TrimSpace(callID),
@@ -119,17 +108,13 @@ func CommandString(argv []string) string {
 	if len(argv) == 0 {
 		return ""
 	}
-
-	if len(argv) >= 3 && strings.HasSuffix(filepath.Base(argv[0]), "sh") &&
-		(argv[1] == "-lc" || argv[1] == "-c") {
+	if len(argv) >= 3 && strings.HasSuffix(filepath.Base(argv[0]), "sh") && (argv[1] == "-lc" || argv[1] == "-c") {
 		return strings.Join(argv[2:], " ")
 	}
-
 	parts := make([]string, 0, len(argv))
 	for _, arg := range argv {
 		parts = append(parts, ShellQuote(arg))
 	}
-
 	return strings.Join(parts, " ")
 }
 
@@ -138,31 +123,20 @@ func ShellQuote(arg string) string {
 	if arg == "" {
 		return "''"
 	}
-
-	if strings.IndexFunc(
-		arg,
-		func(r rune) bool {
-			if r == '_' || r == '-' || r == '.' || r == '/' || r == ':' || r == '=' || r == '+' ||
-				r == ',' ||
-				r == '%' ||
-				r == '@' {
-				return false
-			}
-
-			if r >= '0' && r <= '9' {
-				return false
-			}
-
-			if r >= 'A' && r <= 'Z' {
-				return false
-			}
-
-			return r < 'a' || r > 'z'
-		},
-	) == -1 {
+	if strings.IndexFunc(arg, func(r rune) bool {
+		if r == '_' || r == '-' || r == '.' || r == '/' || r == ':' || r == '=' || r == '+' || r == ',' || r == '%' || r == '@' {
+			return false
+		}
+		if r >= '0' && r <= '9' {
+			return false
+		}
+		if r >= 'A' && r <= 'Z' {
+			return false
+		}
+		return r < 'a' || r > 'z'
+	}) == -1 {
 		return arg
 	}
-
 	return "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
 }
 
@@ -177,7 +151,6 @@ func ApplyPatchArgs(input string) (string, bool) {
 	if strings.TrimSpace(input) == "" {
 		return "", false
 	}
-
 	return input, true
 }
 
@@ -193,19 +166,16 @@ func UnwrapApplyPatchInput(input string) string {
 	if strings.TrimSpace(input) == "" {
 		return ""
 	}
-
 	var obj map[string]string
 	trimmed := strings.TrimSpace(input)
 	if err := json.Unmarshal([]byte(trimmed), &obj); err == nil {
 		if v := obj["input"]; strings.TrimSpace(v) != "" {
 			return v
 		}
-
 		if v := obj["patch"]; strings.TrimSpace(v) != "" {
 			return v
 		}
 	}
-
 	return input
 }
 
@@ -221,12 +191,10 @@ func RepairApplyPatchInput(input string) string {
 	if strings.TrimSpace(input) == "" {
 		return ""
 	}
-
 	lines := strings.SplitAfter(input, "\n")
 	if len(lines) == 0 {
 		return input
 	}
-
 	out := make([]string, 0, len(lines))
 	for i := range lines {
 		line := lines[i]
@@ -237,10 +205,8 @@ func RepairApplyPatchInput(input string) string {
 				continue
 			}
 		}
-
 		out = append(out, line)
 	}
-
 	return strings.Join(out, "")
 }
 

@@ -43,7 +43,6 @@ func resolverToWireConfig() config.AdapterConfig {
 	codex := cfg.Models["gpt-5.4"]
 	codex.Instructions = "model base instructions"
 	cfg.Models["gpt-5.4"] = codex
-
 	return cfg
 }
 
@@ -65,7 +64,6 @@ func TestResolverToAnthropicWirePropagatesThinking(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
-
 	bridge := adapterresolver.NewModelRegistryAdapter(registry)
 	server := newAnthropicWireServer(t)
 
@@ -95,53 +93,29 @@ func TestResolverToAnthropicWirePropagatesThinking(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		t.Run(
-			tc.alias,
-			func(t *testing.T) {
-				cursorReq := buildCursorRequest(tc.alias)
-				resolved, err := adapterresolver.Resolve(
-					adapterresolver.IngressCursor,
-					cursorReq,
-					bridge,
-				)
-				if err != nil {
-					t.Fatalf("resolver.Resolve(%s): %v", tc.alias, err)
-				}
-
-				prepared, err := server.prepareAnthropicProviderRequest(
-					context.Background(),
-					resolved,
-					"req-resolver-wire-"+tc.alias,
-				)
-				if err != nil {
-					t.Fatalf("prepareAnthropicProviderRequest: %v", err)
-				}
-
-				if tc.wantThinking == "" && prepared.Request.Thinking == nil {
-					return
-				}
-
-				if prepared.Request.Thinking == nil {
-					t.Fatalf("Thinking is nil; expected Type=%q", tc.wantThinking)
-				}
-
-				if prepared.Request.Thinking.Type != tc.wantThinking {
-					t.Fatalf(
-						"Thinking.Type = %q want %q (resolver or provider dropped the field)",
-						prepared.Request.Thinking.Type,
-						tc.wantThinking,
-					)
-				}
-
-				if prepared.Request.Thinking.BudgetTokens != tc.wantThinkingBudget {
-					t.Fatalf(
-						"Thinking.BudgetTokens = %d want %d (resolver or provider dropped the configured budget)",
-						prepared.Request.Thinking.BudgetTokens,
-						tc.wantThinkingBudget,
-					)
-				}
-			},
-		)
+		t.Run(tc.alias, func(t *testing.T) {
+			cursorReq := buildCursorRequest(tc.alias)
+			resolved, err := adapterresolver.Resolve(adapterresolver.IngressCursor, cursorReq, bridge)
+			if err != nil {
+				t.Fatalf("resolver.Resolve(%s): %v", tc.alias, err)
+			}
+			prepared, err := server.prepareAnthropicProviderRequest(context.Background(), resolved, "req-resolver-wire-"+tc.alias)
+			if err != nil {
+				t.Fatalf("prepareAnthropicProviderRequest: %v", err)
+			}
+			if tc.wantThinking == "" && prepared.Request.Thinking == nil {
+				return
+			}
+			if prepared.Request.Thinking == nil {
+				t.Fatalf("Thinking is nil; expected Type=%q", tc.wantThinking)
+			}
+			if prepared.Request.Thinking.Type != tc.wantThinking {
+				t.Fatalf("Thinking.Type = %q want %q (resolver or provider dropped the field)", prepared.Request.Thinking.Type, tc.wantThinking)
+			}
+			if prepared.Request.Thinking.BudgetTokens != tc.wantThinkingBudget {
+				t.Fatalf("Thinking.BudgetTokens = %d want %d (resolver or provider dropped the configured budget)", prepared.Request.Thinking.BudgetTokens, tc.wantThinkingBudget)
+			}
+		})
 	}
 }
 
@@ -156,7 +130,6 @@ func TestResolverToAnthropicWirePropagatesEffort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
-
 	bridge := adapterresolver.NewModelRegistryAdapter(registry)
 	server := newAnthropicWireServer(t)
 
@@ -170,41 +143,23 @@ func TestResolverToAnthropicWirePropagatesEffort(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		t.Run(
-			tc.alias,
-			func(t *testing.T) {
-				cursorReq := buildCursorRequest(tc.alias)
-				resolved, err := adapterresolver.Resolve(
-					adapterresolver.IngressCursor,
-					cursorReq,
-					bridge,
-				)
-				if err != nil {
-					t.Fatalf("resolver.Resolve(%s): %v", tc.alias, err)
-				}
-
-				prepared, err := server.prepareAnthropicProviderRequest(
-					context.Background(),
-					resolved,
-					"req-effort-"+tc.alias,
-				)
-				if err != nil {
-					t.Fatalf("prepareAnthropicProviderRequest: %v", err)
-				}
-
-				if prepared.Request.OutputConfig == nil {
-					t.Fatalf("OutputConfig is nil; expected effort=%q", tc.wantEffort)
-				}
-
-				if prepared.Request.OutputConfig.Effort != tc.wantEffort {
-					t.Fatalf(
-						"OutputConfig.Effort = %q want %q",
-						prepared.Request.OutputConfig.Effort,
-						tc.wantEffort,
-					)
-				}
-			},
-		)
+		t.Run(tc.alias, func(t *testing.T) {
+			cursorReq := buildCursorRequest(tc.alias)
+			resolved, err := adapterresolver.Resolve(adapterresolver.IngressCursor, cursorReq, bridge)
+			if err != nil {
+				t.Fatalf("resolver.Resolve(%s): %v", tc.alias, err)
+			}
+			prepared, err := server.prepareAnthropicProviderRequest(context.Background(), resolved, "req-effort-"+tc.alias)
+			if err != nil {
+				t.Fatalf("prepareAnthropicProviderRequest: %v", err)
+			}
+			if prepared.Request.OutputConfig == nil {
+				t.Fatalf("OutputConfig is nil; expected effort=%q", tc.wantEffort)
+			}
+			if prepared.Request.OutputConfig.Effort != tc.wantEffort {
+				t.Fatalf("OutputConfig.Effort = %q want %q", prepared.Request.OutputConfig.Effort, tc.wantEffort)
+			}
+		})
 	}
 }
 
@@ -215,7 +170,6 @@ func TestResolverToAnthropicWirePropagatesInstructions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
-
 	bridge := adapterresolver.NewModelRegistryAdapter(registry)
 	server := newAnthropicWireServer(t)
 
@@ -224,20 +178,13 @@ func TestResolverToAnthropicWirePropagatesInstructions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolver.Resolve: %v", err)
 	}
-
-	prepared, err := server.prepareAnthropicProviderRequest(
-		context.Background(),
-		resolved,
-		"req-instructions",
-	)
+	prepared, err := server.prepareAnthropicProviderRequest(context.Background(), resolved, "req-instructions")
 	if err != nil {
 		t.Fatalf("prepareAnthropicProviderRequest: %v", err)
 	}
-
 	if len(prepared.Request.SystemBlocks) < 3 {
 		t.Fatalf("SystemBlocks len = %d want at least 3", len(prepared.Request.SystemBlocks))
 	}
-
 	if got := prepared.Request.SystemBlocks[2].Text; got != "family base instructions\n\ncaller system instructions" {
 		t.Fatalf("SystemBlocks[2].Text = %q want family instructions prepended", got)
 	}
@@ -258,7 +205,6 @@ func TestResolverToCodexWirePropagatesEffort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
-
 	bridge := adapterresolver.NewModelRegistryAdapter(registry)
 
 	cases := []struct {
@@ -279,48 +225,30 @@ func TestResolverToCodexWirePropagatesEffort(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		t.Run(
-			tc.alias,
-			func(t *testing.T) {
-				cursorReq := buildCursorRequest(tc.alias)
-				resolved, err := adapterresolver.Resolve(
-					adapterresolver.IngressCursor,
-					cursorReq,
-					bridge,
-				)
-				if err != nil {
-					t.Fatalf("resolver.Resolve(%s): %v", tc.alias, err)
-				}
-
-				built := adaptercodex.BuildRequestWithConfig(
-					resolved.OpenAI,
-					&resolved,
-					resolved.Effort.String(),
-					adaptercodex.RequestBuilderConfig{},
-				)
-				if built.Reasoning == nil {
-					t.Fatalf("Reasoning is nil; expected effort=%q", tc.wantEffort)
-				}
-
-				if built.Reasoning.Effort != tc.wantEffort {
-					t.Fatalf("Reasoning.Effort = %q want %q", built.Reasoning.Effort, tc.wantEffort)
-				}
-
-				if built.Instructions != tc.wantInstructions {
-					t.Fatalf("Instructions = %q want %q", built.Instructions, tc.wantInstructions)
-				}
-			},
-		)
+		t.Run(tc.alias, func(t *testing.T) {
+			cursorReq := buildCursorRequest(tc.alias)
+			resolved, err := adapterresolver.Resolve(adapterresolver.IngressCursor, cursorReq, bridge)
+			if err != nil {
+				t.Fatalf("resolver.Resolve(%s): %v", tc.alias, err)
+			}
+			built := adaptercodex.BuildRequestWithConfig(resolved.OpenAI, &resolved, resolved.Effort.String(), adaptercodex.RequestBuilderConfig{})
+			if built.Reasoning == nil {
+				t.Fatalf("Reasoning is nil; expected effort=%q", tc.wantEffort)
+			}
+			if built.Reasoning.Effort != tc.wantEffort {
+				t.Fatalf("Reasoning.Effort = %q want %q", built.Reasoning.Effort, tc.wantEffort)
+			}
+			if built.Instructions != tc.wantInstructions {
+				t.Fatalf("Instructions = %q want %q", built.Instructions, tc.wantInstructions)
+			}
+		})
 	}
 }
 
 func TestResolverToCodexWireUsesConfiguredEffortValue(t *testing.T) {
 	cfg := resolverToWireConfig()
 	profile := cfg.ModelProfiles["codex"]
-	profile.ReasoningEfforts = append(
-		profile.ReasoningEfforts,
-		config.AdapterReasoningEffort("ultra"),
-	)
+	profile.ReasoningEfforts = append(profile.ReasoningEfforts, config.AdapterReasoningEffort("ultra"))
 	profile.ReasoningEffortWireValues = map[config.AdapterReasoningEffort]config.AdapterReasoningEffort{
 		"ultra": "max",
 	}
@@ -330,7 +258,6 @@ func TestResolverToCodexWireUsesConfiguredEffortValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
-
 	request := buildCursorRequest("gpt-5.4")
 	request.OpenAI.ReasoningEffort = "ultra"
 	resolved, err := adapterresolver.Resolve(
@@ -341,15 +268,9 @@ func TestResolverToCodexWireUsesConfiguredEffortValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-
 	if resolved.Effort != "ultra" || resolved.WireEffort != "max" {
-		t.Fatalf(
-			"resolved effort/wire = %q/%q, want ultra/max",
-			resolved.Effort,
-			resolved.WireEffort,
-		)
+		t.Fatalf("resolved effort/wire = %q/%q, want ultra/max", resolved.Effort, resolved.WireEffort)
 	}
-
 	built := adaptercodex.BuildRequestWithConfig(
 		resolved.OpenAI,
 		&resolved,
@@ -366,7 +287,6 @@ func TestUndeclaredCodexWildcardReachesTypedProviderRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
-
 	request := wildcardProviderRequest("gpt-undeclared")
 	resolved, err := adapterresolver.Resolve(
 		adapterresolver.IngressCursor,
@@ -376,7 +296,6 @@ func TestUndeclaredCodexWildcardReachesTypedProviderRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-
 	assertWildcardCapabilitiesUnknown(t, resolved)
 	server := newAnthropicWireServer(t)
 	if preflightErr := server.preflightChat(
@@ -387,7 +306,6 @@ func TestUndeclaredCodexWildcardReachesTypedProviderRequest(t *testing.T) {
 	); preflightErr != nil {
 		t.Fatalf("preflightChat: %v", preflightErr)
 	}
-
 	if resolved.OpenAI.MaxTokens == nil || *resolved.OpenAI.MaxTokens != 250000 {
 		t.Fatalf("resolved max_tokens = %v, want 250000", resolved.OpenAI.MaxTokens)
 	}
@@ -401,16 +319,13 @@ func TestUndeclaredCodexWildcardReachesTypedProviderRequest(t *testing.T) {
 	if built.Model != "gpt-undeclared" {
 		t.Fatalf("Model = %q, want gpt-undeclared", built.Model)
 	}
-
 	if built.Reasoning == nil || built.Reasoning.Effort != "invented-provider-tier" {
 		t.Fatalf("Reasoning = %+v, want invented-provider-tier", built.Reasoning)
 	}
-
 	builtEncoded, err := json.Marshal(built)
 	if err != nil {
 		t.Fatalf("marshal Codex request: %v", err)
 	}
-
 	var builtFields struct {
 		MaxTokens           json.RawMessage `json:"max_tokens"`
 		MaxCompletionTokens json.RawMessage `json:"max_completion_tokens"`
@@ -419,7 +334,6 @@ func TestUndeclaredCodexWildcardReachesTypedProviderRequest(t *testing.T) {
 	if err := json.Unmarshal(builtEncoded, &builtFields); err != nil {
 		t.Fatalf("unmarshal Codex request: %v", err)
 	}
-
 	for _, tokenCap := range []struct {
 		name  string
 		value json.RawMessage
@@ -432,26 +346,20 @@ func TestUndeclaredCodexWildcardReachesTypedProviderRequest(t *testing.T) {
 			t.Fatalf("Codex egress carried %s: %s", tokenCap.name, builtEncoded)
 		}
 	}
-
 	if len(built.Tools) != 1 || built.Tools[0].Name != "inspect_image" {
 		t.Fatalf("Tools = %+v, want inspect_image", built.Tools)
 	}
-
 	if string(built.Text) != `{"verbosity":"high"}` {
 		t.Fatalf("Text = %s, want verbosity control", built.Text)
 	}
-
 	foundImage := false
-
 	for _, item := range built.Input {
 		for _, part := range item.Content {
-			if part.Type == codexwire.ContentItemInputImage &&
-				part.ImageURL == "https://example.invalid/image.png" {
+			if part.Type == codexwire.ContentItemInputImage && part.ImageURL == "https://example.invalid/image.png" {
 				foundImage = true
 			}
 		}
 	}
-
 	if !foundImage {
 		t.Fatalf("Codex input dropped image: %+v", built.Input)
 	}
@@ -462,7 +370,6 @@ func TestUndeclaredAnthropicWildcardReachesTypedProviderRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
-
 	request := wildcardProviderRequest("claude-undeclared")
 	resolved, err := adapterresolver.Resolve(
 		adapterresolver.IngressCursor,
@@ -472,7 +379,6 @@ func TestUndeclaredAnthropicWildcardReachesTypedProviderRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-
 	assertWildcardCapabilitiesUnknown(t, resolved)
 	server := newAnthropicWireServer(t)
 	if preflightErr := server.preflightChat(
@@ -483,7 +389,6 @@ func TestUndeclaredAnthropicWildcardReachesTypedProviderRequest(t *testing.T) {
 	); preflightErr != nil {
 		t.Fatalf("preflightChat: %v", preflightErr)
 	}
-
 	prepared, err := server.prepareAnthropicProviderRequest(
 		context.Background(),
 		resolved,
@@ -492,39 +397,27 @@ func TestUndeclaredAnthropicWildcardReachesTypedProviderRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepareAnthropicProviderRequest: %v", err)
 	}
-
 	out := prepared.Request
 	if out.Model != "claude-undeclared" || out.MaxTokens != 250000 {
-		t.Fatalf(
-			"model/max_tokens = %q/%d, want claude-undeclared/250000",
-			out.Model,
-			out.MaxTokens,
-		)
+		t.Fatalf("model/max_tokens = %q/%d, want claude-undeclared/250000", out.Model, out.MaxTokens)
 	}
-
 	if out.OutputConfig == nil || out.OutputConfig.Effort != "invented-provider-tier" {
 		t.Fatalf("OutputConfig = %+v, want invented-provider-tier", out.OutputConfig)
 	}
-
 	if len(out.Tools) != 1 || out.Tools[0].Name != "inspect_image" {
 		t.Fatalf("Tools = %+v, want inspect_image", out.Tools)
 	}
-
 	foundImage := false
-
 	for _, message := range out.Messages {
 		for _, block := range message.Content {
-			if block.Type == "image" && block.Source != nil &&
-				block.Source.URL == "https://example.invalid/image.png" {
+			if block.Type == "image" && block.Source != nil && block.Source.URL == "https://example.invalid/image.png" {
 				foundImage = true
 			}
 		}
 	}
-
 	if !foundImage {
 		t.Fatalf("Anthropic messages dropped image: %+v", out.Messages)
 	}
-
 	if out.FeatureVector.WireProfile != "learned-wildcard-default" {
 		t.Fatalf("WireProfile = %q, want learned-wildcard-default", out.FeatureVector.WireProfile)
 	}
@@ -549,38 +442,30 @@ func wildcardResolverToWireConfig() config.AdapterConfig {
 			CapabilityPolicy: config.AdapterWildcardCapabilityPolicyPassthrough,
 		},
 	}
-
 	return cfg
 }
 
 func wildcardProviderRequest(model string) adapteropenai.ChatRequest {
 	maxTokens := 250000
 	parallelTools := true
-
 	return adapteropenai.ChatRequest{
 		Model: model,
-		Messages: []adapteropenai.ChatMessage{
-			{
-				Role: "user",
-				Content: json.RawMessage(
-					`[
+		Messages: []adapteropenai.ChatMessage{{
+			Role: "user",
+			Content: json.RawMessage(`[
 				{"type":"text","text":"inspect this image"},
 				{"type":"image_url","image_url":{"url":"https://example.invalid/image.png"}}
-			]`,
-				),
-			},
-		},
+			]`),
+		}},
 		Reasoning: &adapteropenai.Reasoning{Effort: "invented-provider-tier"},
-		Tools: []adapteropenai.Tool{
-			{
-				Type: "function",
-				Function: adapteropenai.ToolFunctionSchema{
-					Name:        "inspect_image",
-					Description: "Inspect an image.",
-					Parameters:  json.RawMessage(`{"type":"object"}`),
-				},
+		Tools: []adapteropenai.Tool{{
+			Type: "function",
+			Function: adapteropenai.ToolFunctionSchema{
+				Name:        "inspect_image",
+				Description: "Inspect an image.",
+				Parameters:  json.RawMessage(`{"type":"object"}`),
 			},
-		},
+		}},
 		MaxTokens:     &maxTokens,
 		ParallelTools: &parallelTools,
 		Text:          json.RawMessage(`{"verbosity":"high"}`),
@@ -590,19 +475,10 @@ func wildcardProviderRequest(model string) adapteropenai.ChatRequest {
 func assertWildcardCapabilitiesUnknown(t *testing.T, resolved adapterresolver.ResolvedRequest) {
 	t.Helper()
 	if resolved.ToolsCapability != nil || resolved.VisionCapability != nil {
-		t.Fatalf(
-			"wildcard capabilities = tools:%v vision:%v, want unknown",
-			resolved.ToolsCapability,
-			resolved.VisionCapability,
-		)
+		t.Fatalf("wildcard capabilities = tools:%v vision:%v, want unknown", resolved.ToolsCapability, resolved.VisionCapability)
 	}
-
 	if resolved.ContextBudget.InputTokens != 0 || resolved.MaxOutputTokens != 0 {
-		t.Fatalf(
-			"wildcard context/output = %d/%d, want unknown",
-			resolved.ContextBudget.InputTokens,
-			resolved.MaxOutputTokens,
-		)
+		t.Fatalf("wildcard context/output = %d/%d, want unknown", resolved.ContextBudget.InputTokens, resolved.MaxOutputTokens)
 	}
 }
 
@@ -613,16 +489,13 @@ func assertWildcardCapabilitiesUnknown(t *testing.T, resolved adapterresolver.Re
 func buildCursorRequest(alias string) adaptercursor.Request {
 	return adaptercursor.TranslateRequest(adapteropenai.ChatRequest{
 		Model: alias,
-		Messages: []adapteropenai.ChatMessage{
-			{
-				Role:    "system",
-				Content: json.RawMessage(`"caller system instructions"`),
-			},
-			{
-				Role:    "user",
-				Content: json.RawMessage(`"Say ok."`),
-			},
-		},
+		Messages: []adapteropenai.ChatMessage{{
+			Role:    "system",
+			Content: json.RawMessage(`"caller system instructions"`),
+		}, {
+			Role:    "user",
+			Content: json.RawMessage(`"Say ok."`),
+		}},
 	})
 }
 
@@ -632,18 +505,13 @@ func buildCursorRequest(alias string) adaptercursor.Request {
 // propagation, not network calls.
 func newAnthropicWireServer(t *testing.T) *Server {
 	t.Helper()
-
 	return &Server{
-		anthr: anthropic.New(
-			nil,
-			nil,
-			anthropic.Config{
-				UserAgent:          "claude-cli/2.1.123",
-				SystemPromptPrefix: "You are Claude Code.",
-				CCVersion:          "2.1.123",
-				CCEntrypoint:       "sdk-cli",
-			},
-		),
+		anthr: anthropic.New(nil, nil, anthropic.Config{
+			UserAgent:          "claude-cli/2.1.123",
+			SystemPromptPrefix: "You are Claude Code.",
+			CCVersion:          "2.1.123",
+			CCEntrypoint:       "sdk-cli",
+		}),
 		log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }

@@ -14,7 +14,6 @@ func codexTranscriptMessage(
 		if !includeSystemMessages {
 			return emptyMessage(), false
 		}
-
 		return transcript.Message{
 			UUID:              "",
 			ParentUUID:        msg.ParentUUID,
@@ -36,7 +35,6 @@ func codexTranscriptMessage(
 	if text == "" && msg.Thinking == "" && len(msg.Tools) == 0 {
 		return emptyMessage(), false
 	}
-
 	return transcript.Message{
 		UUID:              "",
 		ParentUUID:        msg.ParentUUID,
@@ -58,27 +56,20 @@ func codexTextParts(parts []transcript.MessageTextPart) []transcript.MessageText
 	if len(parts) == 0 {
 		return nil
 	}
-
 	normalized := make([]transcript.MessageTextPart, 0, len(parts))
 	for _, part := range parts {
 		text := part.Text
 		if !part.InjectedTranscript {
 			text = transcript.NormalizeConversationOnlyText(text)
 		}
-
 		if text == "" {
 			continue
 		}
-
-		normalized = append(
-			normalized,
-			transcript.MessageTextPart{
-				Text:               text,
-				InjectedTranscript: part.InjectedTranscript,
-				TranscriptSpans:    part.TranscriptSpans,
-			},
-		)
+		normalized = append(normalized, transcript.MessageTextPart{
+			Text:               text,
+			InjectedTranscript: part.InjectedTranscript,
+			TranscriptSpans:    part.TranscriptSpans,
+		})
 	}
-
 	return normalized
 }

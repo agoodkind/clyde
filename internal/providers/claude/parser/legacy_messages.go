@@ -53,25 +53,10 @@ func newProvenanceReader(file io.ReaderAt, index *provenanceIndex) *provenanceRe
 func (reader *provenanceReader) readLine(span lineSpan) ([]byte, error) {
 	line := make([]byte, span.length)
 	if _, err := reader.file.ReadAt(line, span.offset); err != nil {
-		slog.Warn(
-			"providers.claude.parser.legacy_transcript_read_failed",
-			"concern",
-			concern,
-			"component",
-			"claude",
-			"offset",
-			span.offset,
-			"err",
-			err,
-		)
-
-		return nil, newResolutionError(
-			"transcript line at offset "+strconv.FormatInt(span.offset, 10),
-			"read failed",
-			err,
-		)
+		slog.Warn("providers.claude.parser.legacy_transcript_read_failed",
+			"concern", concern, "component", "claude", "offset", span.offset, "err", err)
+		return nil, newResolutionError("transcript line at offset "+strconv.FormatInt(span.offset, 10), "read failed", err)
 	}
-
 	return line, nil
 }
 
@@ -81,17 +66,14 @@ func (reader *provenanceReader) lineMessage(span lineSpan) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	subject := "transcript line at offset " + strconv.FormatInt(span.offset, 10)
 	var decoded recordMessageLine
 	if err := json.Unmarshal(line, &decoded); err != nil {
 		return nil, newResolutionError(subject, "decode failed", err)
 	}
-
 	if len(decoded.Message) == 0 {
 		return nil, newResolutionError(subject, "the line has no message")
 	}
-
 	return decoded.Message, nil
 }
 
@@ -107,30 +89,24 @@ func (reader *provenanceReader) resolveReference(ref string) (resolvedMessage, e
 		if err != nil {
 			return noMessage, err
 		}
-
 		hash, ok := canonicalMessageHash(message)
 		if !ok {
 			return noMessage, newResolutionError(subject, "the blob message is not valid JSON")
 		}
-
 		if hash != ref {
 			return noMessage, newResolutionError(subject, "the blob message hashes to "+hash)
 		}
-
 		return resolvedMessage{raw: message, source: blobSource(message)}, nil
 	}
-
 	reader.buildGroups()
 	uuids, ok := reader.groups[ref]
 	if !ok {
 		return noMessage, newResolutionError(subject, "no blob or typed record group has this hash")
 	}
-
 	message, err := reader.groupMessage(uuids)
 	if err != nil {
 		return noMessage, err
 	}
-
 	return resolvedMessage{raw: message, source: resolvedSourceGroup}, nil
 }
 
@@ -139,12 +115,10 @@ func blobSource(message []byte) resolvedSource {
 	if err := json.Unmarshal(message, &content); err != nil {
 		return resolvedSourceBlob
 	}
-
 	trimmed := bytes.TrimSpace(content.Content)
 	if len(trimmed) > 0 && trimmed[0] == '"' {
 		return resolvedSourceNormalizedBlob
 	}
-
 	return resolvedSourceBlob
 }
 
@@ -157,49 +131,40 @@ func (reader *provenanceReader) buildGroups() {
 	if reader.groupsBuilt {
 		return
 	}
-
 	reader.groupsBuilt = true
 	reader.groups = make(map[string][]string)
 	assistantGroups := make(map[string][]string)
 	assistantOrder := make([]string, 0)
 	runs := make([][]string, 0)
 	run := make([]string, 0)
-
 	for _, uuid := range reader.index.order {
 		record := reader.index.records[uuid]
 		if record.user && record.toolResultsOnly {
 			run = append(run, uuid)
 			continue
 		}
-
 		if len(run) > 0 {
 			runs = append(runs, run)
 			run = make([]string, 0)
 		}
-
 		if !record.user && record.messageID != "" {
 			if _, seen := assistantGroups[record.messageID]; !seen {
 				assistantOrder = append(assistantOrder, record.messageID)
 			}
-
 			assistantGroups[record.messageID] = append(assistantGroups[record.messageID], uuid)
 		}
 	}
-
 	if len(run) > 0 {
 		runs = append(runs, run)
 	}
-
 	for _, messageID := range assistantOrder {
 		reader.addGroup(assistantGroups[messageID])
 	}
-
 	for _, members := range runs {
 		reader.addGroup(members)
 		if len(members) == 1 {
 			continue
 		}
-
 		for _, member := range members {
 			reader.addGroup([]string{member})
 		}
@@ -214,12 +179,10 @@ func (reader *provenanceReader) addGroup(uuids []string) {
 	if err != nil {
 		return
 	}
-
 	hash, ok := canonicalMessageHash(message)
 	if !ok {
 		return
 	}
-
 	if _, seen := reader.groups[hash]; !seen {
 		reader.groups[hash] = uuids
 	}
@@ -231,36 +194,29 @@ func (reader *provenanceReader) groupMessage(uuids []string) ([]byte, error) {
 	if len(uuids) == 0 {
 		return nil, newResolutionError("typed record group", "the group is empty")
 	}
-
 	role := string(EntryTypeAssistant)
 	if reader.index.records[uuids[0]].user {
 		role = string(EntryTypeUser)
 	}
-
 	var out bytes.Buffer
 	out.WriteString(`{"role":`)
 	out.WriteString(strconv.Quote(role))
 	out.WriteString(`,"content":[`)
 	written := 0
-
 	for _, uuid := range uuids {
 		parts, err := reader.recordParts(uuid)
 		if err != nil {
 			return nil, err
 		}
-
 		for _, part := range parts {
 			if written > 0 {
 				out.WriteByte(',')
 			}
-
 			out.Write(part)
 			written++
 		}
 	}
-
 	out.WriteString(`]}`)
-
 	return out.Bytes(), nil
 }
 
@@ -272,32 +228,26 @@ func (reader *provenanceReader) recordParts(uuid string) ([]json.RawMessage, err
 	if !ok {
 		return nil, newResolutionError(subject, "the transcript has no such record")
 	}
-
 	message, err := reader.lineMessage(record.span)
 	if err != nil {
 		return nil, err
 	}
-
 	var content recordContent
 	if err := json.Unmarshal(message, &content); err != nil {
 		return nil, newResolutionError(subject, "decode message content failed", err)
 	}
-
 	trimmed := bytes.TrimSpace(content.Content)
 	if len(trimmed) > 0 && trimmed[0] == '"' {
 		var text bytes.Buffer
 		text.WriteString(`{"type":"text","text":`)
 		text.Write(trimmed)
 		text.WriteByte('}')
-
 		return []json.RawMessage{text.Bytes()}, nil
 	}
-
 	var parts []json.RawMessage
 	if err := json.Unmarshal(content.Content, &parts); err != nil {
 		return nil, newResolutionError(subject, "decode content blocks failed", err)
 	}
-
 	return parts, nil
 }
 
@@ -308,29 +258,19 @@ func (reader *provenanceReader) recordParts(uuid string) ([]json.RawMessage, err
 func decodeSnapshotRequest(messages []resolvedMessage) (anthropic.CompactionRequest, error) {
 	var body bytes.Buffer
 	body.WriteString(`{"messages":[`)
-
 	for index, message := range messages {
 		if index > 0 {
 			body.WriteByte(',')
 		}
-
 		body.Write(message.raw)
 	}
-
 	body.WriteString(`]}`)
 	request, err := anthropic.DecodeCompactionRequest(body.Bytes())
 	if err != nil {
 		return request, newResolutionError("replayed request", "decode failed", err)
 	}
-
 	if len(request.Messages) != len(messages) {
-		return request, newResolutionError(
-			"replayed request",
-			"decoded "+strconv.Itoa(len(request.Messages))+" messages, want "+strconv.Itoa(
-				len(messages),
-			),
-		)
+		return request, newResolutionError("replayed request", "decoded "+strconv.Itoa(len(request.Messages))+" messages, want "+strconv.Itoa(len(messages)))
 	}
-
 	return request, nil
 }

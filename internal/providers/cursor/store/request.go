@@ -64,17 +64,14 @@ func (lookup GenerationLookup) Found() bool {
 // to run, not two, so the caller narrows the chat headers once per value here.
 func (lookup GenerationLookup) Instants() []int64 {
 	seen := make(map[int64]bool, len(lookup.Hits))
-
 	instants := make([]int64, 0, len(lookup.Hits))
 	for _, hit := range lookup.Hits {
 		if seen[hit.Entry.UnixMs] {
 			continue
 		}
-
 		seen[hit.Entry.UnixMs] = true
 		instants = append(instants, hit.Entry.UnixMs)
 	}
-
 	return instants
 }
 
@@ -85,7 +82,6 @@ func (lookup GenerationLookup) WorkspaceHashes() []string {
 	for _, hit := range lookup.Hits {
 		hashes = append(hashes, hit.WorkspaceHash)
 	}
-
 	return hashes
 }
 
@@ -101,30 +97,17 @@ func DecodeGenerationEntriesJSON(data []byte) ([]GenerationEntry, error) {
 	if err := json.Unmarshal(data, &entries); err != nil {
 		return nil, CursorJSONDecodeError{Description: "generation entries", Err: err}
 	}
-
 	return entries, nil
 }
 
 // ReadGenerationEntries reads one workspace database's recent generation ring.
-func ReadGenerationEntries(
-	ctx context.Context,
-	workspaceDB *sql.DB,
-) ([]GenerationEntry, bool, error) {
+func ReadGenerationEntries(ctx context.Context, workspaceDB *sql.DB) ([]GenerationEntry, bool, error) {
 	value, found, err := ReadKVValue(ctx, workspaceDB, KVTableItemTable, generationsItemKey)
 	if err != nil {
 		logger := discoveryReadLogger(ctx)
-		logger.WarnContext(
-			ctx,
-			"providers.cursor.store.generations_read_failed",
-			"concern",
-			concern,
-			"err",
-			err,
-		)
-
+		logger.WarnContext(ctx, "providers.cursor.store.generations_read_failed", "concern", concern, "err", err)
 		return nil, false, fmt.Errorf("read cursor generation entries: %w", err)
 	}
-
 	if !found {
 		return nil, false, nil
 	}
@@ -132,18 +115,9 @@ func ReadGenerationEntries(
 	entries, err := DecodeGenerationEntriesJSON(value)
 	if err != nil {
 		logger := discoveryReadLogger(ctx)
-		logger.WarnContext(
-			ctx,
-			"providers.cursor.store.generations_decode_failed",
-			"concern",
-			concern,
-			"err",
-			err,
-		)
-
+		logger.WarnContext(ctx, "providers.cursor.store.generations_decode_failed", "concern", concern, "err", err)
 		return nil, false, fmt.Errorf("decode cursor generation entries: %w", err)
 	}
-
 	return entries, true, nil
 }
 
@@ -173,100 +147,36 @@ func ReadGenerationEntries(
 //
 // A workspaceStorage directory that does not exist is not counted, because it is
 // an answer: there are no rings on this machine, so a miss across them is real.
-func FindGenerationEntry(
-	ctx context.Context,
-	root DataRoot,
-	requestID string,
-) (GenerationLookup, error) {
+func FindGenerationEntry(ctx context.Context, root DataRoot, requestID string) (GenerationLookup, error) {
 	var emptyLookup GenerationLookup
 
 	listing, err := root.ListWorkspaceEntries()
 	if err != nil {
-		slog.WarnContext(
-			ctx,
-			"providers.cursor.store.generation_workspaces_list_failed",
-			"concern",
-			concern,
-			"path",
-			root.WorkspaceStorageDir,
-			"err",
-			err,
-		)
-
+		slog.WarnContext(ctx, "providers.cursor.store.generation_workspaces_list_failed", "concern", concern, "path", root.WorkspaceStorageDir, "err", err)
 		return emptyLookup, fmt.Errorf("list cursor workspaces for request %q: %w", requestID, err)
 	}
-
 	entries := listing.Entries
 	sortWorkspaceEntriesNewestFirst(entries)
 
 	lookup := GenerationLookup{Hits: nil, UnreadableWorkspaces: listing.Unreadable}
-
 	for position, entry := range entries {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			unread := len(entries) - position
 			lookup.UnreadableWorkspaces += unread
-			slog.WarnContext(
-				ctx,
-				"providers.cursor.store.generation_sweep_cut_short",
-				"concern",
-				concern,
-				"path",
-				root.WorkspaceStorageDir,
-				"request_id",
-				requestID,
-				"read",
-				position,
-				"unread",
-				unread,
-				"err",
-				ctxErr,
-			)
-
+			slog.WarnContext(ctx, "providers.cursor.store.generation_sweep_cut_short", "concern", concern, "path", root.WorkspaceStorageDir, "request_id", requestID, "read", position, "unread", unread, "err", ctxErr)
 			return lookup, nil
 		}
-
 		hit, found, readable := findGenerationEntryInWorkspace(ctx, entry, requestID)
 		if !readable {
 			lookup.UnreadableWorkspaces++
 			continue
 		}
-
 		if found {
 			lookup.Hits = append(lookup.Hits, hit)
-			slog.DebugContext(
-				ctx,
-				"providers.cursor.store.generation_sweep_hit",
-				"concern",
-				concern,
-				"path",
-				root.WorkspaceStorageDir,
-				"request_id",
-				requestID,
-				"workspace_hash",
-				hit.WorkspaceHash,
-				"read",
-				position+1,
-			)
+			slog.DebugContext(ctx, "providers.cursor.store.generation_sweep_hit", "concern", concern, "path", root.WorkspaceStorageDir, "request_id", requestID, "workspace_hash", hit.WorkspaceHash, "read", position+1)
 		}
 	}
-
-	slog.DebugContext(
-		ctx,
-		"providers.cursor.store.generation_sweep_finished",
-		"concern",
-		concern,
-		"path",
-		root.WorkspaceStorageDir,
-		"request_id",
-		requestID,
-		"count",
-		len(entries),
-		"hits",
-		len(lookup.Hits),
-		"unreadable",
-		lookup.UnreadableWorkspaces,
-	)
-
+	slog.DebugContext(ctx, "providers.cursor.store.generation_sweep_finished", "concern", concern, "path", root.WorkspaceStorageDir, "request_id", requestID, "count", len(entries), "hits", len(lookup.Hits), "unreadable", lookup.UnreadableWorkspaces)
 	return lookup, nil
 }
 
@@ -280,16 +190,11 @@ func sortWorkspaceEntriesNewestFirst(entries []WorkspaceEntry) {
 		if err != nil {
 			continue
 		}
-
 		modTimes[entry.StateDBPath] = info.ModTime()
 	}
-
-	sort.SliceStable(
-		entries,
-		func(i int, j int) bool {
-			return modTimes[entries[i].StateDBPath].After(modTimes[entries[j].StateDBPath])
-		},
-	)
+	sort.SliceStable(entries, func(i int, j int) bool {
+		return modTimes[entries[i].StateDBPath].After(modTimes[entries[j].StateDBPath])
+	})
 }
 
 // findGenerationEntryInWorkspace reads one workspace's ring. The third result is
@@ -306,15 +211,12 @@ func findGenerationEntryInWorkspace(
 	if data.GenerationsErr != nil {
 		return emptyHit, false, false
 	}
-
 	for _, generation := range data.Generations {
 		if generation.GenerationUUID != requestID {
 			continue
 		}
-
 		return GenerationHit{WorkspaceHash: entry.WorkspaceHash, Entry: generation}, true, true
 	}
-
 	return emptyHit, false, true
 }
 
@@ -380,7 +282,6 @@ func composerLifetimeEndSQL(columns map[string]bool) string {
 			present = append(present, column)
 		}
 	}
-
 	if len(present) == 0 {
 		return composerCreatedAtColumn
 	}
@@ -388,15 +289,12 @@ func composerLifetimeEndSQL(columns map[string]bool) string {
 	var expression strings.Builder
 	expression.WriteString("max(")
 	expression.WriteString(composerCreatedAtColumn)
-
 	for _, column := range present {
 		expression.WriteString(", coalesce(")
 		expression.WriteString(column)
 		expression.WriteString(", 0)")
 	}
-
 	expression.WriteString(")")
-
 	return expression.String()
 }
 
@@ -420,10 +318,8 @@ func selectComposerIDsCoveringTimeQuery(columns map[string]bool, scopeByWorkspac
 		query.WriteString(composerWorkspaceColumn)
 		query.WriteString(" = ?)")
 	}
-
 	query.WriteString(" ORDER BY ")
 	query.WriteString(composerIDColumn)
-
 	return query.String()
 }
 
@@ -464,7 +360,6 @@ func reachableComposerHeaderCountQuery(scopeByWorkspace bool) string {
 	if scopeByWorkspace {
 		query += " AND (? = '' OR " + composerWorkspaceColumn + " = ?)"
 	}
-
 	return query
 }
 
@@ -474,20 +369,9 @@ func reachableComposerHeaderCountQuery(scopeByWorkspace bool) string {
 func readTableColumns(ctx context.Context, db *sql.DB, table string) (map[string]bool, error) {
 	rows, err := db.QueryContext(ctx, tableColumnsQuery, table)
 	if err != nil {
-		slog.WarnContext(
-			ctx,
-			"providers.cursor.store.table_columns_query_failed",
-			"concern",
-			concern,
-			"table",
-			table,
-			"err",
-			err,
-		)
-
+		slog.WarnContext(ctx, "providers.cursor.store.table_columns_query_failed", "concern", concern, "table", table, "err", err)
 		return nil, fmt.Errorf("query cursor %s columns: %w", table, err)
 	}
-
 	defer func() { _ = rows.Close() }()
 
 	return scanTableColumns(ctx, rows, table)
@@ -497,42 +381,18 @@ func readTableColumns(ctx context.Context, db *sql.DB, table string) (map[string
 // yielded, so the pooled read and the snapshot read fold the rows identically.
 func scanTableColumns(ctx context.Context, rows *sql.Rows, table string) (map[string]bool, error) {
 	columns := make(map[string]bool)
-
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
-			slog.WarnContext(
-				ctx,
-				"providers.cursor.store.table_column_scan_failed",
-				"concern",
-				concern,
-				"table",
-				table,
-				"err",
-				err,
-			)
-
+			slog.WarnContext(ctx, "providers.cursor.store.table_column_scan_failed", "concern", concern, "table", table, "err", err)
 			return nil, fmt.Errorf("scan cursor %s column: %w", table, err)
 		}
-
 		columns[name] = true
 	}
-
 	if err := rows.Err(); err != nil {
-		slog.WarnContext(
-			ctx,
-			"providers.cursor.store.table_columns_iterate_failed",
-			"concern",
-			concern,
-			"table",
-			table,
-			"err",
-			err,
-		)
-
+		slog.WarnContext(ctx, "providers.cursor.store.table_columns_iterate_failed", "concern", concern, "table", table, "err", err)
 		return nil, fmt.Errorf("iterate cursor %s columns: %w", table, err)
 	}
-
 	return columns, nil
 }
 
@@ -560,51 +420,25 @@ func ListComposerIDsCoveringTime(
 	if ctx == nil {
 		return narrowing, fmt.Errorf("list cursor composers covering %d: nil context", unixMs)
 	}
-
 	if db == nil {
-		slog.WarnContext(
-			ctx,
-			"providers.cursor.store.composer_narrowing_no_database",
-			"concern",
-			concern,
-			"unix_ms",
-			unixMs,
-		)
-
+		slog.WarnContext(ctx, "providers.cursor.store.composer_narrowing_no_database", "concern", concern, "unix_ms", unixMs)
 		return narrowing, fmt.Errorf("list cursor composers covering %d: nil database", unixMs)
 	}
-
 	exists, err := TableExists(ctx, db, composerHeadersTableName)
 	if err != nil {
 		return narrowing, err
 	}
-
 	if !exists {
 		return narrowing, nil
 	}
-
 	columns, err := readTableColumns(ctx, db, composerHeadersTableName)
 	if err != nil {
 		return narrowing, err
 	}
-
 	if !columns[composerIDColumn] || !columns[composerCreatedAtColumn] {
-		slog.WarnContext(
-			ctx,
-			"providers.cursor.store.composer_headers_unusable",
-			"concern",
-			concern,
-			"table",
-			composerHeadersTableName,
-			"has_composer_id",
-			columns[composerIDColumn],
-			"has_created_at",
-			columns[composerCreatedAtColumn],
-		)
-
+		slog.WarnContext(ctx, "providers.cursor.store.composer_headers_unusable", "concern", concern, "table", composerHeadersTableName, "has_composer_id", columns[composerIDColumn], "has_created_at", columns[composerCreatedAtColumn])
 		return narrowing, nil
 	}
-
 	narrowing.Usable = true
 
 	// The empty-workspace case is expressed in SQL rather than as a second query
@@ -612,26 +446,34 @@ func ListComposerIDsCoveringTime(
 	// database with no workspace column binds neither.
 	scopeByWorkspace := columns[composerWorkspaceColumn]
 	query := selectComposerIDsCoveringTimeQuery(columns, scopeByWorkspace)
-	rows, err := queryComposerIDsCoveringTime(ctx, db, query, scopeByWorkspace, unixMs, workspaceID)
-	if err != nil {
-		return ComposerNarrowing{
-			ComposerIDs:   nil,
-			Usable:        false,
-			ExcludedChats: 0,
-		}, err
+	var rows *sql.Rows
+	if scopeByWorkspace {
+		rows, err = db.QueryContext(ctx, query,
+			composerLifetimeToleranceMs, unixMs, composerLifetimeToleranceMs, unixMs,
+			workspaceID, workspaceID)
+	} else {
+		rows, err = db.QueryContext(ctx, query,
+			composerLifetimeToleranceMs, unixMs, composerLifetimeToleranceMs, unixMs)
 	}
-
+	if err != nil {
+		slog.WarnContext(ctx, "providers.cursor.store.composer_headers_query_failed", "concern", concern, "unix_ms", unixMs, "err", err)
+		return ComposerNarrowing{ComposerIDs: nil, Usable: false, ExcludedChats: 0}, fmt.Errorf("query cursor composer headers covering %d: %w", unixMs, err)
+	}
 	defer func() { _ = rows.Close() }()
 
-	composerIDs, err := scanComposerIDsCoveringTime(ctx, rows, unixMs)
-	if err != nil {
-		return ComposerNarrowing{
-			ComposerIDs:   nil,
-			Usable:        false,
-			ExcludedChats: 0,
-		}, err
+	composerIDs := make([]string, 0)
+	for rows.Next() {
+		var composerID string
+		if err := rows.Scan(&composerID); err != nil {
+			slog.WarnContext(ctx, "providers.cursor.store.composer_header_scan_failed", "concern", concern, "unix_ms", unixMs, "err", err)
+			return ComposerNarrowing{ComposerIDs: nil, Usable: false, ExcludedChats: 0}, fmt.Errorf("scan cursor composer header covering %d: %w", unixMs, err)
+		}
+		composerIDs = append(composerIDs, composerID)
 	}
-
+	if err := rows.Err(); err != nil {
+		slog.WarnContext(ctx, "providers.cursor.store.composer_headers_iterate_failed", "concern", concern, "unix_ms", unixMs, "err", err)
+		return ComposerNarrowing{ComposerIDs: nil, Usable: false, ExcludedChats: 0}, fmt.Errorf("iterate cursor composer headers covering %d: %w", unixMs, err)
+	}
 	narrowing.ComposerIDs = composerIDs
 
 	reachable, err := countReachableComposerHeaders(ctx, db, scopeByWorkspace, workspaceID)
@@ -641,11 +483,9 @@ func ListComposerIDsCoveringTime(
 		narrowing.ExcludedChats = len(composerIDs) + 1
 		return narrowing, nil
 	}
-
 	if reachable > len(composerIDs) {
 		narrowing.ExcludedChats = reachable - len(composerIDs)
 	}
-
 	return narrowing, nil
 }
 
@@ -665,21 +505,11 @@ func countReachableComposerHeaders(
 	} else {
 		row = db.QueryRowContext(ctx, query)
 	}
-
 	reachable := 0
 	if err := row.Scan(&reachable); err != nil {
-		slog.WarnContext(
-			ctx,
-			"providers.cursor.store.composer_header_reachable_count_failed",
-			"concern",
-			concern,
-			"err",
-			err,
-		)
-
+		slog.WarnContext(ctx, "providers.cursor.store.composer_header_reachable_count_failed", "concern", concern, "err", err)
 		return 0, fmt.Errorf("count reachable cursor composer headers: %w", err)
 	}
-
 	return reachable, nil
 }
 
@@ -723,15 +553,8 @@ func ReadComposerHeaderCoverage(ctx context.Context, db *sql.DB) (ComposerHeader
 	if ctx == nil {
 		return coverage, fmt.Errorf("read cursor composer header coverage: nil context")
 	}
-
 	if db == nil {
-		slog.WarnContext(
-			ctx,
-			"providers.cursor.store.composer_header_coverage_no_database",
-			"concern",
-			concern,
-		)
-
+		slog.WarnContext(ctx, "providers.cursor.store.composer_header_coverage_no_database", "concern", concern)
 		return coverage, fmt.Errorf("read cursor composer header coverage: nil database")
 	}
 
@@ -749,46 +572,33 @@ func ReadComposerHeaderCoverage(ctx context.Context, db *sql.DB) (ComposerHeader
 	if err != nil {
 		return coverage, err
 	}
-
 	if !chatsExist {
-		slog.WarnContext(
-			ctx,
-			"providers.cursor.store.chat_table_absent",
-			"concern",
-			concern,
-			"table",
-			string(KVTableCursorDiskKV),
-		)
-
+		slog.WarnContext(ctx, "providers.cursor.store.chat_table_absent", "concern", concern, "table", string(KVTableCursorDiskKV))
 		return coverage, nil
 	}
-
 	coverage.Readable = true
 
-	storedChats, err := countStoredComposerChats(ctx, snapshot)
+	storedChats, err := snapshot.countRange(ctx, keyRangeForPrefix(composerDataKeyPrefix))
 	if err != nil {
-		return coverage, err
+		slog.WarnContext(ctx, "providers.cursor.store.composer_chat_count_failed", "concern", concern, "err", err)
+		return coverage, fmt.Errorf("count cursor chats: %w", err)
 	}
-
 	coverage.StoredChats = storedChats
 
 	headersExist, err := snapshot.tableExists(ctx, composerHeadersTableName)
 	if err != nil {
 		return coverage, err
 	}
-
 	if !headersExist {
 		// With no header table, every stored chat is one the narrowing could not
 		// reach.
 		coverage.UnlistedChats = storedChats
 		return coverage, nil
 	}
-
 	columns, err := snapshot.tableColumns(ctx, composerHeadersTableName)
 	if err != nil {
 		return coverage, err
 	}
-
 	if !columns[composerIDColumn] {
 		coverage.UnlistedChats = storedChats
 		return coverage, nil
@@ -806,8 +616,12 @@ func ReadComposerHeaderCoverage(ctx context.Context, db *sql.DB) (ComposerHeader
 	// The chat id starts one byte past the key prefix, and the prefix is a
 	// constant of this package rather than caller text, so its length is written
 	// into the statement instead of bound beside the range.
-	reachable := composerHeaderReachabilitySQL(columns)
-
+	reachable := " AND h." + composerCreatedAtColumn + " IS NOT NULL AND h." + composerCreatedAtColumn + " > 0"
+	if !columns[composerCreatedAtColumn] {
+		// Without the column no row is reachable, which the NOT EXISTS renders by
+		// matching nothing.
+		reachable = " AND 0"
+	}
 	bounds := keyRangeForPrefix(composerDataKeyPrefix)
 	query := "SELECT count(*) FROM " + string(KVTableCursorDiskKV) +
 		keyRangePredicate(bounds, "") +
@@ -818,23 +632,19 @@ func ReadComposerHeaderCoverage(ctx context.Context, db *sql.DB) (ComposerHeader
 	if err != nil {
 		return coverage, err
 	}
-
 	defer func() { _ = rows.Close() }()
 	if !rows.Next() {
-		slog.WarnContext(
-			ctx,
-			"providers.cursor.store.composer_header_coverage_empty",
-			"concern",
-			concern,
-		)
-
+		slog.WarnContext(ctx, "providers.cursor.store.composer_header_coverage_empty", "concern", concern)
 		return coverage, fmt.Errorf("count cursor chats the header table omits: no row")
 	}
-
-	if err := scanComposerHeaderCoverage(ctx, rows, &coverage); err != nil {
-		return coverage, err
+	if err := rows.Scan(&coverage.UnlistedChats); err != nil {
+		slog.WarnContext(ctx, "providers.cursor.store.composer_header_coverage_scan_failed", "concern", concern, "err", err)
+		return coverage, fmt.Errorf("scan cursor chats the header table omits: %w", err)
 	}
-
+	if err := rows.Err(); err != nil {
+		slog.WarnContext(ctx, "providers.cursor.store.composer_header_coverage_iterate_failed", "concern", concern, "err", err)
+		return coverage, fmt.Errorf("iterate cursor chats the header table omits: %w", err)
+	}
 	return coverage, nil
 }
 
@@ -906,23 +716,11 @@ func findBubbleRequestIDInRange(
 	if strings.TrimSpace(requestID) == "" {
 		return search, nil
 	}
-
 	rows, err := readKVRowsInKeyRange(ctx, db, KVTableCursorDiskKV, bounds, requestID)
 	if err != nil {
-		slog.WarnContext(
-			ctx,
-			"providers.cursor.store.bubble_request_range_failed",
-			"concern",
-			concern,
-			"key_lower",
-			bounds.Lower,
-			"err",
-			err,
-		)
-
+		slog.WarnContext(ctx, "providers.cursor.store.bubble_request_range_failed", "concern", concern, "key_lower", bounds.Lower, "err", err)
 		return search, fmt.Errorf("read cursor bubbles for request id: %w", err)
 	}
-
 	for _, row := range rows {
 		bubble, err := DecodeBubbleJSON(row.Value)
 		if err != nil {
@@ -931,203 +729,22 @@ func findBubbleRequestIDInRange(
 			// that no carrier exists, so it is counted and the caller reports the
 			// miss as inconclusive rather than confirmed.
 			search.UnreadableRows++
-			slog.WarnContext(
-				ctx,
-				"providers.cursor.store.bubble_request_decode_skipped",
-				"concern",
-				concern,
-				"key",
-				row.Key,
-				"err",
-				err,
-			)
+			slog.WarnContext(ctx, "providers.cursor.store.bubble_request_decode_skipped", "concern", concern, "key", row.Key, "err", err)
 			continue
 		}
-
 		if bubble.RequestID != requestID {
 			continue
 		}
-
 		composerID, bubbleID, ok := parseBubbleKey(row.Key)
 		if !ok {
 			// A row that matched exactly and whose key will not parse is a carrier
 			// this search cannot name, which is a gap in the answer rather than an
 			// absence of one.
 			search.UnreadableRows++
-			slog.WarnContext(
-				ctx,
-				"providers.cursor.store.bubble_request_key_unparsed",
-				"concern",
-				concern,
-				"key",
-				row.Key,
-			)
+			slog.WarnContext(ctx, "providers.cursor.store.bubble_request_key_unparsed", "concern", concern, "key", row.Key)
 			continue
 		}
-
-		search.Carriers = append(
-			search.Carriers,
-			BubbleRequestRef{ComposerID: composerID, BubbleID: bubbleID},
-		)
+		search.Carriers = append(search.Carriers, BubbleRequestRef{ComposerID: composerID, BubbleID: bubbleID})
 	}
-
 	return search, nil
-}
-
-func queryComposerIDsCoveringTime(
-	ctx context.Context,
-	database *sql.DB,
-	query string,
-	scopeByWorkspace bool,
-	unixMs int64,
-	workspaceID string,
-) (*sql.Rows, error) {
-	var rows *sql.Rows
-	var err error
-	if scopeByWorkspace {
-		rows, err = database.QueryContext(
-			ctx,
-			query,
-			composerLifetimeToleranceMs,
-			unixMs,
-			composerLifetimeToleranceMs,
-			unixMs,
-			workspaceID,
-			workspaceID,
-		)
-	} else {
-		rows, err = database.QueryContext(
-			ctx,
-			query,
-			composerLifetimeToleranceMs,
-			unixMs,
-			composerLifetimeToleranceMs,
-			unixMs,
-		)
-	}
-
-	if err != nil {
-		slog.WarnContext(
-			ctx,
-			"providers.cursor.store.composer_headers_query_failed",
-			"concern",
-			concern,
-			"unix_ms",
-			unixMs,
-			"err",
-			err,
-		)
-
-		return nil, fmt.Errorf("query cursor composer headers covering %d: %w", unixMs, err)
-	}
-
-	return rows, nil
-}
-
-func scanComposerIDsCoveringTime(
-	ctx context.Context,
-	rows *sql.Rows,
-	unixMs int64,
-) ([]string, error) {
-	composerIDs := make([]string, 0)
-
-	for rows.Next() {
-		var composerID string
-		if err := rows.Scan(&composerID); err != nil {
-			slog.WarnContext(
-				ctx,
-				"providers.cursor.store.composer_header_scan_failed",
-				"concern",
-				concern,
-				"unix_ms",
-				unixMs,
-				"err",
-				err,
-			)
-
-			return nil, fmt.Errorf("scan cursor composer header covering %d: %w", unixMs, err)
-		}
-
-		composerIDs = append(composerIDs, composerID)
-	}
-
-	if err := rows.Err(); err != nil {
-		slog.WarnContext(
-			ctx,
-			"providers.cursor.store.composer_headers_iterate_failed",
-			"concern",
-			concern,
-			"unix_ms",
-			unixMs,
-			"err",
-			err,
-		)
-
-		return nil, fmt.Errorf("iterate cursor composer headers covering %d: %w", unixMs, err)
-	}
-
-	return composerIDs, nil
-}
-
-func countStoredComposerChats(ctx context.Context, snapshot readSnapshot) (int, error) {
-	storedChats, err := snapshot.countRange(ctx, keyRangeForPrefix(composerDataKeyPrefix))
-	if err != nil {
-		slog.WarnContext(
-			ctx,
-			"providers.cursor.store.composer_chat_count_failed",
-			"concern",
-			concern,
-			"err",
-			err,
-		)
-
-		return 0, fmt.Errorf("count cursor chats: %w", err)
-	}
-
-	return storedChats, nil
-}
-
-func scanComposerHeaderCoverage(
-	ctx context.Context,
-	rows *sql.Rows,
-	coverage *ComposerHeaderCoverage,
-) error {
-	if err := rows.Scan(&coverage.UnlistedChats); err != nil {
-		slog.WarnContext(
-			ctx,
-			"providers.cursor.store.composer_header_coverage_scan_failed",
-			"concern",
-			concern,
-			"err",
-			err,
-		)
-
-		return fmt.Errorf("scan cursor chats the header table omits: %w", err)
-	}
-
-	if err := rows.Err(); err != nil {
-		slog.WarnContext(
-			ctx,
-			"providers.cursor.store.composer_header_coverage_iterate_failed",
-			"concern",
-			concern,
-			"err",
-			err,
-		)
-
-		return fmt.Errorf("iterate cursor chats the header table omits: %w", err)
-	}
-
-	return nil
-}
-
-func composerHeaderReachabilitySQL(columns map[string]bool) string {
-	reachable := " AND h." + composerCreatedAtColumn + " IS NOT NULL AND h." + composerCreatedAtColumn + " > 0"
-	if !columns[composerCreatedAtColumn] {
-		// Without the column no row is reachable, which the NOT EXISTS renders by
-		// matching nothing.
-		reachable = " AND 0"
-	}
-
-	return reachable
 }

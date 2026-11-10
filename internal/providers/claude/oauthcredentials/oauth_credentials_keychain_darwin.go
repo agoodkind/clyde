@@ -39,7 +39,6 @@ func (s keychainStore) Read(ctx context.Context) ReadResult {
 			Metadata: emptyMetadata(),
 		}
 	}
-
 	cmd := exec.CommandContext(ctx, securityBinaryPath)
 	cmd.Args = []string{securityBinaryPath, "find-generic-password", "-s", keychainService, "-w"}
 	stdout := &bytes.Buffer{}
@@ -48,79 +47,36 @@ func (s keychainStore) Read(ctx context.Context) ReadResult {
 	cmd.Stderr = stderr
 	if err := cmd.Run(); err != nil {
 		if keychainItemNotFound(err) {
-			slog.DebugContext(
-				ctx,
-				"oauthcredentials.keychain.read_missing",
-				"concern",
-				"providers.claude.oauth",
-				"component",
-				"oauthcredentials",
-				"service",
-				s.keychainService,
+			slog.DebugContext(ctx, "oauthcredentials.keychain.read_missing", "concern", "providers.claude.oauth", "component", "oauthcredentials",
+				"service", s.keychainService,
 			)
-
 			return emptyKeychainResult()
 		}
-
-		slog.WarnContext(
-			ctx,
-			"oauthcredentials.keychain.read_failed",
-			"concern",
-			"providers.claude.oauth",
-			"component",
-			"oauthcredentials",
-			"service",
-			s.keychainService,
-			"err",
-			err.Error(),
-			"stderr",
-			bytes.TrimSpace(stderr.Bytes()),
+		slog.WarnContext(ctx, "oauthcredentials.keychain.read_failed", "concern", "providers.claude.oauth", "component", "oauthcredentials",
+			"service", s.keychainService,
+			"err", err.Error(),
+			"stderr", bytes.TrimSpace(stderr.Bytes()),
 		)
-
 		return ReadResult{
-			Source:  SourceKeychain,
-			Tokens:  nil,
-			Present: false,
-			Err: fmt.Errorf(
-				"keychain query %q: %w (stderr=%s)",
-				s.keychainService,
-				err,
-				bytes.TrimSpace(stderr.Bytes()),
-			),
+			Source:   SourceKeychain,
+			Tokens:   nil,
+			Present:  false,
+			Err:      fmt.Errorf("keychain query %q: %w (stderr=%s)", s.keychainService, err, bytes.TrimSpace(stderr.Bytes())),
 			Metadata: emptyMetadata(),
 		}
 	}
-
 	data := bytes.TrimSpace(stdout.Bytes())
 	if len(data) == 0 {
-		slog.DebugContext(
-			ctx,
-			"oauthcredentials.keychain.read_empty",
-			"concern",
-			"providers.claude.oauth",
-			"component",
-			"oauthcredentials",
-			"service",
-			s.keychainService,
+		slog.DebugContext(ctx, "oauthcredentials.keychain.read_empty", "concern", "providers.claude.oauth", "component", "oauthcredentials",
+			"service", s.keychainService,
 		)
-
 		return emptyKeychainResult()
 	}
-
 	tokens, metadata, parseErr := parseBlob(data, s.now, 0)
-	slog.DebugContext(
-		ctx,
-		"oauthcredentials.keychain.read_ok",
-		"concern",
-		"providers.claude.oauth",
-		"component",
-		"oauthcredentials",
-		"service",
-		s.keychainService,
-		"present",
-		tokens != nil,
+	slog.DebugContext(ctx, "oauthcredentials.keychain.read_ok", "concern", "providers.claude.oauth", "component", "oauthcredentials",
+		"service", s.keychainService,
+		"present", tokens != nil,
 	)
-
 	return ReadResult{
 		Source:   SourceKeychain,
 		Tokens:   tokens,
@@ -135,11 +91,9 @@ func cleanKeychainService(service string) (string, error) {
 	if service == "" {
 		return "", fmt.Errorf("empty keychain service")
 	}
-
 	if strings.ContainsRune(service, 0) {
 		return "", fmt.Errorf("keychain service contains NUL")
 	}
-
 	return service, nil
 }
 

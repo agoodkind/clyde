@@ -34,44 +34,29 @@ import (
 func TestProxyHTTPCapturePersistsExchangeToStore(t *testing.T) {
 	const largeValue = "raw-index-body-sentinel"
 	requestBody := []byte(`{"model":"gpt-test","input":"` + strings.Repeat(largeValue, 256) + `"}`)
-	responseBody := []byte(
-		`{"id":"resp-test","output":"` + strings.Repeat("response-body-sentinel", 256) + `"}`,
-	)
-	upstream := httptest.NewServer(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			body, err := io.ReadAll(r.Body)
-			if err != nil {
-				t.Errorf("read upstream body: %v", err)
-			}
-
-			if !bytes.Equal(body, requestBody) {
-				t.Errorf("upstream body length = %d want %d", len(body), len(requestBody))
-			}
-
-			w.Header().Set("content-type", "application/json")
-			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write(responseBody)
-		}),
-	)
+	responseBody := []byte(`{"id":"resp-test","output":"` + strings.Repeat("response-body-sentinel", 256) + `"}`)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read upstream body: %v", err)
+		}
+		if !bytes.Equal(body, requestBody) {
+			t.Errorf("upstream body length = %d want %d", len(body), len(requestBody))
+		}
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write(responseBody)
+	}))
 	defer upstream.Close()
 
 	captureDir := t.TempDir()
 	dbPath := filepath.Join(captureDir, "capture.db")
-	store, err := capture.Open(
-		context.Background(),
-		capture.Config{DBPath: dbPath},
-		slog.New(slog.NewTextHandler(io.Discard, nil)),
-	)
+	store, err := capture.Open(context.Background(), capture.Config{DBPath: dbPath}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("open capture store: %v", err)
 	}
-
 	proxy := newHTTPProxyForCaptureTest(t, captureDir, store, upstream)
-	req := httptest.NewRequest(
-		http.MethodPost,
-		"http://clyde.test/v1/responses?probe=raw",
-		bytes.NewReader(requestBody),
-	)
+	req := httptest.NewRequest(http.MethodPost, "http://clyde.test/v1/responses?probe=raw", bytes.NewReader(requestBody))
 	req.Header.Set("content-type", "application/json")
 	recorder := httptest.NewRecorder()
 	proxy.handle(recorder, req)
@@ -80,12 +65,10 @@ func TestProxyHTTPCapturePersistsExchangeToStore(t *testing.T) {
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("status = %d want %d", resp.StatusCode, http.StatusCreated)
 	}
-
 	gotResponse, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read response: %v", err)
 	}
-
 	if !bytes.Equal(gotResponse, responseBody) {
 		t.Fatalf("response body length = %d want %d", len(gotResponse), len(responseBody))
 	}
@@ -98,7 +81,6 @@ func TestProxyHTTPCapturePersistsExchangeToStore(t *testing.T) {
 	if bytes.Contains(rawIndex, []byte(strings.Repeat(largeValue, 8))) {
 		t.Fatalf("capture index contains repeated raw request body")
 	}
-
 	if bytes.Contains(rawIndex, []byte(strings.Repeat("response-body-sentinel", 8))) {
 		t.Fatalf("capture index contains repeated raw response body")
 	}
@@ -107,12 +89,10 @@ func TestProxyHTTPCapturePersistsExchangeToStore(t *testing.T) {
 	if err := store.Close(context.Background(), "test"); err != nil {
 		t.Fatalf("close capture store: %v", err)
 	}
-
 	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("open verifier db: %v", err)
 	}
-
 	defer func() { _ = db.Close() }()
 
 	var (
@@ -121,134 +101,79 @@ func TestProxyHTTPCapturePersistsExchangeToStore(t *testing.T) {
 		reqBytes  int64
 		respBytes int64
 	)
-	row := db.QueryRow(
-		`SELECT id, client, req_bytes, resp_bytes FROM requests ORDER BY ts DESC LIMIT 1`,
-	)
+	row := db.QueryRow(`SELECT id, client, req_bytes, resp_bytes FROM requests ORDER BY ts DESC LIMIT 1`)
 	if err := row.Scan(&rowID, &gotClient, &reqBytes, &respBytes); err != nil {
 		t.Fatalf("scan request row: %v", err)
 	}
-
 	if gotClient != "test" {
 		t.Fatalf("client = %q want test", gotClient)
 	}
-
 	if reqBytes != int64(len(requestBody)) {
 		t.Fatalf("req_bytes = %d want %d", reqBytes, len(requestBody))
 	}
-
 	if respBytes != int64(len(responseBody)) {
 		t.Fatalf("resp_bytes = %d want %d", respBytes, len(responseBody))
 	}
 
 	var storedRequest []byte
-	if err := db.QueryRow(
-		`SELECT data FROM bodies WHERE request_row_id=? AND which='request'`,
-		rowID,
-	).Scan(
-		&storedRequest,
-	); err != nil {
+	if err := db.QueryRow(`SELECT data FROM bodies WHERE request_row_id=? AND which='request'`, rowID).Scan(&storedRequest); err != nil {
 		t.Fatalf("scan request body: %v", err)
 	}
-
 	if !bytes.Equal(storedRequest, requestBody) {
-		t.Fatalf(
-			"stored request body mismatch: got %d bytes want %d",
-			len(storedRequest),
-			len(requestBody),
-		)
+		t.Fatalf("stored request body mismatch: got %d bytes want %d", len(storedRequest), len(requestBody))
 	}
-
 	var storedResponse []byte
-	if err := db.QueryRow(
-		`SELECT data FROM bodies WHERE request_row_id=? AND which='response'`,
-		rowID,
-	).Scan(
-		&storedResponse,
-	); err != nil {
+	if err := db.QueryRow(`SELECT data FROM bodies WHERE request_row_id=? AND which='response'`, rowID).Scan(&storedResponse); err != nil {
 		t.Fatalf("scan response body: %v", err)
 	}
-
 	if !bytes.Equal(storedResponse, responseBody) {
-		t.Fatalf(
-			"stored response body mismatch: got %d bytes want %d",
-			len(storedResponse),
-			len(responseBody),
-		)
+		t.Fatalf("stored response body mismatch: got %d bytes want %d", len(storedResponse), len(responseBody))
 	}
 }
 
 func TestRecordCaptureStoreDecodesCursorBidiBodiesAcrossCapturePaths(t *testing.T) {
 	const providerName = "cursor-test-decoder"
 	const providerID ProviderID = 200
-	RegisterProviderFirst(testCaptureDecoderProvider{
-		id:   providerID,
-		name: providerName,
-	})
+	RegisterProviderFirst(testCaptureDecoderProvider{id: providerID, name: providerName})
 	t.Cleanup(func() { UnregisterProvider(providerID) })
 
 	dbPath := filepath.Join(t.TempDir(), "capture.db")
-	store, err := capture.Open(
-		context.Background(),
-		capture.Config{DBPath: dbPath},
-		slog.New(slog.NewTextHandler(io.Discard, nil)),
-	)
+	store, err := capture.Open(context.Background(), capture.Config{DBPath: dbPath}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("open capture store: %v", err)
 	}
-
 	t.Cleanup(func() { _ = store.Close(context.Background(), "test cleanup") })
 	proxy := &Proxy{store: store, client: "test", cfg: config.MITMConfig{}, mu: sync.RWMutex{}}
-	request, err := http.NewRequest(
-		http.MethodPost,
-		"http://api2.cursor.sh/aiserver.v1.AiService/BidiAppend",
-		nil,
-	)
+	request, err := http.NewRequest(http.MethodPost, "http://api2.cursor.sh/aiserver.v1.AiService/BidiAppend", nil)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
-
 	for _, method := range []string{http.MethodPost, "TLS", "WEBSOCKET"} {
-		proxy.recordCaptureStore(
-			request,
-			http.Header{},
-			captureStoreInput{
-				provider:    providerName,
-				host:        "api2.cursor.sh",
-				method:      method,
-				path:        request.URL.Path,
-				status:      http.StatusOK,
-				requestBody: []byte("cursor-bidi-body-" + method),
-			},
-		)
+		proxy.recordCaptureStore(request, http.Header{}, captureStoreInput{
+			provider:    providerName,
+			host:        "api2.cursor.sh",
+			method:      method,
+			path:        request.URL.Path,
+			status:      http.StatusOK,
+			requestBody: []byte("cursor-bidi-body-" + method),
+		})
 	}
-
 	if err := store.Close(context.Background(), "test"); err != nil {
 		t.Fatalf("close capture store: %v", err)
 	}
 
 	db := openCaptureDB(t, dbPath)
 	var decodedCount int
-	if err := db.QueryRow(
-		`SELECT count(*) FROM decoded_bodies WHERE format='test.cursor.bidi' AND status='success'`,
-	).Scan(
-		&decodedCount,
-	); err != nil {
+	if err := db.QueryRow(`SELECT count(*) FROM decoded_bodies WHERE format='test.cursor.bidi' AND status='success'`).Scan(&decodedCount); err != nil {
 		t.Fatalf("count decoded Bidi bodies: %v", err)
 	}
-
 	if decodedCount != 3 {
 		t.Fatalf("decoded Bidi bodies = %d, want 3", decodedCount)
 	}
-
 	var rawCount int
-	if err := db.QueryRow(
-		`SELECT count(*) FROM bodies WHERE which='request' AND data LIKE 'cursor-bidi-body-%'`,
-	).Scan(
-		&rawCount,
-	); err != nil {
+	if err := db.QueryRow(`SELECT count(*) FROM bodies WHERE which='request' AND data LIKE 'cursor-bidi-body-%'`).Scan(&rawCount); err != nil {
 		t.Fatalf("count raw Bidi bodies: %v", err)
 	}
-
 	if rawCount != 3 {
 		t.Fatalf("raw Bidi bodies = %d, want 3", rawCount)
 	}
@@ -273,13 +198,10 @@ func (p testCaptureDecoderProvider) ExtractIdentity(http.Header) IdentityContrib
 	return IdentityContribution{}
 }
 
-func (p testCaptureDecoderProvider) DecodeCaptureRequest(
-	exchange ExchangeDiagnostic,
-) (capture.DecodedBody, bool) {
+func (p testCaptureDecoderProvider) DecodeCaptureRequest(exchange ExchangeDiagnostic) (capture.DecodedBody, bool) {
 	if exchange.Path != "/aiserver.v1.AiService/BidiAppend" {
 		return capture.DecodedBody{}, false
 	}
-
 	return capture.DecodedBody{
 		Format:             "test.cursor.bidi",
 		Status:             capture.DecodeStatusSuccess,
@@ -294,9 +216,7 @@ func openCaptureDB(t *testing.T, path string) *sql.DB {
 	if err != nil {
 		t.Fatalf("open capture database: %v", err)
 	}
-
 	t.Cleanup(func() { _ = db.Close() })
-
 	return db
 }
 
@@ -308,49 +228,34 @@ func openCaptureDB(t *testing.T, path string) *sql.DB {
 // explicit Accept-Encoding so the upstream transport forwards the compressed
 // bytes rather than transparently decoding them, matching the real client path.
 func TestProxyHTTPCaptureForwardsGzipBytesIntactWhileDecodingForStore(t *testing.T) {
-	decodedResponse := []byte(
-		`{"id":"resp-gzip","output":"` + strings.Repeat("gzip-response-sentinel", 256) + `"}`,
-	)
+	decodedResponse := []byte(`{"id":"resp-gzip","output":"` + strings.Repeat("gzip-response-sentinel", 256) + `"}`)
 	var gzipBuf bytes.Buffer
 	gz := gzip.NewWriter(&gzipBuf)
 	if _, err := gz.Write(decodedResponse); err != nil {
 		t.Fatalf("gzip write: %v", err)
 	}
-
 	if err := gz.Close(); err != nil {
 		t.Fatalf("gzip close: %v", err)
 	}
-
 	compressedResponse := gzipBuf.Bytes()
 
 	requestBody := []byte(`{"model":"gpt-test","input":"probe"}`)
-	upstream := httptest.NewServer(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("content-type", "application/json")
-			w.Header().Set("content-encoding", "gzip")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(compressedResponse)
-		}),
-	)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		w.Header().Set("content-encoding", "gzip")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(compressedResponse)
+	}))
 	defer upstream.Close()
 
 	captureDir := t.TempDir()
 	dbPath := filepath.Join(captureDir, "capture.db")
-	store, err := capture.Open(
-		context.Background(),
-		capture.Config{DBPath: dbPath},
-		slog.New(slog.NewTextHandler(io.Discard, nil)),
-	)
+	store, err := capture.Open(context.Background(), capture.Config{DBPath: dbPath}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("open capture store: %v", err)
 	}
-
 	proxy := newHTTPProxyForCaptureTest(t, captureDir, store, upstream)
-	req := httptest.NewRequest(
-		http.MethodPost,
-		"http://clyde.test/v1/responses",
-		bytes.NewReader(requestBody),
-	)
+	req := httptest.NewRequest(http.MethodPost, "http://clyde.test/v1/responses", bytes.NewReader(requestBody))
 	req.Header.Set("content-type", "application/json")
 	req.Header.Set("accept-encoding", "gzip")
 	recorder := httptest.NewRecorder()
@@ -359,144 +264,91 @@ func TestProxyHTTPCaptureForwardsGzipBytesIntactWhileDecodingForStore(t *testing
 	if recorder.Result().StatusCode != http.StatusOK {
 		t.Fatalf("status = %d want %d", recorder.Result().StatusCode, http.StatusOK)
 	}
-
 	// The client must receive the upstream's gzip bytes unchanged.
 	if got := recorder.Body.Bytes(); !bytes.Equal(got, compressedResponse) {
-		t.Fatalf(
-			"client received %d bytes, want byte-identical %d-byte gzip stream",
-			len(got),
-			len(compressedResponse),
-		)
+		t.Fatalf("client received %d bytes, want byte-identical %d-byte gzip stream", len(got), len(compressedResponse))
 	}
-
 	if enc := recorder.Result().Header.Get("Content-Encoding"); enc != "gzip" {
 		t.Fatalf("client Content-Encoding = %q want gzip", enc)
 	}
 
 	// The SQLite store must hold the DECODED body, proving capture decompressed
 	// from its own buffer copy without touching the forwarded client stream.
-	waitForCaptureRecordWithLeg(
-		t,
-		mitmWireConcernTestPath(captureDir),
-		logevent.LegMITMCaptureIndex,
-	)
+	waitForCaptureRecordWithLeg(t, mitmWireConcernTestPath(captureDir), logevent.LegMITMCaptureIndex)
 	if err := store.Close(context.Background(), "test"); err != nil {
 		t.Fatalf("close capture store: %v", err)
 	}
-
 	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("open verifier db: %v", err)
 	}
-
 	defer func() { _ = db.Close() }()
 	var rowID int64
-	if err := db.QueryRow(`SELECT id FROM requests ORDER BY ts DESC LIMIT 1`).Scan(
-		&rowID,
-	); err != nil {
+	if err := db.QueryRow(`SELECT id FROM requests ORDER BY ts DESC LIMIT 1`).Scan(&rowID); err != nil {
 		t.Fatalf("scan request row: %v", err)
 	}
-
 	var storedResponse []byte
-	if err := db.QueryRow(
-		`SELECT data FROM bodies WHERE request_row_id=? AND which='response'`,
-		rowID,
-	).Scan(
-		&storedResponse,
-	); err != nil {
+	if err := db.QueryRow(`SELECT data FROM bodies WHERE request_row_id=? AND which='response'`, rowID).Scan(&storedResponse); err != nil {
 		t.Fatalf("scan response body: %v", err)
 	}
-
 	if !bytes.Equal(storedResponse, decodedResponse) {
-		t.Fatalf(
-			"stored response = %d bytes, want decoded %d bytes (capture must hold the decompressed body)",
-			len(storedResponse),
-			len(decodedResponse),
-		)
+		t.Fatalf("stored response = %d bytes, want decoded %d bytes (capture must hold the decompressed body)", len(storedResponse), len(decodedResponse))
 	}
 }
 
 func TestFinalizePlainHTTPCaptureUsesSnapshotCaptureRulesForStoreConcern(t *testing.T) {
-	upstream := httptest.NewServer(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusNoContent)
-		}),
-	)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
 	defer upstream.Close()
 
 	captureDir := t.TempDir()
 	dbPath := filepath.Join(captureDir, "capture.db")
-	store, err := capture.Open(
-		context.Background(),
-		capture.Config{DBPath: dbPath},
-		slog.New(slog.NewTextHandler(io.Discard, nil)),
-	)
+	store, err := capture.Open(context.Background(), capture.Config{DBPath: dbPath}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("open capture store: %v", err)
 	}
-
 	proxy := newHTTPProxyForCaptureTest(t, captureDir, store, upstream)
 	proxy.mu.Lock()
-	proxy.cfg.CaptureRules = []config.MITMCaptureRouteRule{
-		{
-			Concern:   "live.concern",
-			Provider:  "cursor",
-			Method:    config.MITMMethodPost,
-			PathExact: "/aiserver.v1.AiService/BidiAppend",
-		},
-	}
+	proxy.cfg.CaptureRules = []config.MITMCaptureRouteRule{{
+		Concern:   "live.concern",
+		Provider:  "cursor",
+		Method:    config.MITMMethodPost,
+		PathExact: "/aiserver.v1.AiService/BidiAppend",
+	}}
 	proxy.mu.Unlock()
 
-	req := httptest.NewRequest(
-		http.MethodPost,
-		"http://api2.cursor.sh/aiserver.v1.AiService/BidiAppend",
-		nil,
-	)
+	req := httptest.NewRequest(http.MethodPost, "http://api2.cursor.sh/aiserver.v1.AiService/BidiAppend", nil)
 	req.Header.Set("content-type", "application/protobuf")
-	resp := &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"application/protobuf"}},
-	}
+	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/protobuf"}}}
 	buffer := &limitedBuffer{limit: 1024, buf: bytes.Buffer{}}
 	if _, err := buffer.Write([]byte("response-body")); err != nil {
 		t.Fatalf("buffer write: %v", err)
 	}
 
-	proxy.finalizePlainHTTPCapture(
-		req,
-		resp,
-		plainHTTPCaptureFinalize{
-			cfg: config.MITMConfig{
-				CaptureRules: []config.MITMCaptureRouteRule{
-					{
-						Concern:   "snapshot.concern",
-						Provider:  "cursor",
-						Method:    config.MITMMethodPost,
-						PathExact: "/aiserver.v1.AiService/BidiAppend",
-					},
-				},
-			},
-			provider:         "cursor",
-			upstream:         "https://api2.cursor.sh",
-			requestBody:      []byte("request-body"),
-			capture:          buffer,
-			requestBodyIndex: newCaptureBodyIndexFromSummary(summarizeBody([]byte("request-body"))),
-			duration:         time.Millisecond,
-		},
-	)
+	proxy.finalizePlainHTTPCapture(req, resp, plainHTTPCaptureFinalize{
+		cfg: config.MITMConfig{CaptureRules: []config.MITMCaptureRouteRule{{
+			Concern:   "snapshot.concern",
+			Provider:  "cursor",
+			Method:    config.MITMMethodPost,
+			PathExact: "/aiserver.v1.AiService/BidiAppend",
+		}}},
+		provider:         "cursor",
+		upstream:         "https://api2.cursor.sh",
+		requestBody:      []byte("request-body"),
+		capture:          buffer,
+		requestBodyIndex: newCaptureBodyIndexFromSummary(summarizeBody([]byte("request-body"))),
+		duration:         time.Millisecond,
+	})
 
 	if err := store.Close(context.Background(), "test"); err != nil {
 		t.Fatalf("close capture store: %v", err)
 	}
-
 	db := openCaptureDB(t, dbPath)
 	var concern string
-	if err := db.QueryRow(`SELECT concern FROM requests ORDER BY ts DESC LIMIT 1`).Scan(
-		&concern,
-	); err != nil {
+	if err := db.QueryRow(`SELECT concern FROM requests ORDER BY ts DESC LIMIT 1`).Scan(&concern); err != nil {
 		t.Fatalf("scan concern: %v", err)
 	}
-
 	if concern != "snapshot.concern" {
 		t.Fatalf("concern=%q want snapshot.concern", concern)
 	}
@@ -514,7 +366,6 @@ func TestNewProxyAppliesLoggingRequiredLegsFromConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-
 	t.Cleanup(func() { _ = listener.Close() })
 
 	logBuffer := &bytes.Buffer{}
@@ -525,20 +376,10 @@ func TestNewProxyAppliesLoggingRequiredLegsFromConfig(t *testing.T) {
 			string(logevent.SurfaceMITMIDE): {string(logevent.LegMITMIngress)},
 		},
 	}
-	proxy, err := NewProxy(
-		mitmCfg,
-		loggingRequest,
-		logger,
-		[]net.Listener{listener},
-		nil,
-		nil,
-		"test",
-		livetrack.NewGroup(livetrack.GroupOptions{Log: nil}),
-	)
+	proxy, err := NewProxy(mitmCfg, loggingRequest, logger, []net.Listener{listener}, nil, nil, "test", livetrack.NewGroup(livetrack.GroupOptions{Log: nil}))
 	if err != nil {
 		t.Fatalf("NewProxy: %v", err)
 	}
-
 	t.Cleanup(func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -552,17 +393,9 @@ func TestNewProxyAppliesLoggingRequiredLegsFromConfig(t *testing.T) {
 	if recorder == nil {
 		t.Fatalf("Begin returned nil")
 	}
-
-	recorder.Emit(
-		context.Background(),
-		logevent.Event{
-			Path: logevent.Path{Leg: logevent.LegMITMIngress, Phase: logevent.PhaseStarted},
-		},
-	)
+	recorder.Emit(context.Background(), logevent.Event{Path: logevent.Path{Leg: logevent.LegMITMIngress, Phase: logevent.PhaseStarted}})
 	if !recorder.Complete(context.Background()) {
-		t.Fatalf(
-			"Complete returned false; required_legs from config is [mitm_ingress] which we emitted, so we expect true",
-		)
+		t.Fatalf("Complete returned false; required_legs from config is [mitm_ingress] which we emitted, so we expect true")
 	}
 
 	recorder2 := proxy.requestLog.Begin(
@@ -572,16 +405,8 @@ func TestNewProxyAppliesLoggingRequiredLegsFromConfig(t *testing.T) {
 	if recorder2.Complete(context.Background()) {
 		t.Fatalf("Complete returned true with no legs emitted; want false")
 	}
-
-	if event := firstCaptureLogEvent(
-		t,
-		logBuffer.String(),
-		"logging.request.incomplete",
-	); event == nil {
-		t.Fatalf(
-			"expected logging.request.incomplete event after second Complete; got log: %s",
-			logBuffer.String(),
-		)
+	if event := firstCaptureLogEvent(t, logBuffer.String(), "logging.request.incomplete"); event == nil {
+		t.Fatalf("expected logging.request.incomplete event after second Complete; got log: %s", logBuffer.String())
 	} else if event["incomplete_policy"] != "warn" {
 		t.Fatalf("incomplete_policy = %v, want warn", event["incomplete_policy"])
 	}
@@ -596,18 +421,11 @@ func TestBeginHTTPLogRecorderUsesNativeCursorHeadersWhenClydeHeadersMissing(t *t
 	logBuffer := &bytes.Buffer{}
 	logger := slog.New(slog.NewJSONHandler(logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	proxy := &Proxy{
-		log: logger,
-		requestLog: logevent.NewEmitter(
-			slogger.WithConcern(logger, slogger.ConcernProviderMITMWire),
-			nil,
-		),
+		log:        logger,
+		requestLog: logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
 	}
 
-	req := httptest.NewRequest(
-		http.MethodPost,
-		"http://cursor.test/aiserver.v1.DashboardService/GetTeams",
-		strings.NewReader(`{"probe":"cursor-identity"}`),
-	)
+	req := httptest.NewRequest(http.MethodPost, "http://cursor.test/aiserver.v1.DashboardService/GetTeams", strings.NewReader(`{"probe":"cursor-identity"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-request-id", "cursor-native-req")
 	req.Header.Set("x-original-request-id", "cursor-native-orig")
@@ -615,14 +433,12 @@ func TestBeginHTTPLogRecorderUsesNativeCursorHeadersWhenClydeHeadersMissing(t *t
 	req.Header.Set("traceparent", "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01")
 
 	input := httpCaptureRecordInput{
-		config:       config.MITMConfig{CaptureDir: t.TempDir()},
-		provider:     "cursor",
-		upstreamURL:  "https://api2.cursor.sh/aiserver.v1.DashboardService/GetTeams",
-		requestBody:  []byte(`{"probe":"cursor-identity"}`),
-		responseBody: []byte(`{"ok":true}`),
-		requestIndex: newCaptureBodyIndexFromSummary(
-			summarizeBody([]byte(`{"probe":"cursor-identity"}`)),
-		),
+		config:         config.MITMConfig{CaptureDir: t.TempDir()},
+		provider:       "cursor",
+		upstreamURL:    "https://api2.cursor.sh/aiserver.v1.DashboardService/GetTeams",
+		requestBody:    []byte(`{"probe":"cursor-identity"}`),
+		responseBody:   []byte(`{"ok":true}`),
+		requestIndex:   newCaptureBodyIndexFromSummary(summarizeBody([]byte(`{"probe":"cursor-identity"}`))),
 		responseIndex:  newCaptureBodyIndexFromSummary(summarizeBody([]byte(`{"ok":true}`))),
 		responseLen:    int64(len(`{"ok":true}`)),
 		duration:       time.Millisecond,
@@ -635,32 +451,25 @@ func TestBeginHTTPLogRecorderUsesNativeCursorHeadersWhenClydeHeadersMissing(t *t
 	if event == nil {
 		t.Fatalf("expected logging.request.leg event, got log %s", logBuffer.String())
 	}
-
 	if event["provider"] != "cursor" {
 		t.Fatalf("provider = %v want cursor", event["provider"])
 	}
-
 	if event["request_id"] != "cursor-native-req" {
 		t.Fatalf("request_id = %v want cursor-native-req", event["request_id"])
 	}
-
 	cursorFacet, ok := event["cursor"].(map[string]any)
 	if !ok {
 		t.Fatalf("cursor facet missing: %#v", event)
 	}
-
 	if cursorFacet["request_id"] != "cursor-native-req" {
 		t.Fatalf("cursor request_id = %v want cursor-native-req", cursorFacet["request_id"])
 	}
-
 	if event["upstream_request_id"] != "cursor-native-orig" {
 		t.Fatalf("upstream_request_id = %v want cursor-native-orig", event["upstream_request_id"])
 	}
-
 	if event["session_id"] != "cursor-session-1" {
 		t.Fatalf("session_id = %v want cursor-session-1", event["session_id"])
 	}
-
 	if event["trace_id"] != "0123456789abcdef0123456789abcdef" {
 		t.Fatalf("trace_id = %v want traceparent trace", event["trace_id"])
 	}
@@ -670,18 +479,11 @@ func TestProxyHTTPCaptureEarlyFailureEmitsRequestErrorWithoutIncomplete(t *testi
 	logBuffer := &bytes.Buffer{}
 	logger := slog.New(slog.NewJSONHandler(logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	proxy := &Proxy{
-		log: logger,
-		requestLog: logevent.NewEmitter(
-			slogger.WithConcern(logger, slogger.ConcernProviderMITMWire),
-			nil,
-		),
+		log:        logger,
+		requestLog: logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
 	}
 
-	req := httptest.NewRequest(
-		http.MethodPost,
-		"http://clyde.test/v1/messages",
-		strings.NewReader(`{"model":"claude","messages":[]}`),
-	)
+	req := httptest.NewRequest(http.MethodPost, "http://clyde.test/v1/messages", strings.NewReader(`{"model":"claude","messages":[]}`))
 	req.Header.Set("Content-Type", "application/json")
 	input := httpCaptureRecordInput{
 		config:         config.MITMConfig{CaptureDir: t.TempDir()},
@@ -696,21 +498,15 @@ func TestProxyHTTPCaptureEarlyFailureEmitsRequestErrorWithoutIncomplete(t *testi
 		responseStatus: http.StatusBadGateway,
 	}
 
-	proxy.recordHTTPFailure(
-		req,
-		http.Header{},
-		input,
-		httpFailureRecord{
-			includePayload:      true,
-			includeUpstreamSend: true,
-			errorCode:           "upstream_dispatch_failed",
-			errorMessage:        "upstream dispatch failed",
-		},
-	)
+	proxy.recordHTTPFailure(req, http.Header{}, input, httpFailureRecord{
+		includePayload:      true,
+		includeUpstreamSend: true,
+		errorCode:           "upstream_dispatch_failed",
+		errorMessage:        "upstream dispatch failed",
+	})
 
 	events := captureLogEvents(t, logBuffer.String(), "logging.request.leg")
 	foundError := false
-
 	for _, event := range events {
 		if event["leg"] == string(logevent.LegRequestError) {
 			foundError = true
@@ -719,16 +515,10 @@ func TestProxyHTTPCaptureEarlyFailureEmitsRequestErrorWithoutIncomplete(t *testi
 			}
 		}
 	}
-
 	if !foundError {
 		t.Fatalf("expected request_error leg in %v", events)
 	}
-
-	if event := firstCaptureLogEvent(
-		t,
-		logBuffer.String(),
-		"logging.request.incomplete",
-	); event != nil {
+	if event := firstCaptureLogEvent(t, logBuffer.String(), "logging.request.incomplete"); event != nil {
 		t.Fatalf("did not expect incomplete request event: %v", event)
 	}
 }
@@ -738,31 +528,19 @@ func TestProxyHTTPCaptureEmitsRequiredRequestLegSequence(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	captureDir := t.TempDir()
 	proxy := &Proxy{
-		log: logger,
-		requestLog: logevent.NewEmitter(
-			slogger.WithConcern(logger, slogger.ConcernProviderMITMWire),
-			nil,
-		),
+		log:        logger,
+		requestLog: logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
 	}
-	req := httptest.NewRequest(
-		http.MethodPost,
-		"http://clyde.test/v1/responses",
-		strings.NewReader(`{"model":"gpt-5","input":"hello"}`),
-	)
+	req := httptest.NewRequest(http.MethodPost, "http://clyde.test/v1/responses", strings.NewReader(`{"model":"gpt-5","input":"hello"}`))
 	req.Header.Set("Content-Type", "application/json")
-	resp := &http.Response{
-		StatusCode: http.StatusAccepted,
-		Header:     http.Header{"Content-Type": []string{"application/json"}},
-	}
+	resp := &http.Response{StatusCode: http.StatusAccepted, Header: http.Header{"Content-Type": []string{"application/json"}}}
 	input := httpCaptureRecordInput{
-		config:       config.MITMConfig{CaptureDir: captureDir},
-		provider:     "openai",
-		upstreamURL:  "https://api.openai.com/v1/responses",
-		requestBody:  []byte(`{"model":"gpt-5","input":"hello"}`),
-		responseBody: []byte(`{"ok":true}`),
-		requestIndex: newCaptureBodyIndexFromSummary(
-			summarizeBody([]byte(`{"model":"gpt-5","input":"hello"}`)),
-		),
+		config:         config.MITMConfig{CaptureDir: captureDir},
+		provider:       "openai",
+		upstreamURL:    "https://api.openai.com/v1/responses",
+		requestBody:    []byte(`{"model":"gpt-5","input":"hello"}`),
+		responseBody:   []byte(`{"ok":true}`),
+		requestIndex:   newCaptureBodyIndexFromSummary(summarizeBody([]byte(`{"model":"gpt-5","input":"hello"}`))),
 		responseIndex:  newCaptureBodyIndexFromSummary(summarizeBody([]byte(`{"ok":true}`))),
 		responseLen:    int64(len(`{"ok":true}`)),
 		duration:       time.Millisecond,
@@ -772,29 +550,21 @@ func TestProxyHTTPCaptureEmitsRequiredRequestLegSequence(t *testing.T) {
 	proxy.recordHTTPCapture(req, resp.Header, input)
 
 	seen := make(map[string]bool)
-
 	for _, event := range captureLogEvents(t, logBuffer.String(), "logging.request.leg") {
 		if event["surface"] != string(logevent.SurfaceMITMIDE) {
 			continue
 		}
-
 		leg, ok := event["leg"].(string)
 		if ok {
 			seen[leg] = true
 		}
 	}
-
 	for _, leg := range logevent.DefaultRequiredLegs()[logevent.SurfaceMITMIDE] {
 		if !seen[string(leg)] {
 			t.Fatalf("missing required leg %s in events %v", leg, seen)
 		}
 	}
-
-	if event := firstCaptureLogEvent(
-		t,
-		logBuffer.String(),
-		"logging.request.incomplete",
-	); event != nil {
+	if event := firstCaptureLogEvent(t, logBuffer.String(), "logging.request.incomplete"); event != nil {
 		t.Fatalf("did not expect incomplete request event: %v", event)
 	}
 }
@@ -821,64 +591,44 @@ func TestCaptureIndexSerializesConcurrentWritersWithoutDropping(t *testing.T) {
 	logger := slog.New(newMITMCaptureTestHandler(t, concernRoot))
 	var wg sync.WaitGroup
 	wg.Add(writers)
-
 	for w := 0; w < writers; w++ {
 		go func(writerIndex int) {
 			defer wg.Done()
-
 			for r := 0; r < recordsPerWriter; r++ {
-				logger.Info(
-					"logging.request.leg",
+				logger.Info("logging.request.leg",
 					slog.String("concern", slogger.ConcernProviderMITMWire),
 					slog.Int("writer", writerIndex),
 					slog.Int("record", r),
 				)
 			}
-		}(
-			w,
-		)
+		}(w)
 	}
-
 	wg.Wait()
 
 	capturePath := mitmWireConcernTestPath(concernRoot)
 	records := readCaptureJSONL(t, capturePath)
 	if len(records) != writers*recordsPerWriter {
-		t.Fatalf(
-			"capture records = %d want %d (records dropped under contention)",
-			len(records),
-			writers*recordsPerWriter,
-		)
+		t.Fatalf("capture records = %d want %d (records dropped under contention)", len(records), writers*recordsPerWriter)
 	}
-
 	seen := make(map[[2]int]bool, writers*recordsPerWriter)
-
 	for _, record := range records {
 		writerValue, okWriter := record["writer"].(float64)
 		recordValue, okRecord := record["record"].(float64)
 		if !okWriter || !okRecord {
 			t.Fatalf("capture record missing writer/record fields: %#v", record)
 		}
-
 		key := [2]int{int(writerValue), int(recordValue)}
 		if seen[key] {
 			t.Fatalf("duplicate capture record %v", key)
 		}
-
 		seen[key] = true
 	}
-
 	if len(seen) != writers*recordsPerWriter {
 		t.Fatalf("unique capture records = %d want %d", len(seen), writers*recordsPerWriter)
 	}
 }
 
-func newHTTPProxyForCaptureTest(
-	t *testing.T,
-	captureDir string,
-	store *capture.Store,
-	upstream *httptest.Server,
-) *Proxy {
+func newHTTPProxyForCaptureTest(t *testing.T, captureDir string, store *capture.Store, upstream *httptest.Server) *Proxy {
 	t.Helper()
 	t.Cleanup(registerTestRoute(t, testRouteOpenAIV1, upstream.URL))
 	logger := slog.New(newMITMCaptureTestHandler(t, captureDir))
@@ -891,19 +641,13 @@ func newHTTPProxyForCaptureTest(
 		tlsClientConfig: nil,
 		store:           store,
 		client:          "test",
-		Tunnels: newTestTunnelRegistry(
-			livetrack.NewGroup(livetrack.GroupOptions{Log: nil}),
-		),
-		requestLog: logevent.NewEmitter(
-			slogger.WithConcern(logger, slogger.ConcernProviderMITMWire),
-			nil,
-		),
-		mu:     sync.RWMutex{},
-		cfg:    config.MITMConfig{CaptureDir: captureDir},
-		base:   "http://[::1]",
-		server: nil,
+		Tunnels:         newTestTunnelRegistry(livetrack.NewGroup(livetrack.GroupOptions{Log: nil})),
+		requestLog:      logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
+		mu:              sync.RWMutex{},
+		cfg:             config.MITMConfig{CaptureDir: captureDir},
+		base:            "http://[::1]",
+		server:          nil,
 	}
-
 	return proxy
 }
 
@@ -928,7 +672,6 @@ func newMITMCaptureTestHandler(t *testing.T, concernRoot string) slog.Handler {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("mkdir MITM wire concern dir: %v", err)
 	}
-
 	return gklog.FileJSON(path, slog.LevelDebug, gklog.RotationConfig{})
 }
 
@@ -939,25 +682,17 @@ func mitmFieldsFromCaptureRecord(t *testing.T, record map[string]any) map[string
 		raw, _ := json.Marshal(record["mitm"])
 		t.Fatalf("mitm = %s, want metadata object", raw)
 	}
-
 	return fields
 }
 
-func firstCaptureRecordWithLeg(
-	t *testing.T,
-	records []map[string]any,
-	leg logevent.Leg,
-) map[string]any {
+func firstCaptureRecordWithLeg(t *testing.T, records []map[string]any, leg logevent.Leg) map[string]any {
 	t.Helper()
-
 	for _, record := range records {
 		if record["leg"] == string(leg) {
 			return record
 		}
 	}
-
 	t.Fatalf("missing capture record with leg %s in %#v", leg, records)
-
 	return nil
 }
 
@@ -965,23 +700,19 @@ func captureLogEvents(t *testing.T, raw string, message string) []map[string]any
 	t.Helper()
 	lines := strings.Split(strings.TrimSpace(raw), "\n")
 	events := make([]map[string]any, 0)
-
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-
 		var event map[string]any
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			continue
 		}
-
 		if event["msg"] == message {
 			events = append(events, event)
 		}
 	}
-
 	return events
 }
 
@@ -991,6 +722,5 @@ func firstCaptureLogEvent(t *testing.T, raw string, message string) map[string]a
 	if len(events) == 0 {
 		return nil
 	}
-
 	return events[0]
 }

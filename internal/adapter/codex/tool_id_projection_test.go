@@ -19,15 +19,9 @@ func TestToolIDProjectionAvoidsOccupiedLongIDCandidate(t *testing.T) {
 	if projectedID == candidate {
 		t.Fatalf("projected ID collided with occupied candidate %q", candidate)
 	}
-
 	if len(projectedID) > codexToolCallIDMaxLength {
-		t.Fatalf(
-			"projected ID length=%d want at most %d",
-			len(projectedID),
-			codexToolCallIDMaxLength,
-		)
+		t.Fatalf("projected ID length=%d want at most %d", len(projectedID), codexToolCallIDMaxLength)
 	}
-
 	if projectedAgain := projection.project(sourceID); projectedAgain != projectedID {
 		t.Fatalf("projected ID=%q want stable %q", projectedAgain, projectedID)
 	}

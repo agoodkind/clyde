@@ -39,15 +39,12 @@ func (f Facet) FacetAttrs() []slog.Attr {
 	if f.RequestID != "" {
 		attrs = append(attrs, slog.String("request_id", f.RequestID))
 	}
-
 	if f.ConversationID != "" {
 		attrs = append(attrs, slog.String("conversation_id", f.ConversationID))
 	}
-
 	if f.GenerationID != "" {
 		attrs = append(attrs, slog.String("generation_id", f.GenerationID))
 	}
-
 	return attrs
 }
 
@@ -85,7 +82,6 @@ func (i *Ingress) TranslateHeaders(header http.Header) ingresscontract.IngressCo
 			MCPToolNames:      nil,
 		}
 	}
-
 	return ingresscontract.IngressContext{
 		User:              "",
 		RequestID:         firstHeader(header, HeaderRequestID),
@@ -106,31 +102,17 @@ func (i *Ingress) TranslateHeaders(header http.Header) ingresscontract.IngressCo
 
 // CorrelationAttrs returns Cursor-owned correlation attributes for
 // downstream structured logs.
-func (i *Ingress) CorrelationAttrs(
-	ic ingresscontract.IngressContext,
-) []correlation.IdentityAttribute {
+func (i *Ingress) CorrelationAttrs(ic ingresscontract.IngressContext) []correlation.IdentityAttribute {
 	attrs := make([]correlation.IdentityAttribute, 0, 3)
 	if ic.RequestID != "" {
-		attrs = append(
-			attrs,
-			correlation.IdentityAttribute{Key: "cursor_request_id", Value: ic.RequestID},
-		)
+		attrs = append(attrs, correlation.IdentityAttribute{Key: "cursor_request_id", Value: ic.RequestID})
 	}
-
 	if ic.ConversationID != "" {
-		attrs = append(
-			attrs,
-			correlation.IdentityAttribute{Key: "cursor_conversation_id", Value: ic.ConversationID},
-		)
+		attrs = append(attrs, correlation.IdentityAttribute{Key: "cursor_conversation_id", Value: ic.ConversationID})
 	}
-
 	if ic.GenerationID != "" {
-		attrs = append(
-			attrs,
-			correlation.IdentityAttribute{Key: "cursor_generation_id", Value: ic.GenerationID},
-		)
+		attrs = append(attrs, correlation.IdentityAttribute{Key: "cursor_generation_id", Value: ic.GenerationID})
 	}
-
 	return attrs
 }
 
@@ -144,7 +126,6 @@ func (i *Ingress) RequestFacets(ic ingresscontract.IngressContext) []logevent.Fa
 	if facet.empty() {
 		return nil
 	}
-
 	return []logevent.Facet{facet}
 }
 
@@ -154,6 +135,5 @@ func firstHeader(header http.Header, keys ...string) string {
 			return value
 		}
 	}
-
 	return ""
 }

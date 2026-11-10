@@ -14,13 +14,11 @@ import (
 
 func TestRunCommandDispatchesBeforeCompactRuntime(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	input := strings.NewReader(
-		`{
+	input := strings.NewReader(`{
 		"hook_event_name": "PreCompact",
 		"transcript_path": "/tmp/session.jsonl",
 		"cwd": "/tmp/project"
-	}`,
-	)
+	}`)
 	var output bytes.Buffer
 	store := hookspec.NewFileSnapshotStore(t.TempDir())
 	factory := &cli.Factory{
@@ -41,11 +39,7 @@ func TestRunCommandDispatchesBeforeCompactRuntime(t *testing.T) {
 		_ bool,
 		syntheticPreCompact bool,
 	) (conversation.ReorientPage, error) {
-		calls = append(
-			calls,
-			conversationID+"|"+workspace+"|"+cursor+"|"+boolString(syntheticPreCompact),
-		)
-
+		calls = append(calls, conversationID+"|"+workspace+"|"+cursor+"|"+boolString(syntheticPreCompact))
 		return conversation.ReorientPage{
 			Body:      "hook body",
 			Remaining: 0,
@@ -63,7 +57,6 @@ func TestRunCommandDispatchesBeforeCompactRuntime(t *testing.T) {
 	if !slices.Equal(calls, expectedCalls) {
 		t.Fatalf("calls = %#v, want %#v", calls, expectedCalls)
 	}
-
 	if output.String() != "" {
 		t.Fatalf("output = %q, want empty", output.String())
 	}
@@ -97,11 +90,7 @@ func TestRunCommandDispatchesAfterCompactRuntime(t *testing.T) {
 		_ bool,
 		syntheticPreCompact bool,
 	) (conversation.ReorientPage, error) {
-		calls = append(
-			calls,
-			conversationID+"|"+workspace+"|"+cursor+"|"+boolString(syntheticPreCompact),
-		)
-
+		calls = append(calls, conversationID+"|"+workspace+"|"+cursor+"|"+boolString(syntheticPreCompact))
 		return conversation.ReorientPage{
 			Body:      "hook body",
 			Remaining: 0,
@@ -109,25 +98,10 @@ func TestRunCommandDispatchesAfterCompactRuntime(t *testing.T) {
 		}, nil
 	}
 
-	if _, err := runHookCommand(
-		t,
-		[]string{"run", "reorient", "before-compact"},
-		payloadBefore,
-		reorient,
-		store,
-		nil,
-	); err != nil {
+	if _, err := runHookCommand(t, []string{"run", "reorient", "before-compact"}, payloadBefore, reorient, store, nil); err != nil {
 		t.Fatalf("before-compact Execute: %v", err)
 	}
-
-	output, err := runHookCommand(
-		t,
-		[]string{"run", "reorient", "after-compact"},
-		payloadAfter,
-		reorient,
-		store,
-		nil,
-	)
+	output, err := runHookCommand(t, []string{"run", "reorient", "after-compact"}, payloadAfter, reorient, store, nil)
 	if err != nil {
 		t.Fatalf("after-compact Execute: %v", err)
 	}
@@ -136,12 +110,8 @@ func TestRunCommandDispatchesAfterCompactRuntime(t *testing.T) {
 	if !slices.Equal(calls, expectedCalls) {
 		t.Fatalf("calls = %#v, want %#v", calls, expectedCalls)
 	}
-
 	if output != "" {
-		t.Fatalf(
-			"after-compact output = %q, want empty; the hook must not instruct the model",
-			output,
-		)
+		t.Fatalf("after-compact output = %q, want empty; the hook must not instruct the model", output)
 	}
 }
 
@@ -156,16 +126,12 @@ func TestRunCommandDispatchesStopFollowupRuntime(t *testing.T) {
 		"session_id": "session-1",
 		"workspace_roots": ["/tmp/project"]
 	}`
-	err := store.Save(
-		context.Background(),
-		hookspec.ReorientSnapshotKey{
-			TranscriptPath: "/tmp/cursor.jsonl",
-			ConversationID: "/tmp/cursor.jsonl",
-			SessionID:      "session-1",
-			CWD:            "/tmp/project",
-		},
-		"cursor snapshot body",
-	)
+	err := store.Save(context.Background(), hookspec.ReorientSnapshotKey{
+		TranscriptPath: "/tmp/cursor.jsonl",
+		ConversationID: "/tmp/cursor.jsonl",
+		SessionID:      "session-1",
+		CWD:            "/tmp/project",
+	}, "cursor snapshot body")
 	if err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -180,25 +146,19 @@ func TestRunCommandDispatchesStopFollowupRuntime(t *testing.T) {
 			if key == "CURSOR_VERSION" {
 				return "1.2.3"
 			}
-
 			return ""
 		},
 	)
 	if err != nil {
 		t.Fatalf("stop-followup Execute: %v", err)
 	}
-
 	if output != "" {
-		t.Fatalf(
-			"stop-followup output = %q, want empty; Cursor must receive no follow-up message",
-			output,
-		)
+		t.Fatalf("stop-followup output = %q, want empty; Cursor must receive no follow-up message", output)
 	}
 }
 
 func TestRunCommandRejectsLegacyCommands(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-
 	cases := [][]string{
 		{"run", string(hookspec.HookIDReorientBeforeCompact)},
 		{"run", string(hookspec.HookIDReorientAfterCompact)},
@@ -223,7 +183,6 @@ func TestRunCommandRejectsLegacyCommands(t *testing.T) {
 		if err == nil {
 			t.Fatalf("Execute(%v) error = nil, want legacy syntax rejection", args)
 		}
-
 		if !strings.Contains(err.Error(), "unknown command") {
 			t.Fatalf("Execute(%v) error = %q, want unknown command", args, err)
 		}
@@ -251,7 +210,6 @@ func runHookCommand(
 	cmd := newCmdWithDeps(factory, reorient, snapshotStore, getenv)
 	cmd.SetArgs(args)
 	err := cmd.Execute()
-
 	return output.String(), err
 }
 
@@ -259,6 +217,5 @@ func boolString(value bool) string {
 	if value {
 		return "true"
 	}
-
 	return "false"
 }

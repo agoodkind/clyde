@@ -24,69 +24,27 @@ var isolatedDirs = map[string]string{
 func Main(m *testing.M) int {
 	root, err := os.MkdirTemp("", rootPattern)
 	if err != nil {
-		slog.Error(
-			"xdgtest.root_create_failed",
-			"concern",
-			"test.isolation",
-			"component",
-			"xdgtest",
-			"err",
-			err,
-		)
+		slog.Error("xdgtest.root_create_failed", "concern", "test.isolation", "component", "xdgtest", "err", err)
 		_, _ = fmt.Fprintln(os.Stderr, fmt.Errorf("create temporary root: %w", err))
-
 		return 1
 	}
-
 	defer func() {
 		if removeErr := os.RemoveAll(root); removeErr != nil {
-			slog.Warn(
-				"xdgtest.root_remove_failed",
-				"concern",
-				"test.isolation",
-				"component",
-				"xdgtest",
-				"path",
-				root,
-				"err",
-				removeErr,
-			)
+			slog.Warn("xdgtest.root_remove_failed", "concern", "test.isolation", "component", "xdgtest", "path", root, "err", removeErr)
 		}
 	}()
 	if err := keepGoBuildCache(); err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-
 	for name, directory := range isolatedDirs {
 		if err := os.Setenv(name, filepath.Join(root, directory)); err != nil {
-			slog.Error(
-				"xdgtest.env_set_failed",
-				"concern",
-				"test.isolation",
-				"component",
-				"xdgtest",
-				"name",
-				name,
-				"err",
-				err,
-			)
+			slog.Error("xdgtest.env_set_failed", "concern", "test.isolation", "component", "xdgtest", "name", name, "err", err)
 			_, _ = fmt.Fprintln(os.Stderr, fmt.Errorf("set %s: %w", name, err))
-
 			return 1
 		}
 	}
-
-	slog.Debug(
-		"xdgtest.isolated",
-		"concern",
-		"test.isolation",
-		"component",
-		"xdgtest",
-		"root",
-		root,
-	)
-
+	slog.Debug("xdgtest.isolated", "concern", "test.isolation", "component", "xdgtest", "root", root)
 	return m.Run()
 }
 
@@ -95,37 +53,14 @@ func keepGoBuildCache() error {
 	if os.Getenv(goCacheEnv) != "" {
 		return nil
 	}
-
 	userCache, err := os.UserCacheDir()
 	if err != nil {
-		slog.Error(
-			"xdgtest.user_cache_dir_failed",
-			"concern",
-			"test.isolation",
-			"component",
-			"xdgtest",
-			"err",
-			err,
-		)
-
+		slog.Error("xdgtest.user_cache_dir_failed", "concern", "test.isolation", "component", "xdgtest", "err", err)
 		return fmt.Errorf("find user cache directory: %w", err)
 	}
-
 	if err := os.Setenv(goCacheEnv, filepath.Join(userCache, goBuildCacheDir)); err != nil {
-		slog.Error(
-			"xdgtest.env_set_failed",
-			"concern",
-			"test.isolation",
-			"component",
-			"xdgtest",
-			"name",
-			goCacheEnv,
-			"err",
-			err,
-		)
-
+		slog.Error("xdgtest.env_set_failed", "concern", "test.isolation", "component", "xdgtest", "name", goCacheEnv, "err", err)
 		return fmt.Errorf("set %s: %w", goCacheEnv, err)
 	}
-
 	return nil
 }

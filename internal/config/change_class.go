@@ -57,27 +57,21 @@ func ClassifyConfigChange(oldCfg, newCfg Config) Route {
 	if oldCfg.Daemon.GRPCAddress != newCfg.Daemon.GRPCAddress {
 		return RouteRestartRequired
 	}
-
 	if oldCfg.Adapter.Enabled != newCfg.Adapter.Enabled {
 		return RouteRestartRequired
 	}
-
 	if oldCfg.MITM.EnabledDefault != newCfg.MITM.EnabledDefault {
 		return RouteRestartRequired
 	}
-
 	if listenerTopologyMoved(oldCfg, newCfg) {
 		return RouteRebind
 	}
-
 	if reloadOnlyStateChanged(oldCfg, newCfg) {
 		return RouteReload
 	}
-
 	if onlyHotFieldsChanged(oldCfg, newCfg) {
 		return RouteHotApply
 	}
-
 	return RouteReload
 }
 
@@ -89,11 +83,9 @@ func listenerTopologyMoved(oldCfg, newCfg Config) bool {
 		oldCfg.Adapter.CursorIngressPort != newCfg.Adapter.CursorIngressPort {
 		return true
 	}
-
 	if oldCfg.Debug.PProfAddr != newCfg.Debug.PProfAddr {
 		return true
 	}
-
 	return mitmListenersMoved(oldCfg.MITM, newCfg.MITM)
 }
 
@@ -103,18 +95,15 @@ func mitmListenersMoved(oldMITM, newMITM MITMConfig) bool {
 	if len(oldMITM.Listeners) != len(newMITM.Listeners) {
 		return true
 	}
-
 	for id, oldListener := range oldMITM.Listeners {
 		newListener, ok := newMITM.Listeners[id]
 		if !ok {
 			return true
 		}
-
 		if oldListener.Host != newListener.Host || oldListener.Port != newListener.Port {
 			return true
 		}
 	}
-
 	return false
 }
 
@@ -127,12 +116,10 @@ func reloadOnlyStateChanged(oldCfg, newCfg Config) bool {
 	if oldCfg.MITM.CaptureStore.DBPath != newCfg.MITM.CaptureStore.DBPath {
 		return true
 	}
-
 	if oldCfg.MITM.CA.CertPath != newCfg.MITM.CA.CertPath ||
 		oldCfg.MITM.CA.KeyPath != newCfg.MITM.CA.KeyPath {
 		return true
 	}
-
 	return false
 }
 
@@ -149,7 +136,6 @@ func onlyHotFieldsChanged(oldCfg, newCfg Config) bool {
 		// (no-op) hot apply by a caller that already filtered identical hashes.
 		return !reflect.DeepEqual(oldCfg, newCfg)
 	}
-
 	return false
 }
 
@@ -165,13 +151,7 @@ func blankHotFields(cfg Config) Config {
 	cfg.Adapter.ModelRoutes = nil
 	cfg.Adapter.DefaultModel = ""
 	cfg.Adapter.PassthroughOverrides = nil
-	cfg.Adapter.OpenAICompatPassthrough = AdapterOpenAICompatPassthrough{
-		BaseURL:   "",
-		APIKey:    "",
-		APIKeyEnv: "",
-		Model:     "",
-	}
+	cfg.Adapter.OpenAICompatPassthrough = AdapterOpenAICompatPassthrough{BaseURL: "", APIKey: "", APIKeyEnv: "", Model: ""}
 	cfg.MITM.Providers = nil
-
 	return cfg
 }

@@ -27,7 +27,6 @@ func codexResolvedModelName(resolved *adapterresolver.ResolvedRequest) string {
 	if resolved == nil {
 		return ""
 	}
-
 	return strings.TrimSpace(resolved.Model)
 }
 
@@ -37,7 +36,6 @@ func codexResolvedInstructions(resolved *adapterresolver.ResolvedRequest) string
 	if resolved == nil {
 		return ""
 	}
-
 	return resolved.Instructions
 }
 
@@ -78,15 +76,10 @@ const (
 // MessageContent builds a typed Codex `message` input item with a
 // single content part.
 func MessageContent(role, textType, text string) codexwire.InputItem {
-	return MessageContentItems(
-		role,
-		codexwire.ContentItems{
-			{
-				Type: codexwire.ContentItemType(textType),
-				Text: text,
-			},
-		},
-	)
+	return MessageContentItems(role, codexwire.ContentItems{{
+		Type: codexwire.ContentItemType(textType),
+		Text: text,
+	}})
 }
 
 // MessageContentItems builds a typed Codex `message` input item
@@ -121,7 +114,6 @@ func codexContentFromContent(
 	if err != nil {
 		return nil
 	}
-
 	return codexContentFromRaw(encoded, textType, strategy, cfg)
 }
 
@@ -135,25 +127,18 @@ func codexContentFromParts(
 	for _, part := range parts {
 		switch part.Kind {
 		case adaptercontent.PartText:
-			text := strings.TrimSpace(
-				sanitizeForUpstreamCacheWithRequestConfig(part.Text, strategy, cfg),
-			)
+			text := strings.TrimSpace(sanitizeForUpstreamCacheWithRequestConfig(part.Text, strategy, cfg))
 			if text == "" {
 				continue
 			}
-
-			content = append(
-				content,
-				codexwire.ContentItem{
-					Type: textType,
-					Text: text,
-				},
-			)
+			content = append(content, codexwire.ContentItem{
+				Type: textType,
+				Text: text,
+			})
 		case adaptercontent.PartImage:
 			if part.Image == nil || strings.TrimSpace(part.Image.URL) == "" {
 				continue
 			}
-
 			item := codexwire.ContentItem{
 				Type:     codexwire.ContentItemInputImage,
 				ImageURL: strings.TrimSpace(part.Image.URL),
@@ -161,36 +146,24 @@ func codexContentFromParts(
 			if detail := strings.TrimSpace(part.Image.Detail); detail != "" {
 				item.Detail = detail
 			}
-
 			content = append(content, item)
 		case adaptercontent.PartRefusal:
-			text := strings.TrimSpace(
-				sanitizeForUpstreamCacheWithRequestConfig(part.Refusal, strategy, cfg),
-			)
+			text := strings.TrimSpace(sanitizeForUpstreamCacheWithRequestConfig(part.Refusal, strategy, cfg))
 			if text == "" {
 				continue
 			}
-
-			content = append(
-				content,
-				codexwire.ContentItem{
-					Type: textType,
-					Text: text,
-				},
-			)
+			content = append(content, codexwire.ContentItem{
+				Type: textType,
+				Text: text,
+			})
 		// PartThinking never arrives here: NormalizeRaw classifies the OpenAI
 		// content dialect, which has no reasoning wire type, and Codex reasoning
 		// round-trip is owned by the materialization strategy rather than by a
 		// content part.
-		case adaptercontent.PartAudio,
-			adaptercontent.PartThinking,
-			adaptercontent.PartToolResult,
-			adaptercontent.PartToolUse,
-			adaptercontent.PartUnsupported:
+		case adaptercontent.PartAudio, adaptercontent.PartThinking, adaptercontent.PartToolResult, adaptercontent.PartToolUse, adaptercontent.PartUnsupported:
 			continue
 		}
 	}
-
 	return content
 }
 
@@ -247,15 +220,11 @@ type reasoningSummaryText struct {
 func (r reasoningInputItem) toInputItem() codexwire.InputItem {
 	summary := make([]codexwire.ReasoningSummary, 0, len(r.Summary))
 	for _, entry := range r.Summary {
-		summary = append(
-			summary,
-			codexwire.ReasoningSummary{
-				Type: "summary_text",
-				Text: entry.Text,
-			},
-		)
+		summary = append(summary, codexwire.ReasoningSummary{
+			Type: "summary_text",
+			Text: entry.Text,
+		})
 	}
-
 	out := codexwire.InputItem{
 		Type:    codexwire.ItemTypeReasoning,
 		ID:      r.ID,
@@ -264,7 +233,6 @@ func (r reasoningInputItem) toInputItem() codexwire.InputItem {
 	if r.EncryptedContent != "" {
 		out.EncryptedContent = r.EncryptedContent
 	}
-
 	return out
 }
 
@@ -295,27 +263,21 @@ func emitReasoningItemsFromAssistantContent(
 	if len(parts) == 0 {
 		return out
 	}
-
 	summaryMode := cfg.RoundTripSummary
 	if summaryMode == "" {
 		summaryMode = RoundTripSummaryNative
 	}
-
 	encryptedMode := effectiveRoundTripEncrypted(cfg.RoundTripEncrypted)
-
 	for _, part := range parts {
 		if part.Kind != adapterrender.SyntheticReasoning {
 			continue
 		}
-
 		item, emit := buildReasoningItem(part, summaryMode, encryptedMode)
 		if !emit {
 			continue
 		}
-
 		out = append(out, item.toInputItem())
 	}
-
 	return out
 }
 
@@ -345,7 +307,6 @@ func buildReasoningItem(
 	if part.Origin != adapterrender.OriginCodex {
 		return zero, false
 	}
-
 	// Codex rejects Reasoning input items with an empty id
 	// (ApiIdParam.invalid_id). The id is the upstream rs_* identifier
 	// captured on data-ref. A marker without ref cannot round-trip
@@ -354,18 +315,15 @@ func buildReasoningItem(
 	if ref == "" {
 		return zero, false
 	}
-
 	if encrypted == "" {
 		return zero, false
 	}
-
 	switch summaryMode {
 	case RoundTripSummaryNative:
 		summary := []reasoningSummaryText(nil)
 		if body != "" {
 			summary = []reasoningSummaryText{{Text: body}}
 		}
-
 		return reasoningInputItem{ID: ref, Summary: summary, EncryptedContent: encrypted}, true
 	case RoundTripSummaryDrop:
 		return reasoningInputItem{ID: ref, Summary: nil, EncryptedContent: encrypted}, true
@@ -375,7 +333,6 @@ func buildReasoningItem(
 		// half is emitted as a Reasoning item.
 		return reasoningInputItem{ID: ref, Summary: nil, EncryptedContent: encrypted}, true
 	}
-
 	return zero, false
 }
 
@@ -398,7 +355,6 @@ func (c inputItemContent) MarshalJSON() ([]byte, error) {
 	if len(c.Raw) == 0 {
 		return []byte("null"), nil
 	}
-
 	return c.Raw, nil
 }
 
@@ -426,29 +382,23 @@ func assistantRawText(raw inputItemContent) string {
 	if len(raw.Raw) == 0 {
 		return ""
 	}
-
 	trimmed := strings.TrimSpace(string(raw.Raw))
 	if trimmed == "" || trimmed == "null" {
 		return ""
 	}
-
 	if trimmed[0] == '"' {
 		var s string
 		if err := json.Unmarshal(raw.Raw, &s); err != nil {
 			return ""
 		}
-
 		return s
 	}
-
 	if trimmed[0] == '[' {
 		var parts []responsesContentPart
 		if err := json.Unmarshal(raw.Raw, &parts); err != nil {
 			return ""
 		}
-
 		var out []string
-
 		for _, part := range parts {
 			switch contentPartType(strings.TrimSpace(part.Type)) {
 			case contentPartTypeText, contentPartTypeInputText, contentPartTypeOutputText:
@@ -457,22 +407,18 @@ func assistantRawText(raw inputItemContent) string {
 				}
 			}
 		}
-
 		return strings.Join(out, "\n")
 	}
-
 	if trimmed[0] == '{' {
 		var part responsesContentPart
 		if err := json.Unmarshal(raw.Raw, &part); err != nil {
 			return ""
 		}
-
 		switch contentPartType(strings.TrimSpace(part.Type)) {
 		case contentPartTypeText, contentPartTypeInputText, contentPartTypeOutputText:
 			return part.Text
 		}
 	}
-
 	return ""
 }
 
@@ -498,7 +444,6 @@ func BuildRequestWithConfig(
 	if strategy == "" {
 		strategy = adapterrender.MaterializeDrop
 	}
-
 	cursorReq := adaptercursor.TranslateRequest(req)
 	toolIDs := newToolIDProjection()
 	input := make([]codexwire.InputItem, 0, len(req.Messages))
@@ -506,28 +451,12 @@ func BuildRequestWithConfig(
 	modelName := codexResolvedModelName(resolved)
 	workspacePath := cursorReq.WorkspacePath
 	customTools := newDeclaredCustomTools(requestTools(req))
-	if rawInput, hasResponsesInput := inputFromResponsesInput(
-		req.Input,
-		workspacePath,
-		&systemSections,
-		strategy,
-		cfg,
-		toolIDs,
-	); hasResponsesInput {
+	if rawInput, ok := inputFromResponsesInput(req.Input, workspacePath, &systemSections, strategy, cfg, toolIDs); ok {
 		input = rawInput
 	} else {
 		toolIDs.reserveCompliant(chatToolCallIDs(req.Messages))
-		input, systemSections = appendChatMessageInputs(
-			input,
-			systemSections,
-			req.Messages,
-			strategy,
-			cfg,
-			toolIDs,
-			customTools,
-		)
+		input, systemSections = appendChatMessageInputs(input, systemSections, req.Messages, strategy, cfg, toolIDs, customTools)
 	}
-
 	instructions := strings.TrimSpace(strings.Join(systemSections, "\n\n"))
 	if base := strings.TrimSpace(codexResolvedInstructions(resolved)); base != "" {
 		if instructions == "" {
@@ -536,11 +465,9 @@ func BuildRequestWithConfig(
 			instructions = base + "\n\n" + instructions
 		}
 	}
-
 	if len(input) == 0 {
 		input = append(input, MessageContent("user", string(codexwire.ContentItemInputText), " "))
 	}
-
 	reasoning := EffectiveReasoningWithDefaultSummary(req, effort, cfg.ReasoningSummary)
 	encryptedMode := effectiveRoundTripEncrypted(cfg.RoundTripEncrypted)
 	// codex-rs serializes `tools` and `include` as Vec<...> with no
@@ -552,15 +479,12 @@ func BuildRequestWithConfig(
 	if include == nil {
 		include = []string{}
 	}
-
 	tools := toolSpecs(req)
 	if tools == nil {
 		tools = []codexwire.ToolSpec{}
 	}
-
 	outputControls := BuildOutputControls(req)
 	identity := requestContextIdentity(cursorReq, codexResolvedModelName(resolved))
-
 	return HTTPTransportRequest{
 		Model:        modelName,
 		Instructions: instructions,
@@ -601,7 +525,6 @@ func parallelToolCalls(req adapteropenai.ChatRequest) bool {
 	if req.ParallelTools == nil {
 		return true
 	}
-
 	return *req.ParallelTools
 }
 
@@ -611,22 +534,17 @@ func requestTools(req adapteropenai.ChatRequest) []adapteropenai.Tool {
 		tools = append(tools, req.Tools...)
 	} else if len(req.Functions) > 0 {
 		for _, fn := range req.Functions {
-			tools = append(
-				tools,
-				adapteropenai.Tool{
-					Type: "function",
-					Function: adapteropenai.ToolFunctionSchema{
-						Name:        fn.Name,
-						Description: fn.Description,
-						Parameters:  fn.Parameters,
-						Strict:      nil,
-					},
-					Format: nil,
+			tools = append(tools, adapteropenai.Tool{
+				Type: "function",
+				Function: adapteropenai.ToolFunctionSchema{
+					Name:        fn.Name,
+					Description: fn.Description,
+					Parameters:  fn.Parameters, Strict: nil,
 				},
-			)
+				Format: nil,
+			})
 		}
 	}
-
 	return tools
 }
 
@@ -636,29 +554,23 @@ func responsesContentText(raw inputItemContent) string {
 	if len(raw.Raw) == 0 {
 		return ""
 	}
-
 	trimmed := strings.TrimSpace(string(raw.Raw))
 	if trimmed == "" || trimmed == "null" {
 		return ""
 	}
-
 	if trimmed[0] == '"' {
 		var s string
 		if err := json.Unmarshal(raw.Raw, &s); err != nil {
 			return ""
 		}
-
 		return SanitizeForUpstreamCache(s)
 	}
-
 	if trimmed[0] == '[' {
 		var parts []responsesContentPart
 		if err := json.Unmarshal(raw.Raw, &parts); err != nil {
 			return ""
 		}
-
 		var out []string
-
 		for _, part := range parts {
 			switch contentPartType(strings.TrimSpace(part.Type)) {
 			case contentPartTypeText, contentPartTypeInputText, contentPartTypeOutputText:
@@ -667,22 +579,18 @@ func responsesContentText(raw inputItemContent) string {
 				}
 			}
 		}
-
 		return SanitizeForUpstreamCache(strings.Join(out, "\n"))
 	}
-
 	if trimmed[0] == '{' {
 		var part responsesContentPart
 		if err := json.Unmarshal(raw.Raw, &part); err != nil {
 			return ""
 		}
-
 		switch contentPartType(strings.TrimSpace(part.Type)) {
 		case contentPartTypeText, contentPartTypeInputText, contentPartTypeOutputText:
 			return SanitizeForUpstreamCache(part.Text)
 		}
 	}
-
 	return ""
 }
 
@@ -693,7 +601,6 @@ func responsesOutputText(raw json.RawMessage) string {
 	if text != "" {
 		return SanitizeForUpstreamCache(text)
 	}
-
 	return ""
 }
 
@@ -719,17 +626,14 @@ func rewriteWorkspacePath(text, workspacePath string) string {
 	if workspacePath == "" || text == "" {
 		return text
 	}
-
 	cwd, err := GetwdFn()
 	if err != nil {
 		return text
 	}
-
 	cwd = strings.TrimSpace(cwd)
 	if cwd == "" || cwd == workspacePath {
 		return text
 	}
-
 	// Reject cwd values that are too short to be meaningful as a
 	// path prefix. `/` is the launchd default and trips a
 	// catastrophic global slash replace. Anything shorter than 2
@@ -738,7 +642,6 @@ func rewriteWorkspacePath(text, workspacePath string) string {
 	if len(cwd) < 2 || strings.Trim(cwd, "/") == "" {
 		return text
 	}
-
 	// Replace only bounded occurrences. An unbounded ReplaceAll would
 	// rewrite substrings inside unrelated identifiers (e.g. `/var`
 	// inside `/variable`), which is the original mashing failure.
@@ -752,10 +655,8 @@ func pathBoundedReplaceAll(haystack, needle, replacement string) string {
 	if needle == "" {
 		return haystack
 	}
-
 	var out strings.Builder
 	out.Grow(len(haystack))
-
 	idx := 0
 	for idx < len(haystack) {
 		pos, ok := pathBoundedFirstMatch(haystack, needle, idx)
@@ -763,12 +664,10 @@ func pathBoundedReplaceAll(haystack, needle, replacement string) string {
 			out.WriteString(haystack[idx:])
 			return out.String()
 		}
-
 		out.WriteString(haystack[idx:pos])
 		out.WriteString(replacement)
 		idx = pos + len(needle)
 	}
-
 	return out.String()
 }
 
@@ -776,19 +675,16 @@ func pathBoundedFirstMatch(haystack, needle string, from int) (int, bool) {
 	if needle == "" || from >= len(haystack) {
 		return 0, false
 	}
-
 	for {
 		rel := strings.Index(haystack[from:], needle)
 		if rel < 0 {
 			return 0, false
 		}
-
 		pos := from + rel
 		end := pos + len(needle)
 		if isPathBoundary(haystack, pos, end, needle) {
 			return pos, true
 		}
-
 		from = pos + 1
 		if from >= len(haystack) {
 			return 0, false
@@ -799,7 +695,6 @@ func pathBoundedFirstMatch(haystack, needle string, from int) (int, bool) {
 func isPathBoundary(haystack string, pos, end int, needle string) bool {
 	startOK := pos == 0 || isPathSeparatorByte(haystack[pos-1]) || needle[0] == '/'
 	endOK := end == len(haystack) || isPathSeparatorByte(haystack[end])
-
 	return startOK && endOK
 }
 
@@ -808,7 +703,6 @@ func isPathSeparatorByte(b byte) bool {
 	case '/', ' ', '\n', '\t', '"', '\'', '(', ')', ',', ':', ';':
 		return true
 	}
-
 	return false
 }
 
@@ -819,13 +713,11 @@ func toolCallID(tc adapteropenai.ToolCall) string {
 	if callID := strings.TrimSpace(tc.ID); callID != "" {
 		return callID
 	}
-
 	return fmt.Sprintf("call_%d", tc.Index)
 }
 
 func functionCallItem(tc adapteropenai.ToolCall, toolIDs *toolIDProjection) codexwire.InputItem {
 	callID := toolIDs.project(toolCallID(tc))
-
 	return codexwire.InputItem{
 		Type:   codexwire.ItemTypeFunctionCall,
 		CallID: callID,
@@ -845,11 +737,7 @@ func FunctionCallOutputItem(callID, text string) codexwire.InputItem {
 	}
 }
 
-func functionCallFromResponsesItem(
-	item responsesInputItem,
-	workspacePath string,
-	toolIDs *toolIDProjection,
-) codexwire.InputItem {
+func functionCallFromResponsesItem(item responsesInputItem, workspacePath string, toolIDs *toolIDProjection) codexwire.InputItem {
 	args := rewriteWorkspacePath(item.Arguments, workspacePath)
 	tc := adapteropenai.ToolCall{
 		ID:   item.CallID,
@@ -857,10 +745,8 @@ func functionCallFromResponsesItem(
 		Function: adapteropenai.ToolCallFunction{
 			Name:      strings.TrimSpace(item.Name),
 			Arguments: args,
-		},
-		Index: 0,
+		}, Index: 0,
 	}
-
 	return functionCallItem(tc, toolIDs)
 }
 
@@ -875,18 +761,15 @@ func inputFromResponsesInput(
 	if len(raw) == 0 {
 		return nil, false
 	}
-
 	var items []responsesInputItem
 	if err := json.Unmarshal(raw, &items); err != nil || len(items) == 0 {
 		return nil, false
 	}
-
 	toolIDs.reserveCompliant(responsesToolCallIDs(items))
 	input := make([]codexwire.InputItem, 0, len(items))
 	// Maps a custom_tool_call's call id to the tool name that call
 	// carried, so the matching output item replies under the same name.
 	customToolCallNames := make(map[string]string)
-
 	for _, item := range items {
 		role := strings.ToLower(item.Role)
 		itemType := strings.TrimSpace(item.Type)
@@ -896,43 +779,21 @@ func inputFromResponsesInput(
 				*developerSections = append(*developerSections, text)
 			}
 		case role == "user":
-			if content := codexContentFromContent(
-				item.Content,
-				codexwire.ContentItemInputText,
-				strategy,
-				cfg,
-			); len(content) > 0 {
+			if content := codexContentFromContent(item.Content, codexwire.ContentItemInputText, strategy, cfg); len(content) > 0 {
 				input = append(input, MessageContentItems("user", content))
 			}
 		case role == string(codexChatRoleAssistant):
 			// Reasoning items must precede the assistant Message
 			// they belong to in the input array; codex-rs
 			// history.rs preserves that order.
-			input = emitReasoningItemsFromAssistantContent(
-				input,
-				assistantRawText(item.Content),
-				cfg,
-			)
-			if content := codexContentFromContent(
-				item.Content,
-				codexwire.ContentItemOutputText,
-				strategy,
-				cfg,
-			); len(content) > 0 {
+			input = emitReasoningItemsFromAssistantContent(input, assistantRawText(item.Content), cfg)
+			if content := codexContentFromContent(item.Content, codexwire.ContentItemOutputText, strategy, cfg); len(content) > 0 {
 				input = append(input, MessageContentItems("assistant", content))
 			}
 		default:
-			input = appendResponsesToolItem(
-				input,
-				item,
-				itemType,
-				workspacePath,
-				toolIDs,
-				customToolCallNames,
-			)
+			input = appendResponsesToolItem(input, item, itemType, workspacePath, toolIDs, customToolCallNames)
 		}
 	}
-
 	return input, len(input) > 0
 }
 
@@ -959,25 +820,9 @@ func appendResponsesToolItem(
 		if item.CallID != "" {
 			customToolCallNames[item.CallID] = item.Name
 		}
-
-		return append(
-			input,
-			CustomToolCallItem(
-				toolIDs.project(strings.TrimSpace(item.CallID)),
-				item.Name,
-				inputText,
-			),
-		)
-	case string(codexwire.ItemTypeFunctionCallOutput),
-		string(codexwire.ItemTypeCustomToolCallOutput):
-		return appendResponsesToolOutput(
-			input,
-			item,
-			itemType,
-			workspacePath,
-			toolIDs,
-			customToolCallNames,
-		)
+		return append(input, CustomToolCallItem(toolIDs.project(strings.TrimSpace(item.CallID)), item.Name, inputText))
+	case string(codexwire.ItemTypeFunctionCallOutput), string(codexwire.ItemTypeCustomToolCallOutput):
+		return appendResponsesToolOutput(input, item, itemType, workspacePath, toolIDs, customToolCallNames)
 	default:
 		return input
 	}
@@ -995,13 +840,10 @@ func appendResponsesToolOutput(
 	toolIDs *toolIDProjection,
 	customToolCallNames map[string]string,
 ) []codexwire.InputItem {
-	output := strings.TrimSpace(
-		rewriteWorkspacePath(responsesOutputText(item.Output), workspacePath),
-	)
+	output := strings.TrimSpace(rewriteWorkspacePath(responsesOutputText(item.Output), workspacePath))
 	if output == "" {
 		return input
 	}
-
 	projectedCallID := toolIDs.project(strings.TrimSpace(item.CallID))
 	// A custom_tool_call_output carries no name of its own on the wire, so
 	// the matching call supplies it. Falling straight through to item.Name
@@ -1009,11 +851,9 @@ func appendResponsesToolOutput(
 	if name, ok := customToolCallNames[item.CallID]; ok {
 		return append(input, CustomToolCallOutputItem(projectedCallID, name, output))
 	}
-
 	if itemType == string(codexwire.ItemTypeCustomToolCallOutput) {
 		return append(input, CustomToolCallOutputItem(projectedCallID, item.Name, output))
 	}
-
 	return append(input, FunctionCallOutputItem(projectedCallID, output))
 }
 
@@ -1024,7 +864,6 @@ func responsesToolCallIDs(items []responsesInputItem) []string {
 			toolCallIDs = append(toolCallIDs, callID)
 		}
 	}
-
 	return toolCallIDs
 }
 
@@ -1033,40 +872,22 @@ type codexRequestContextIdentity struct {
 	WebsocketSessionKey string
 }
 
-func requestContextIdentity(
-	req adaptercursor.Request,
-	modelAlias string,
-) codexRequestContextIdentity {
+func requestContextIdentity(req adaptercursor.Request, modelAlias string) codexRequestContextIdentity {
 	if cursor := req.Context(); cursor.StrongConversationKey() != "" {
 		key := cursor.StrongConversationKey()
-
 		return codexRequestContextIdentity{
 			PromptCacheKey:      key,
 			WebsocketSessionKey: key,
 		}
 	}
-
-	if metadataID := requestMetadataString(
-		req.OpenAI.Metadata,
-		"conversation_id",
-		"conversationId",
-		"composerId",
-		"composer_id",
-		"thread_id",
-		"threadId",
-		"chat_id",
-		"chatId",
-	); metadataID != "" {
-		key := "meta:" + metadataID
-
+	if v := requestMetadataString(req.OpenAI.Metadata, "conversation_id", "conversationId", "composerId", "composer_id", "thread_id", "threadId", "chat_id", "chatId"); v != "" {
+		key := "meta:" + v
 		return codexRequestContextIdentity{
 			PromptCacheKey:      key,
 			WebsocketSessionKey: key,
 		}
 	}
-
 	firstUser := ""
-
 	for _, msg := range req.OpenAI.Messages {
 		if strings.EqualFold(strings.TrimSpace(msg.Role), "user") {
 			firstUser = strings.TrimSpace(adapteropenai.FlattenContent(msg.Content))
@@ -1075,25 +896,19 @@ func requestContextIdentity(
 			}
 		}
 	}
-
 	if firstUser == "" {
 		if v := strings.TrimSpace(req.User); v != "" {
 			return codexRequestContextIdentity{PromptCacheKey: "user:" + v, WebsocketSessionKey: ""}
 		}
-
 		return codexRequestContextIdentity{PromptCacheKey: "", WebsocketSessionKey: ""}
 	}
-
 	sum := sha256.Sum256([]byte(modelAlias + "\n" + firstUser))
 	// A content fingerprint is useful as an upstream prompt-cache
 	// partition, but it is not proof that two requests are the same
 	// live chat. Do not use it as WebsocketSessionKey: repeated fresh
 	// Cursor chats can start with identical text and must not inherit
 	// each other's previous_response_id.
-	return codexRequestContextIdentity{
-		PromptCacheKey:      "fingerprint:" + hex.EncodeToString(sum[:16]),
-		WebsocketSessionKey: "",
-	}
+	return codexRequestContextIdentity{PromptCacheKey: "fingerprint:" + hex.EncodeToString(sum[:16]), WebsocketSessionKey: ""}
 }
 
 // metadataString is the JSON view of a request `metadata` field.
@@ -1103,27 +918,22 @@ func requestMetadataString(raw json.RawMessage, keys ...string) string {
 	if len(raw) == 0 || string(raw) == "null" {
 		return ""
 	}
-
-	var metadata metadataString
-	if err := json.Unmarshal(raw, &metadata); err != nil {
+	var m metadataString
+	if err := json.Unmarshal(raw, &m); err != nil {
 		return ""
 	}
-
 	for _, key := range keys {
-		rawValue, ok := metadata[key]
+		v, ok := m[key]
 		if !ok {
 			continue
 		}
-
-		var text string
-		if err := json.Unmarshal(rawValue, &text); err != nil {
+		var s string
+		if err := json.Unmarshal(v, &s); err != nil {
 			continue
 		}
-
-		if strings.TrimSpace(text) != "" {
-			return strings.TrimSpace(text)
+		if strings.TrimSpace(s) != "" {
+			return strings.TrimSpace(s)
 		}
 	}
-
 	return ""
 }

@@ -30,37 +30,23 @@ func TestMultiConversationScanStateRoundTripsCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read cache: %v", err)
 	}
-
 	if len(cache.Records) != 2 {
 		t.Fatalf("records = %+v, want %+v", cache.Records, records)
 	}
-
 	var agentSelector string
-
 	for _, record := range cache.Records {
 		if record.ID == "copilot:agent" {
 			agentSelector = record.Selector
 		}
 	}
-
 	if agentSelector != "agent-1" {
 		t.Fatalf("agent selector = %q, want agent-1", agentSelector)
 	}
-
 	if !cache.Stamps[recordKey(artifactPath, "agent-1")].Equal(stamp) {
-		t.Fatalf(
-			"agent stamp = %+v, want %+v",
-			cache.Stamps[recordKey(artifactPath, "agent-1")],
-			stamp,
-		)
+		t.Fatalf("agent stamp = %+v, want %+v", cache.Stamps[recordKey(artifactPath, "agent-1")], stamp)
 	}
-
 	if cache.MultiStates[artifactPath].CompleteOffset != 29 ||
 		!cache.MultiStates[artifactPath].Stamp.Equal(stamp) {
-		t.Fatalf(
-			"scan state = %+v, want offset 29 and stamp %+v",
-			cache.MultiStates[artifactPath],
-			stamp,
-		)
+		t.Fatalf("scan state = %+v, want offset 29 and stamp %+v", cache.MultiStates[artifactPath], stamp)
 	}
 }

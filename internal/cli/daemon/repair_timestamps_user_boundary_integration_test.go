@@ -89,104 +89,27 @@ type userBoundaryLine struct {
 	} `json:"message"`
 }
 
-func writeUserBoundaryStore(
-	t *testing.T,
-	dataRoot string,
-	commandArgs func(string) json.RawMessage,
-) {
+func writeUserBoundaryStore(t *testing.T, dataRoot string, commandArgs func(string) json.RawMessage) {
 	t.Helper()
 	native := []userBoundaryNativeMessage{
-		{
-			Role: "user",
-			Content: []userBoundaryNativePart{
-				{Type: "text", Text: userBoundaryFirst, ToolCallID: "", ToolName: "", Args: nil},
-			},
-		},
-		{
-			Role: "assistant",
-			Content: []userBoundaryNativePart{
-				{
-					Type:       "tool-call",
-					Text:       "",
-					ToolCallID: "call_a",
-					ToolName:   "Shell",
-					Args:       commandArgs(userBoundaryGit),
-				},
-			},
-		},
-		{
-			Role: "assistant",
-			Content: []userBoundaryNativePart{
-				{
-					Type:       "tool-call",
-					Text:       "",
-					ToolCallID: "call_b",
-					ToolName:   "Shell",
-					Args:       commandArgs(userBoundaryTest),
-				},
-			},
-		},
+		{Role: "user", Content: []userBoundaryNativePart{{Type: "text", Text: userBoundaryFirst, ToolCallID: "", ToolName: "", Args: nil}}},
+		{Role: "assistant", Content: []userBoundaryNativePart{{Type: "tool-call", Text: "", ToolCallID: "call_a", ToolName: "Shell", Args: commandArgs(userBoundaryGit)}}},
+		{Role: "assistant", Content: []userBoundaryNativePart{{Type: "tool-call", Text: "", ToolCallID: "call_b", ToolName: "Shell", Args: commandArgs(userBoundaryTest)}}},
 	}
 	bubbles := []userBoundaryBubble{
-		{
-			Version:        3,
-			Type:           1,
-			BubbleID:       "u1",
-			Text:           userBoundaryFirst,
-			CreatedAt:      "2026-05-20T10:00:00.000Z",
-			ToolFormerData: nil,
-		},
-		{
-			Version:   3,
-			Type:      2,
-			BubbleID:  "t1",
-			Text:      "",
-			CreatedAt: "2026-05-20T10:01:00.000Z",
-			ToolFormerData: &userBoundaryToolFormer{
-				Name:       "run_terminal_command_v2",
-				RawArgs:    "",
-				Status:     "completed",
-				ToolCallID: "call_a",
-			},
-		},
-		{
-			Version:   3,
-			Type:      2,
-			BubbleID:  "t2",
-			Text:      "",
-			CreatedAt: "2026-05-20T10:03:00.000Z",
-			ToolFormerData: &userBoundaryToolFormer{
-				Name:       "run_terminal_command_v2",
-				RawArgs:    "",
-				Status:     "completed",
-				ToolCallID: "call_b",
-			},
-		},
+		{Version: 3, Type: 1, BubbleID: "u1", Text: userBoundaryFirst, CreatedAt: "2026-05-20T10:00:00.000Z", ToolFormerData: nil},
+		{Version: 3, Type: 2, BubbleID: "t1", Text: "", CreatedAt: "2026-05-20T10:01:00.000Z", ToolFormerData: &userBoundaryToolFormer{Name: "run_terminal_command_v2", RawArgs: "", Status: "completed", ToolCallID: "call_a"}},
+		{Version: 3, Type: 2, BubbleID: "t2", Text: "", CreatedAt: "2026-05-20T10:03:00.000Z", ToolFormerData: &userBoundaryToolFormer{Name: "run_terminal_command_v2", RawArgs: "", Status: "completed", ToolCallID: "call_b"}},
 	}
 	writeNativeComposerStore(t, dataRoot, userBoundaryComposerID, native, bubbles, nil)
 }
 
-func writeNativeComposerStore(
-	t *testing.T,
-	dataRoot string,
-	composerID string,
-	native []userBoundaryNativeMessage,
-	bubbles []userBoundaryBubble,
-	unreferenced []userBoundaryBubble,
-) {
+func writeNativeComposerStore(t *testing.T, dataRoot string, composerID string, native []userBoundaryNativeMessage, bubbles []userBoundaryBubble, unreferenced []userBoundaryBubble) {
 	t.Helper()
 	writeNativeComposerStoreOmitting(t, dataRoot, composerID, native, nil, bubbles, unreferenced)
 }
 
-func writeNativeComposerStoreOmitting(
-	t *testing.T,
-	dataRoot string,
-	composerID string,
-	native []userBoundaryNativeMessage,
-	omitted map[int]bool,
-	bubbles []userBoundaryBubble,
-	unreferenced []userBoundaryBubble,
-) {
+func writeNativeComposerStoreOmitting(t *testing.T, dataRoot string, composerID string, native []userBoundaryNativeMessage, omitted map[int]bool, bubbles []userBoundaryBubble, unreferenced []userBoundaryBubble) {
 	t.Helper()
 	marshal := combinedCopyJSON(t)
 	dbPath := filepath.Join(dataRoot, "globalStorage", "state.vscdb")
@@ -228,77 +151,43 @@ func writeNativeComposerStoreOmitting(
 		}
 	}
 	composer := userBoundaryComposer{
-		ComposerID:        composerID,
-		Name:              "User boundary",
-		CreatedAt:         1779267600000,
-		LastUpdatedAt:     1779268000000,
-		ConversationState: "~" + base64.StdEncoding.EncodeToString(state),
-		Headers:           nil,
+		ComposerID: composerID, Name: "User boundary", CreatedAt: 1779267600000, LastUpdatedAt: 1779268000000,
+		ConversationState: "~" + base64.StdEncoding.EncodeToString(state), Headers: nil,
 	}
 	for _, bubble := range bubbles {
-		composer.Headers = append(
-			composer.Headers,
-			combinedCopyHeader{BubbleID: bubble.BubbleID, Type: bubble.Type},
-		)
+		composer.Headers = append(composer.Headers, combinedCopyHeader{BubbleID: bubble.BubbleID, Type: bubble.Type})
 		exec("bubbleId:"+composerID+":"+bubble.BubbleID, []byte(marshal(json.Marshal(bubble))))
 	}
 	for _, bubble := range unreferenced {
 		exec("bubbleId:"+composerID+":"+bubble.BubbleID, []byte(marshal(json.Marshal(bubble))))
 	}
-	if _, err := db.Exec(
-		string(insert),
-		"composerData:"+composerID,
-		marshal(json.Marshal(composer)),
-	); err != nil {
+	if _, err := db.Exec(string(insert), "composerData:"+composerID, marshal(json.Marshal(composer))); err != nil {
 		t.Fatalf("insert user boundary store key: composerData: %v", err)
 	}
 }
 
 // writeUserBoundaryTranscript writes a transcript with a user turn between tool calls.
-func writeUserBoundaryTranscript(
-	t *testing.T,
-	projects string,
-	commandArgs func(string) json.RawMessage,
-) {
+func writeUserBoundaryTranscript(t *testing.T, projects string, commandArgs func(string) json.RawMessage) {
 	t.Helper()
 	marshal := combinedCopyJSON(t)
 	userLine := func(text string) string {
 		var line userBoundaryLine
 		line.Role = "user"
-		line.Message.Content = []userBoundaryLinePart{
-			{Type: "text", Text: text, Name: "", Input: nil},
-		}
+		line.Message.Content = []userBoundaryLinePart{{Type: "text", Text: text, Name: "", Input: nil}}
 		return marshal(json.Marshal(line))
 	}
 	toolLine := func(command string) string {
 		var line userBoundaryLine
 		line.Role = "assistant"
-		line.Message.Content = []userBoundaryLinePart{
-			{Type: "tool_use", Text: "", Name: "Shell", Input: commandArgs(command)},
-		}
+		line.Message.Content = []userBoundaryLinePart{{Type: "tool_use", Text: "", Name: "Shell", Input: commandArgs(command)}}
 		return marshal(json.Marshal(line))
 	}
-	lines := []string{
-		userLine(userBoundaryFirst),
-		toolLine(userBoundaryGit),
-		userLine(userBoundarySecond),
-		toolLine(userBoundaryTest),
-	}
-	transcriptPath := filepath.Join(
-		projects,
-		repairProjectKey,
-		"agent-transcripts",
-		userBoundaryComposerID,
-		userBoundaryComposerID+".jsonl",
-	)
+	lines := []string{userLine(userBoundaryFirst), toolLine(userBoundaryGit), userLine(userBoundarySecond), toolLine(userBoundaryTest)}
+	transcriptPath := filepath.Join(projects, repairProjectKey, "agent-transcripts", userBoundaryComposerID, userBoundaryComposerID+".jsonl")
 	if err := os.MkdirAll(filepath.Dir(transcriptPath), 0o755); err != nil {
 		t.Fatalf("write user boundary transcript: %v", err)
 	}
-	if err := os.WriteFile(
-		transcriptPath,
-		[]byte(strings.Join(lines, "\n")+"\n"),
-		0o600,
-	); err != nil {
+	if err := os.WriteFile(transcriptPath, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatalf("write user boundary transcript: %v", err)
 	}
 }
@@ -337,22 +226,15 @@ func TestRepairKeepsToolsUndatedWhenAStoredUserTurnSeparatesThem(t *testing.T) {
 	}
 	var record conversation.Record
 	for _, entry := range stamped {
-		if entry.Record.NativeID == userBoundaryComposerID &&
-			strings.HasSuffix(entry.Record.ArtifactPath, ".jsonl") {
+		if entry.Record.NativeID == userBoundaryComposerID && strings.HasSuffix(entry.Record.ArtifactPath, ".jsonl") {
 			record = entry.Record
 		}
 	}
 	if record.ID == "" {
-		t.Fatalf(
-			"cannot find user boundary transcript among conversation records; record count: %d",
-			len(stamped),
-		)
+		t.Fatalf("cannot find user boundary transcript among conversation records; record count: %d", len(stamped))
 	}
 	kinds := backfillTestContentKinds(t)
-	messages, err := index.LoadMessagesWithOptions(
-		record,
-		daemonsvc.SemanticConversationLoadOptions(kinds),
-	)
+	messages, err := index.LoadMessagesWithOptions(record, daemonsvc.SemanticConversationLoadOptions(kinds))
 	if err != nil {
 		t.Fatalf("load user boundary messages: %v", err)
 	}
@@ -375,12 +257,7 @@ func TestRepairKeepsToolsUndatedWhenAStoredUserTurnSeparatesThem(t *testing.T) {
 	}
 	client := openRepairClient(t, address, vectorsearch.LayoutShared)
 	manifest := []semsearch.Fingerprint{{ConversationID: record.ID, Value: "user-boundary"}}
-	if _, err := client.UpsertConversationDocuments(
-		ctx,
-		repairCollectionID,
-		docs,
-		manifest,
-	); err != nil {
+	if _, err := client.UpsertConversationDocuments(ctx, repairCollectionID, docs, manifest); err != nil {
 		t.Fatalf("seed user boundary rows: %v", err)
 	}
 	time.Sleep(repairVisibilityWait)
@@ -396,31 +273,14 @@ func TestRepairKeepsToolsUndatedWhenAStoredUserTurnSeparatesThem(t *testing.T) {
 		sourceTotals:   newSourceRepairTotals(),
 		evidenceOut:    nil,
 	}
-	options := repairTimestampsOptions{
-		DryRun:         false,
-		Provider:       "",
-		ConversationID: record.ID,
-		Limit:          0,
-		MaxRows:        100,
-		After:          "",
-		Resume:         false,
-		ProgressPath:   filepath.Join(home, "progress.json"),
-		SourceStore:    true,
-		EvidencePath:   "",
-	}
+	options := repairTimestampsOptions{DryRun: false, Provider: "", ConversationID: record.ID, Limit: 0, MaxRows: 100, After: "", Resume: false, ProgressPath: filepath.Join(home, "progress.json"), SourceStore: true, EvidencePath: ""}
 	if _, err := runRepair(t, ctx, base, options); err != nil {
 		t.Fatalf("repair user boundary timestamps: %v", err)
 	}
 	time.Sleep(repairVisibilityWait)
 	repaired, repairedVectors := sharedSnapshot(t, address)
 	if len(repaired) != len(seeded) || len(repairedVectors) != len(seededVectors) {
-		t.Fatalf(
-			"row or vector counts changed; repaired rows, seeded rows, repaired vectors, seeded vectors: %d, %d, %d, %d",
-			len(repaired),
-			len(seeded),
-			len(repairedVectors),
-			len(seededVectors),
-		)
+		t.Fatalf("row or vector counts changed; repaired rows, seeded rows, repaired vectors, seeded vectors: %d, %d, %d, %d", len(repaired), len(seeded), len(repairedVectors), len(seededVectors))
 	}
 	for key, bits := range seededVectors {
 		if !slices.Equal(bits, repairedVectors[key]) {
@@ -432,33 +292,19 @@ func TestRepairKeepsToolsUndatedWhenAStoredUserTurnSeparatesThem(t *testing.T) {
 	firstToolDate := time.Date(2026, time.May, 20, 10, 1, 0, 0, time.UTC).Unix()
 	for id, after := range repaired {
 		before := seeded[id]
-		if after.content != before.content || after.vectorKey != before.vectorKey ||
-			after.others != before.others {
-			t.Fatalf(
-				"row content, vector key, or other fields changed; id, before, after: %s: %+v, %+v",
-				id,
-				before,
-				after,
-			)
+		if after.content != before.content || after.vectorKey != before.vectorKey || after.others != before.others {
+			t.Fatalf("row content, vector key, or other fields changed; id, before, after: %s: %+v, %+v", id, before, after)
 		}
 		if strings.HasPrefix(after.relativePath, "convtool/") {
 			toolRows++
 			if strings.Contains(after.content, userBoundaryGit) {
 				if after.timestampNull || after.timestampUnix != firstToolDate {
-					t.Fatalf(
-						"failed to preserve the first tool date %s: %+v",
-						after.relativePath,
-						after,
-					)
+					t.Fatalf("failed to preserve the first tool date %s: %+v", after.relativePath, after)
 				}
 				continue
 			}
 			if !after.timestampNull || after.metadata != before.metadata {
-				t.Fatalf(
-					"tool row timestamp or metadata changed; path, timestamp: %s: %d",
-					after.relativePath,
-					after.timestampUnix,
-				)
+				t.Fatalf("tool row timestamp or metadata changed; path, timestamp: %s: %d", after.relativePath, after.timestampUnix)
 			}
 		}
 		// The first user message lacks an earlier original tool anchor and stays undated.
@@ -467,10 +313,6 @@ func TestRepairKeepsToolsUndatedWhenAStoredUserTurnSeparatesThem(t *testing.T) {
 		}
 	}
 	if toolRows != 2 || !firstUserUnknown {
-		t.Fatalf(
-			"repair must preserve two tool rows and an unknown first user timestamp; tool row count, first user timestamp unknown: %d, %v",
-			toolRows,
-			firstUserUnknown,
-		)
+		t.Fatalf("repair must preserve two tool rows and an unknown first user timestamp; tool row count, first user timestamp unknown: %d, %v", toolRows, firstUserUnknown)
 	}
 }

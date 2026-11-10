@@ -31,26 +31,13 @@ type initialSemanticConnection struct {
 
 func (connection initialSemanticConnection) Close() error {
 	if err := connection.Client.Close(context.Background()); err != nil {
-		slog.Warn(
-			"daemon.initial_index.semantic_close_failed",
-			"concern",
-			"conversation.index",
-			"component",
-			"daemon",
-			"err",
-			err,
-		)
-
+		slog.Warn("daemon.initial_index.semantic_close_failed", "concern", "conversation.index", "component", "daemon", "err", err)
 		return fmt.Errorf("close initial semantic client: %w", err)
 	}
-
 	return nil
 }
 
-var dialInitialSemantic = func(ctx context.Context, semanticCfg config.ConversationSemanticConfig) (
-	initialSemanticClient,
-	error,
-) {
+var dialInitialSemantic = func(ctx context.Context, semanticCfg config.ConversationSemanticConfig) (initialSemanticClient, error) {
 	// The Milvus client retries an unreachable address until its context ends.
 	openCtx, cancel := context.WithTimeout(ctx, semanticDialRegisterTimeout)
 	defer cancel()
@@ -58,7 +45,6 @@ var dialInitialSemantic = func(ctx context.Context, semanticCfg config.Conversat
 	if err != nil {
 		return nil, err
 	}
-
 	return initialSemanticConnection{Client: client}, nil
 }
 
@@ -68,37 +54,20 @@ var dialInitialSemantic = func(ctx context.Context, semanticCfg config.Conversat
 //
 // A present cache means the daemon already completed an initial index. The
 // daemon's normal background refresh remains responsible for later changes.
-func RunInitialConversationIndex(
-	ctx context.Context,
-	output io.Writer,
-	progress initialIndexProgress,
-) error {
+func RunInitialConversationIndex(ctx context.Context, output io.Writer, progress initialIndexProgress) error {
 	if output == nil {
 		output = io.Discard
 	}
-
-	cfg, err := loadInitialConversationConfig(ctx)
+	cfg, err := config.LoadGlobalOrDefault()
 	if err != nil {
-		return err
+		slog.WarnContext(ctx, "daemon.initial_index.config_load_failed", "concern", "conversation.index", "component", "daemon", "err", err)
+		return fmt.Errorf("load config for initial conversation indexing: %w", err)
 	}
-
 	if _, err := os.Stat(conversation.CachePath()); err == nil {
 		_, _ = fmt.Fprintln(output, "Initial indexing: already complete")
 		return nil
 	} else if !os.IsNotExist(err) {
-		slog.WarnContext(
-			ctx,
-			"daemon.initial_index.cache_check_failed",
-			"concern",
-			"conversation.index",
-			"component",
-			"daemon",
-			"path",
-			conversation.CachePath(),
-			"err",
-			err,
-		)
-
+		slog.WarnContext(ctx, "daemon.initial_index.cache_check_failed", "concern", "conversation.index", "component", "daemon", "path", conversation.CachePath(), "err", err)
 		return fmt.Errorf("check conversation index cache: %w", err)
 	}
 
@@ -107,22 +76,13 @@ func RunInitialConversationIndex(
 	if len(providers) == 0 {
 		_, _ = fmt.Fprintln(output, "Initial indexing: no raw conversation providers configured")
 	}
-
 	for _, provider := range providers {
-		_, _ = fmt.Fprintf(
-			output,
-			"Initial indexing: discovering raw conversations from %s\n",
-			provider,
-		)
+		_, _ = fmt.Fprintf(output, "Initial indexing: discovering raw conversations from %s\n", provider)
 	}
 
 	_, _ = fmt.Fprintln(output, "Initial indexing: starting raw conversation discovery")
 	start := clock.Now()
-	_, _ = fmt.Fprintf(
-		output,
-		"Initial indexing: raw conversation discovery elapsed %s\n",
-		clock.Since(start).Truncate(time.Second),
-	)
+	_, _ = fmt.Fprintf(output, "Initial indexing: raw conversation discovery elapsed %s\n", clock.Since(start).Truncate(time.Second))
 
 	index := conversation.NewIndex(registry, cfg.Conversation)
 	installRefresh := func(refreshCtx context.Context) error {
@@ -133,11 +93,7 @@ func RunInitialConversationIndex(
 	}
 
 	for _, provider := range providers {
-		_, _ = fmt.Fprintf(
-			output,
-			"Initial indexing: finished raw conversation discovery for %s\n",
-			provider,
-		)
+		_, _ = fmt.Fprintf(output, "Initial indexing: finished raw conversation discovery for %s\n", provider)
 	}
 
 	records, err := index.List(ctx)
@@ -145,15 +101,12 @@ func RunInitialConversationIndex(
 		_, _ = fmt.Fprintf(output, "Initial indexing: failed: %v\n", err)
 		return fmt.Errorf("list initial conversation index: %w", err)
 	}
-
 	if progress != nil {
 		progress(0, len(records))
-
 		for completed := range records {
 			progress(completed+1, len(records))
 		}
 	}
-
 	if cfg.Conversation.Semantic.FeedsEngine() {
 		var err error
 		_, err = runInitialSemanticIndex(ctx, cfg, index, output)
@@ -161,30 +114,8 @@ func RunInitialConversationIndex(
 			return err
 		}
 	}
-
 	_, _ = fmt.Fprintf(output, "Initial indexing: complete with %d conversations\n", len(records))
-
 	return nil
-}
-
-func loadInitialConversationConfig(ctx context.Context) (*config.Config, error) {
-	cfg, err := config.LoadGlobalOrDefault()
-	if err != nil {
-		slog.WarnContext(
-			ctx,
-			"daemon.initial_index.config_load_failed",
-			"concern",
-			"conversation.index",
-			"component",
-			"daemon",
-			"err",
-			err,
-		)
-
-		return nil, fmt.Errorf("load config for initial conversation indexing: %w", err)
-	}
-
-	return cfg, nil
 }
 
 func refreshInitialConversationIndex(
@@ -199,16 +130,7 @@ func refreshInitialConversationIndex(
 		defer close(heartbeatDone)
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				slog.ErrorContext(
-					ctx,
-					"daemon.initial_index.heartbeat_panic",
-					"concern",
-					"conversation.index",
-					"component",
-					"daemon",
-					"err",
-					fmt.Errorf("panic: %v", recovered),
-				)
+				slog.ErrorContext(ctx, "daemon.initial_index.heartbeat_panic", "concern", "conversation.index", "component", "daemon", "err", fmt.Errorf("panic: %v", recovered))
 			}
 		}()
 		writeInitialIndexHeartbeats(heartbeatCtx, output, start, initialIndexHeartbeatInterval)
@@ -219,20 +141,9 @@ func refreshInitialConversationIndex(
 	}()
 	if err := refresh(ctx); err != nil {
 		_, _ = fmt.Fprintf(output, "Initial indexing: raw conversation discovery failed: %v\n", err)
-		slog.WarnContext(
-			ctx,
-			"daemon.initial_index.raw_refresh_failed",
-			"concern",
-			"conversation.index",
-			"component",
-			"daemon",
-			"err",
-			err,
-		)
-
+		slog.WarnContext(ctx, "daemon.initial_index.raw_refresh_failed", "concern", "conversation.index", "component", "daemon", "err", err)
 		return fmt.Errorf("refresh initial conversation index: %w", err)
 	}
-
 	return nil
 }
 
@@ -244,15 +155,10 @@ func writeInitialIndexHeartbeats(
 ) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-
 	for {
 		select {
 		case at := <-ticker.C:
-			_, _ = fmt.Fprintf(
-				output,
-				"Initial indexing: raw conversation discovery elapsed %s\n",
-				at.Sub(start).Truncate(time.Second),
-			)
+			_, _ = fmt.Fprintf(output, "Initial indexing: raw conversation discovery elapsed %s\n", at.Sub(start).Truncate(time.Second))
 		case <-ctx.Done():
 			return
 		}
@@ -269,18 +175,11 @@ func runInitialSemanticIndex(
 	if err != nil {
 		return false, err
 	}
-
 	client, err := dialInitialSemantic(ctx, cfg.Conversation.Semantic)
 	if err != nil {
-		_, _ = fmt.Fprintf(
-			output,
-			"Initial indexing: semantic indexing skipped because semantic service is unavailable: %v\n",
-			err,
-		)
-
+		_, _ = fmt.Fprintf(output, "Initial indexing: semantic indexing skipped because semantic service is unavailable: %v\n", err)
 		return false, nil
 	}
-
 	defer func() { _ = client.Close() }()
 	worker := newConversationSemanticSyncWorker(
 		index,
@@ -291,19 +190,8 @@ func runInitialSemanticIndex(
 	)
 	if err := worker.runPass(ctx); err != nil {
 		_, _ = fmt.Fprintf(output, "Initial indexing: semantic indexing failed: %v\n", err)
-		slog.WarnContext(
-			ctx,
-			"daemon.initial_index.semantic_pass_failed",
-			"concern",
-			"conversation.index",
-			"component",
-			"daemon",
-			"err",
-			err,
-		)
-
+		slog.WarnContext(ctx, "daemon.initial_index.semantic_pass_failed", "concern", "conversation.index", "component", "daemon", "err", err)
 		return false, fmt.Errorf("run initial semantic indexing pass: %w", err)
 	}
-
 	return true, nil
 }

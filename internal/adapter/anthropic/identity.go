@@ -33,12 +33,10 @@ func (i Identity) EncodeUserID() string {
 	if i.DeviceID == "" && i.AccountUUID == "" && i.SessionID == "" {
 		return ""
 	}
-
 	encoded, err := json.Marshal(MetadataUserID(i))
 	if err != nil {
 		return ""
 	}
-
 	return string(encoded)
 }
 
@@ -56,7 +54,6 @@ func DeviceID() (string, error) {
 	deviceOnce.Do(func() {
 		deviceID, errDeviceID = readOrGenerateDeviceID()
 	})
-
 	return deviceID, errDeviceID
 }
 
@@ -64,21 +61,12 @@ func readOrGenerateDeviceID() (string, error) {
 	log := anthropicRequestLog.Logger()
 	dir := filepath.Join(config.DefaultStateDir(), "adapter", "anthropic")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		log.Warn(
-			"anthropic.identity.device_dir_failed",
-			"concern",
-			"adapter.providers.anthropic.request",
-			"subcomponent",
-			"anthropic_identity",
-			"path",
-			dir,
-			"err",
-			err.Error(),
+		log.Warn("anthropic.identity.device_dir_failed", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic_identity",
+			"path", dir,
+			"err", err.Error(),
 		)
-
 		return "", fmt.Errorf("create device dir: %w", err)
 	}
-
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return "", fmt.Errorf("open device dir root: %w", err)
@@ -89,26 +77,16 @@ func readOrGenerateDeviceID() (string, error) {
 			return v, nil
 		}
 	}
-
 	seed := uuid.NewString()
 	sum := sha256.Sum256([]byte(seed))
 	id := hex.EncodeToString(sum[:])
 	if err := root.WriteFile(anthropicDeviceIDFile, []byte(id), 0o600); err != nil {
-		log.Warn(
-			"anthropic.identity.device_id_write_failed",
-			"concern",
-			"adapter.providers.anthropic.request",
-			"subcomponent",
-			"anthropic_identity",
-			"path",
-			filepath.Join(dir, anthropicDeviceIDFile),
-			"err",
-			err.Error(),
+		log.Warn("anthropic.identity.device_id_write_failed", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic_identity",
+			"path", filepath.Join(dir, anthropicDeviceIDFile),
+			"err", err.Error(),
 		)
-
 		return "", fmt.Errorf("persist device_id: %w", err)
 	}
-
 	return id, nil
 }
 
@@ -121,23 +99,14 @@ func readOrGenerateDeviceID() (string, error) {
 func AccountUUIDFromClaudeConfig() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		slog.Warn(
-			"adapter.anthropic.identity.user_home_failed",
-			"concern",
-			"adapter.providers.anthropic.request",
-			"err",
-			err,
-		)
-
+		slog.Warn("adapter.anthropic.identity.user_home_failed", "concern", "adapter.providers.anthropic.request", "err", err)
 		return "", fmt.Errorf("user home dir: %w", err)
 	}
-
 	path := filepath.Join(home, ".claude.json")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("read claude config %s: %w", path, err)
 	}
-
 	var doc struct {
 		OAuthAccount struct {
 			AccountUUID string `json:"accountUuid"`
@@ -146,6 +115,5 @@ func AccountUUIDFromClaudeConfig() (string, error) {
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return "", fmt.Errorf("unmarshal claude config %s: %w", path, err)
 	}
-
 	return strings.TrimSpace(doc.OAuthAccount.AccountUUID), nil
 }

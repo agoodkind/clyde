@@ -107,7 +107,6 @@ func (s InstallStatus) FingerprintsMatch() bool {
 	if s.OnDiskFingerprint.IsZero() || s.InstalledFingerprint.IsZero() {
 		return false
 	}
-
 	return s.OnDiskFingerprint == s.InstalledFingerprint
 }
 
@@ -164,26 +163,14 @@ func fingerprintPEM(path string) (Fingerprint, error) {
 	if strings.TrimSpace(path) == "" {
 		return "", nil
 	}
-
 	body, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return "", nil
 		}
-
-		slog.Warn(
-			"cli.mitm.truststore.read_ca_failed",
-			"concern",
-			"cli.mitm.truststore",
-			"path",
-			path,
-			"err",
-			err,
-		)
-
+		slog.Warn("cli.mitm.truststore.read_ca_failed", "concern", "cli.mitm.truststore", "path", path, "err", err)
 		return "", fmt.Errorf("read ca cert %q: %w", path, err)
 	}
-
 	return fingerprintDER(extractFirstCertDER(body, path))
 }
 
@@ -192,18 +179,15 @@ func fingerprintPEM(path string) (Fingerprint, error) {
 // a certificate; the caller treats it the same as a missing file.
 func extractFirstCertDER(body []byte, sourcePath string) []byte {
 	rest := body
-
 	for {
 		var block *pem.Block
 		block, rest = pem.Decode(rest)
 		if block == nil {
 			return nil
 		}
-
 		if block.Type != "CERTIFICATE" {
 			continue
 		}
-
 		if _, parseErr := x509.ParseCertificate(block.Bytes); parseErr != nil {
 			// Skip blocks we cannot parse so a benign trailing block
 			// does not mask the real certificate. The path is logged
@@ -212,7 +196,6 @@ func extractFirstCertDER(body []byte, sourcePath string) []byte {
 			_ = sourcePath
 			continue
 		}
-
 		return block.Bytes
 	}
 }
@@ -223,8 +206,6 @@ func fingerprintDER(der []byte) (Fingerprint, error) {
 	if len(der) == 0 {
 		return "", nil
 	}
-
 	sum := sha256.Sum256(der)
-
 	return Fingerprint(hex.EncodeToString(sum[:])), nil
 }

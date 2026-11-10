@@ -18,9 +18,7 @@ const completionIDPrefix = "cmpl-"
 
 // ErrCompletionPromptUnsupported rejects a token-array prompt and a request
 // with several prompts.
-var ErrCompletionPromptUnsupported = errors.New(
-	"prompt must be a string or an array with one string",
-)
+var ErrCompletionPromptUnsupported = errors.New("prompt must be a string or an array with one string")
 
 // CompletionRequest decodes a POST /v1/completions request body.
 type CompletionRequest struct {
@@ -73,13 +71,11 @@ var knownCompletionRequestKeys = map[string]bool{
 // CompletionRequest does not decode.
 func (s ResponsesFieldSet) UnknownCompletionKeys() []string {
 	unknown := make([]string, 0)
-
 	for _, key := range sortedKeys(s.fields) {
 		if !knownCompletionRequestKeys[key] {
 			unknown = append(unknown, key)
 		}
 	}
-
 	return unknown
 }
 
@@ -90,12 +86,10 @@ func (r CompletionRequest) PromptText() (string, error) {
 	if err := json.Unmarshal(r.Prompt, &single); err == nil {
 		return single, nil
 	}
-
 	var list []string
 	if err := json.Unmarshal(r.Prompt, &list); err == nil && len(list) == 1 {
 		return list[0], nil
 	}
-
 	return "", ErrCompletionPromptUnsupported
 }
 
@@ -143,17 +137,13 @@ func CompletionFromChat(chat ChatResponse) CompletionResponse {
 	choices := make([]CompletionChoice, 0, len(chat.Choices))
 	for _, choice := range chat.Choices {
 		finishReason := choice.FinishReason
-		choices = append(
-			choices,
-			CompletionChoice{
-				Text:         completionText(choice.Message.Content),
-				Index:        choice.Index,
-				Logprobs:     json.RawMessage(`null`),
-				FinishReason: &finishReason,
-			},
-		)
+		choices = append(choices, CompletionChoice{
+			Text:         completionText(choice.Message.Content),
+			Index:        choice.Index,
+			Logprobs:     json.RawMessage(`null`),
+			FinishReason: &finishReason,
+		})
 	}
-
 	return CompletionResponse{
 		ID:                completionID(chat.ID),
 		Object:            CompletionObjectType,
@@ -170,15 +160,12 @@ func completionText(content json.RawMessage) string {
 	if kind == ContentKindEmpty {
 		return ""
 	}
-
 	var builder strings.Builder
-
 	for _, part := range parts {
 		if part.Type == string(openAIChatContentPartText) {
 			builder.WriteString(part.Text)
 		}
 	}
-
 	return builder.String()
 }
 
@@ -190,31 +177,17 @@ func completionChunkFromChat(chunk StreamChunk) (CompletionResponse, bool) {
 		if choice.Delta.Content == "" && choice.FinishReason == nil {
 			continue
 		}
-
-		choices = append(
-			choices,
-			CompletionChoice{
-				Text:         choice.Delta.Content,
-				Index:        choice.Index,
-				Logprobs:     json.RawMessage(`null`),
-				FinishReason: choice.FinishReason,
-			},
-		)
+		choices = append(choices, CompletionChoice{
+			Text:         choice.Delta.Content,
+			Index:        choice.Index,
+			Logprobs:     json.RawMessage(`null`),
+			FinishReason: choice.FinishReason,
+		})
 	}
-
 	usageChunk := len(chunk.Choices) == 0 && chunk.Usage != nil
 	if len(choices) == 0 && !usageChunk {
-		return CompletionResponse{
-			ID:                "",
-			Object:            "",
-			Created:           0,
-			Model:             "",
-			Choices:           nil,
-			Usage:             nil,
-			SystemFingerprint: "",
-		}, false
+		return CompletionResponse{ID: "", Object: "", Created: 0, Model: "", Choices: nil, Usage: nil, SystemFingerprint: ""}, false
 	}
-
 	return CompletionResponse{
 		ID:                completionID(chunk.ID),
 		Object:            CompletionObjectType,
@@ -245,12 +218,8 @@ type LegacyCompletionWriter struct {
 // NewLegacyCompletionWriter writes "usage":null on each ordinary stream
 // chunk when includeUsage is true. The caller passes the client
 // stream_options.include_usage value.
-func NewLegacyCompletionWriter(
-	inner http.ResponseWriter,
-	includeUsage bool,
-) *LegacyCompletionWriter {
+func NewLegacyCompletionWriter(inner http.ResponseWriter, includeUsage bool) *LegacyCompletionWriter {
 	flusher, _ := inner.(http.Flusher)
-
 	return &LegacyCompletionWriter{
 		inner:         inner,
 		flusher:       flusher,
@@ -276,7 +245,6 @@ func (w *LegacyCompletionWriter) WriteHeader(status int) {
 	if w.statusChosen {
 		return
 	}
-
 	w.statusChosen = true
 	w.status = status
 	w.inner.Header().Set("X-Content-Type-Options", "nosniff")
@@ -294,23 +262,19 @@ func (w *LegacyCompletionWriter) Write(body []byte) (int, error) {
 	if !w.statusChosen {
 		w.WriteHeader(http.StatusOK)
 	}
-
 	if w.passthrough {
 		written, err := w.inner.Write(body)
 		if err != nil {
 			return written, fmt.Errorf("write legacy completion passthrough: %w", err)
 		}
-
 		return written, nil
 	}
-
 	w.pending.Write(body)
 	if w.streaming {
 		if err := w.writeCompleteFrames(); err != nil {
 			return 0, err
 		}
 	}
-
 	return len(body), nil
 }
 
@@ -333,68 +297,33 @@ func (w *LegacyCompletionWriter) Finish() error {
 	if w.finishedWrite || !w.statusChosen || w.passthrough {
 		return nil
 	}
-
 	w.finishedWrite = true
 	if w.streaming {
 		if w.pending.Len() == 0 {
 			return nil
 		}
-
 		if _, err := w.inner.Write(w.pending.Bytes()); err != nil {
-			slog.Warn(
-				"adapter.openai.legacy_completion_tail_write_failed",
-				"concern",
-				"adapter.chat.render",
-				"err",
-				err,
-			)
-
+			slog.Warn("adapter.openai.legacy_completion_tail_write_failed", "concern", "adapter.chat.render", "err", err)
 			return fmt.Errorf("write legacy completion stream tail: %w", err)
 		}
-
 		return nil
 	}
-
 	var chat ChatResponse
 	if err := json.Unmarshal(w.pending.Bytes(), &chat); err != nil {
-		slog.Warn(
-			"adapter.openai.legacy_completion_decode_failed",
-			"concern",
-			"adapter.chat.render",
-			"err",
-			err,
-		)
-
+		slog.Warn("adapter.openai.legacy_completion_decode_failed", "concern", "adapter.chat.render", "err", err)
 		return fmt.Errorf("decode chat response for legacy completion: %w", err)
 	}
-
 	converted, err := json.Marshal(CompletionFromChat(chat))
 	if err != nil {
-		slog.Warn(
-			"adapter.openai.legacy_completion_encode_failed",
-			"concern",
-			"adapter.chat.render",
-			"err",
-			err,
-		)
-
+		slog.Warn("adapter.openai.legacy_completion_encode_failed", "concern", "adapter.chat.render", "err", err)
 		return fmt.Errorf("encode legacy completion: %w", err)
 	}
-
 	w.inner.Header().Del("Content-Length")
 	w.inner.WriteHeader(w.status)
 	if _, err := w.inner.Write(converted); err != nil {
-		slog.Warn(
-			"adapter.openai.legacy_completion_write_failed",
-			"concern",
-			"adapter.chat.render",
-			"err",
-			err,
-		)
-
+		slog.Warn("adapter.openai.legacy_completion_write_failed", "concern", "adapter.chat.render", "err", err)
 		return fmt.Errorf("write legacy completion: %w", err)
 	}
-
 	return nil
 }
 
@@ -406,23 +335,14 @@ func (w *LegacyCompletionWriter) writeCompleteFrames() error {
 		if end < 0 {
 			return nil
 		}
-
 		frame := string(buffered[:end])
 		w.pending.Next(end + 2)
 		converted, keep := w.convertFrame(frame)
 		if !keep {
 			continue
 		}
-
 		if _, err := w.inner.Write([]byte(converted + "\n\n")); err != nil {
-			slog.Warn(
-				"adapter.openai.legacy_completion_frame_write_failed",
-				"concern",
-				"adapter.chat.render",
-				"err",
-				err,
-			)
-
+			slog.Warn("adapter.openai.legacy_completion_frame_write_failed", "concern", "adapter.chat.render", "err", err)
 			return fmt.Errorf("write legacy completion frame: %w", err)
 		}
 	}
@@ -436,29 +356,24 @@ func (w *LegacyCompletionWriter) convertFrame(frame string) (string, bool) {
 	if !isData || payload == "[DONE]" {
 		return frame, true
 	}
-
 	var probe struct {
 		Error json.RawMessage `json:"error"`
 	}
 	if err := json.Unmarshal([]byte(payload), &probe); err == nil && len(probe.Error) > 0 {
 		return frame, true
 	}
-
 	var chunk StreamChunk
 	if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
 		return frame, true
 	}
-
 	converted, keep := completionChunkFromChat(chunk)
 	if !keep {
 		return "", false
 	}
-
 	encoded, err := w.marshalChunk(converted)
 	if err != nil {
 		return frame, true
 	}
-
 	return "data: " + string(encoded), true
 }
 
@@ -466,32 +381,15 @@ func (w *LegacyCompletionWriter) marshalChunk(chunk CompletionResponse) ([]byte,
 	if w.includeUsage {
 		encoded, err := json.Marshal(completionChunkNullUsageWire(chunk))
 		if err != nil {
-			slog.Warn(
-				"adapter.openai.legacy_completion_chunk_encode_failed",
-				"concern",
-				"adapter.chat.render",
-				"err",
-				err,
-			)
-
+			slog.Warn("adapter.openai.legacy_completion_chunk_encode_failed", "concern", "adapter.chat.render", "err", err)
 			return nil, fmt.Errorf("encode legacy completion chunk: %w", err)
 		}
-
 		return encoded, nil
 	}
-
 	encoded, err := json.Marshal(chunk)
 	if err != nil {
-		slog.Warn(
-			"adapter.openai.legacy_completion_chunk_encode_failed",
-			"concern",
-			"adapter.chat.render",
-			"err",
-			err,
-		)
-
+		slog.Warn("adapter.openai.legacy_completion_chunk_encode_failed", "concern", "adapter.chat.render", "err", err)
 		return nil, fmt.Errorf("encode legacy completion chunk: %w", err)
 	}
-
 	return encoded, nil
 }

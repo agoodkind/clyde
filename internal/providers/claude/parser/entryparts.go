@@ -97,60 +97,31 @@ func (entryError *EntryError) UnmarshalJSON(data []byte) error {
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
 		return nil
 	}
-
 	entryError.Raw = append(json.RawMessage(nil), data...)
 	switch trimmed[0] {
 	case '"':
 		entryError.Kind = EntryErrorKindCode
 		if err := json.Unmarshal(trimmed, &entryError.Code); err != nil {
-			slog.Debug(
-				"providers.claude.parser.entry_error_code_failed",
-				"concern",
-				concern,
-				"component",
-				"claude",
-				"err",
-				err,
-			)
+			slog.Debug("providers.claude.parser.entry_error_code_failed", "concern", concern, "component", "claude", "err", err)
 			entryError.Decode = FieldDecodePartial
 		}
-
 		return nil
 	case '{':
 		entryError.Kind = EntryErrorKindDetail
 		var fields entryErrorDetail
 		if err := json.Unmarshal(trimmed, &fields); err != nil {
-			slog.Debug(
-				"providers.claude.parser.entry_error_detail_failed",
-				"concern",
-				concern,
-				"component",
-				"claude",
-				"err",
-				err,
-			)
+			slog.Debug("providers.claude.parser.entry_error_detail_failed", "concern", concern, "component", "claude", "err", err)
 			entryError.Decode = FieldDecodePartial
 		}
-
 		entryError.Message = fields.Message
 		entryError.Formatted = fields.Formatted
 		entryError.Status = fields.Status
 		entryError.RequestID = fields.RequestID
 		entryError.IsNetworkDown = fields.IsNetworkDown
-
 		return nil
 	default:
-		slog.Debug(
-			"providers.claude.parser.entry_error_unsupported",
-			"concern",
-			concern,
-			"component",
-			"claude",
-			"shape",
-			string(trimmed[:1]),
-		)
+		slog.Debug("providers.claude.parser.entry_error_unsupported", "concern", concern, "component", "claude", "shape", string(trimmed[:1]))
 		entryError.Kind = EntryErrorKindUnsupported
-
 		return nil
 	}
 }
@@ -184,46 +155,24 @@ func (entryTime *EntryTime) UnmarshalJSON(data []byte) error {
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
 		return nil
 	}
-
 	if len(trimmed) < 2 || trimmed[0] != '"' || trimmed[len(trimmed)-1] != '"' {
-		slog.Debug(
-			"providers.claude.parser.entry_time_not_a_string",
-			"concern",
-			concern,
-			"component",
-			"claude",
-			"shape",
-			string(trimmed[:1]),
-		)
+		slog.Debug("providers.claude.parser.entry_time_not_a_string", "concern", concern, "component", "claude", "shape", string(trimmed[:1]))
 		entryTime.Text = string(trimmed)
 		entryTime.Decode = FieldDecodePartial
-
 		return nil
 	}
-
 	// The quoted body is read without unescaping, matching what
 	// time.Time.UnmarshalJSON does with the same input. An RFC 3339 timestamp
 	// has no character an encoder would escape.
 	value := string(trimmed[1 : len(trimmed)-1])
 	parsed, parseErr := time.Parse(time.RFC3339, value)
 	if parseErr != nil {
-		slog.Debug(
-			"providers.claude.parser.entry_time_unparsable",
-			"concern",
-			concern,
-			"component",
-			"claude",
-			"err",
-			parseErr,
-		)
+		slog.Debug("providers.claude.parser.entry_time_unparsable", "concern", concern, "component", "claude", "err", parseErr)
 		entryTime.Text = value
 		entryTime.Decode = FieldDecodePartial
-
 		return nil
 	}
-
 	entryTime.Time = parsed
-
 	return nil
 }
 
@@ -344,21 +293,11 @@ func (attachment *Attachment) UnmarshalJSON(data []byte) error {
 	var fields attachmentFields
 	decode := FieldDecodeComplete
 	if err := json.Unmarshal(data, &fields); err != nil {
-		slog.Debug(
-			"providers.claude.parser.attachment_decode_failed",
-			"concern",
-			concern,
-			"component",
-			"claude",
-			"err",
-			err,
-		)
+		slog.Debug("providers.claude.parser.attachment_decode_failed", "concern", concern, "component", "claude", "err", err)
 		decode = FieldDecodePartial
 	}
-
 	*attachment = Attachment(fields)
 	attachment.Raw = append(json.RawMessage(nil), data...)
 	attachment.Decode = decode
-
 	return nil
 }

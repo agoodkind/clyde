@@ -44,7 +44,6 @@ func (r declaredToolResolver) patchToolName() (string, bool) {
 	if name, ok := r.firstByShape(toolShapeIsPatchLike); ok {
 		return name, true
 	}
-
 	// A client-declared custom (freeform) tool carries no parameter
 	// schema at all, so the shape classifier above can never match it.
 	// Its freeform payload is exactly what a native apply_patch call
@@ -54,7 +53,6 @@ func (r declaredToolResolver) patchToolName() (string, bool) {
 	if name, ok := r.firstCustomToolName(); ok {
 		return name, true
 	}
-
 	return r.soleDeclaredToolName()
 }
 
@@ -69,17 +67,14 @@ func (r declaredToolResolver) declaredCustomToolName(nativeName string) (string,
 	if trimmed == "" {
 		return "", false
 	}
-
 	for _, tool := range r.tools {
 		if !tool.IsCustom() {
 			continue
 		}
-
 		if name := strings.TrimSpace(tool.Name); name == trimmed {
 			return name, true
 		}
 	}
-
 	return "", false
 }
 
@@ -91,12 +86,10 @@ func (r declaredToolResolver) firstCustomToolName() (string, bool) {
 		if !tool.IsCustom() {
 			continue
 		}
-
 		if name := strings.TrimSpace(tool.Name); name != "" {
 			return name, true
 		}
 	}
-
 	return "", false
 }
 
@@ -108,7 +101,6 @@ func (r declaredToolResolver) commandToolName() (string, bool) {
 	if name, ok := r.firstByShape(toolShapeIsCommandLike); ok {
 		return name, true
 	}
-
 	return r.soleDeclaredToolName()
 }
 
@@ -118,12 +110,10 @@ func (r declaredToolResolver) firstByShape(match func(toolParameterSchema) bool)
 		if name == "" {
 			continue
 		}
-
 		if match(parseToolParameterSchema(tool.Parameters)) {
 			return name, true
 		}
 	}
-
 	return "", false
 }
 
@@ -138,13 +128,11 @@ func (r declaredToolResolver) commandToolSchema() (toolParameterSchema, bool) {
 		if strings.TrimSpace(tool.Name) == "" {
 			continue
 		}
-
 		schema := parseToolParameterSchema(tool.Parameters)
 		if toolShapeIsCommandLike(schema) {
 			return schema, true
 		}
 	}
-
 	return toolParameterSchema{Type: "", Format: "", Properties: nil}, false
 }
 
@@ -155,11 +143,9 @@ func (r declaredToolResolver) soleDeclaredToolName() (string, bool) {
 			named = append(named, name)
 		}
 	}
-
 	if len(named) == 1 {
 		return named[0], true
 	}
-
 	return "", false
 }
 
@@ -182,11 +168,9 @@ func parseToolParameterSchema(raw json.RawMessage) toolParameterSchema {
 	if len(raw) == 0 || string(raw) == "null" {
 		return out
 	}
-
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return toolParameterSchema{Type: "", Format: "", Properties: nil}
 	}
-
 	return out
 }
 
@@ -220,21 +204,17 @@ func toolShapeIsPatchLike(schema toolParameterSchema) bool {
 		// a single freeform patch parameter.
 		return strings.EqualFold(schema.Type, "string")
 	}
-
 	stringProps := 0
 	patchProps := 0
-
 	for name, prop := range schema.Properties {
 		if !strings.EqualFold(prop.Type, "string") {
 			return false
 		}
-
 		stringProps++
 		if patchParameterNames[strings.ToLower(strings.TrimSpace(name))] {
 			patchProps++
 		}
 	}
-
 	return stringProps == 1 && patchProps == 1
 }
 
@@ -243,11 +223,9 @@ func toolShapeIsPatchLike(schema toolParameterSchema) bool {
 // matching the codex-rs shell tools.
 func toolShapeIsCommandLike(schema toolParameterSchema) bool {
 	for name, prop := range schema.Properties {
-		if commandParameterNames[strings.ToLower(strings.TrimSpace(name))] &&
-			strings.EqualFold(prop.Type, "string") {
+		if commandParameterNames[strings.ToLower(strings.TrimSpace(name))] && strings.EqualFold(prop.Type, "string") {
 			return true
 		}
 	}
-
 	return false
 }

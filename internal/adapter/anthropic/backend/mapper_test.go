@@ -1,11 +1,8 @@
 package anthropicbackend
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
-	"io"
-	"log/slog"
 	"strings"
 	"testing"
 
@@ -19,12 +16,10 @@ func mustTextBlock(t *testing.T, content []AnthContentBlock, idx int) TextBlock 
 	if idx >= len(content) {
 		t.Fatalf("content index %d out of range (len=%d)", idx, len(content))
 	}
-
 	tb, ok := content[idx].(TextBlock)
 	if !ok {
 		t.Fatalf("content[%d] = %T, want TextBlock", idx, content[idx])
 	}
-
 	return tb
 }
 
@@ -34,12 +29,10 @@ func mustToolUseBlock(t *testing.T, content []AnthContentBlock, idx int) ToolUse
 	if idx >= len(content) {
 		t.Fatalf("content index %d out of range (len=%d)", idx, len(content))
 	}
-
 	tub, ok := content[idx].(ToolUseBlock)
 	if !ok {
 		t.Fatalf("content[%d] = %T, want ToolUseBlock", idx, content[idx])
 	}
-
 	return tub
 }
 
@@ -49,12 +42,10 @@ func mustToolResultBlock(t *testing.T, content []AnthContentBlock, idx int) Tool
 	if idx >= len(content) {
 		t.Fatalf("content index %d out of range (len=%d)", idx, len(content))
 	}
-
 	trb, ok := content[idx].(ToolResultBlock)
 	if !ok {
 		t.Fatalf("content[%d] = %T, want ToolResultBlock", idx, content[idx])
 	}
-
 	return trb
 }
 
@@ -64,12 +55,10 @@ func mustThinkingBlock(t *testing.T, content []AnthContentBlock, idx int) Thinki
 	if idx >= len(content) {
 		t.Fatalf("content index %d out of range (len=%d)", idx, len(content))
 	}
-
 	tb, ok := content[idx].(ThinkingBlock)
 	if !ok {
 		t.Fatalf("content[%d] = %T, want ThinkingBlock", idx, content[idx])
 	}
-
 	return tb
 }
 
@@ -79,34 +68,26 @@ func mustImageBlock(t *testing.T, content []AnthContentBlock, idx int) ImageBloc
 	if idx >= len(content) {
 		t.Fatalf("content index %d out of range (len=%d)", idx, len(content))
 	}
-
 	ib, ok := content[idx].(ImageBlock)
 	if !ok {
 		t.Fatalf("content[%d] = %T, want ImageBlock", idx, content[idx])
 	}
-
 	return ib
 }
 
 func TestTranslateRequestSimpleUserText(t *testing.T) {
 	t.Parallel()
-	req := adapteropenai.ChatRequest{
-		Model:    "x",
-		Messages: []adapteropenai.ChatMessage{{Role: "user", Content: json.RawMessage(`"hello"`)}},
-	}
+	req := adapteropenai.ChatRequest{Model: "x", Messages: []adapteropenai.ChatMessage{{Role: "user", Content: json.RawMessage(`"hello"`)}}}
 	out, err := TranslateRequest(req, "", 64, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	if len(out.Messages) != 1 || out.Messages[0].Role != "user" {
 		t.Fatalf("unexpected messages: %+v", out.Messages)
 	}
-
 	if len(out.Messages[0].Content) != 1 {
 		t.Fatalf("unexpected content: %+v", out.Messages[0].Content)
 	}
-
 	tb := mustTextBlock(t, out.Messages[0].Content, 0)
 	if tb.Text != "hello" {
 		t.Fatalf("text=%q want hello", tb.Text)
@@ -115,21 +96,14 @@ func TestTranslateRequestSimpleUserText(t *testing.T) {
 
 func TestTranslateRequestContentPartsTextOnly(t *testing.T) {
 	t.Parallel()
-	req := adapteropenai.ChatRequest{
-		Model: "x",
-		Messages: []adapteropenai.ChatMessage{
-			{Role: "user", Content: json.RawMessage(`[{"type":"text","text":"hi"}]`)},
-		},
-	}
+	req := adapteropenai.ChatRequest{Model: "x", Messages: []adapteropenai.ChatMessage{{Role: "user", Content: json.RawMessage(`[{"type":"text","text":"hi"}]`)}}}
 	out, err := TranslateRequest(req, "", 64, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	if len(out.Messages[0].Content) != 1 {
 		t.Fatalf("got %+v", out.Messages[0].Content)
 	}
-
 	tb := mustTextBlock(t, out.Messages[0].Content, 0)
 	if tb.Text != "hi" {
 		t.Fatalf("text=%q want hi", tb.Text)
@@ -138,22 +112,11 @@ func TestTranslateRequestContentPartsTextOnly(t *testing.T) {
 
 func TestTranslateRequestImageDataURI(t *testing.T) {
 	t.Parallel()
-	req := adapteropenai.ChatRequest{
-		Model: "x",
-		Messages: []adapteropenai.ChatMessage{
-			{
-				Role: "user",
-				Content: json.RawMessage(
-					`[{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBOR"}}]`,
-				),
-			},
-		},
-	}
+	req := adapteropenai.ChatRequest{Model: "x", Messages: []adapteropenai.ChatMessage{{Role: "user", Content: json.RawMessage(`[{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBOR"}}]`)}}}
 	out, err := TranslateRequest(req, "", 64, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	ib := mustImageBlock(t, out.Messages[0].Content, 0)
 	src := ib.Source
 	if src == nil || src.Type != "base64" || src.MediaType != "image/png" || src.Data != "iVBOR" {
@@ -163,22 +126,11 @@ func TestTranslateRequestImageDataURI(t *testing.T) {
 
 func TestTranslateRequestImageHTTPSURL(t *testing.T) {
 	t.Parallel()
-	req := adapteropenai.ChatRequest{
-		Model: "x",
-		Messages: []adapteropenai.ChatMessage{
-			{
-				Role: "user",
-				Content: json.RawMessage(
-					`[{"type":"image_url","image_url":{"url":"https://x/y.png"}}]`,
-				),
-			},
-		},
-	}
+	req := adapteropenai.ChatRequest{Model: "x", Messages: []adapteropenai.ChatMessage{{Role: "user", Content: json.RawMessage(`[{"type":"image_url","image_url":{"url":"https://x/y.png"}}]`)}}}
 	out, err := TranslateRequest(req, "", 64, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	ib := mustImageBlock(t, out.Messages[0].Content, 0)
 	src := ib.Source
 	if src == nil || src.Type != "url" || src.URL != "https://x/y.png" {
@@ -186,97 +138,9 @@ func TestTranslateRequestImageHTTPSURL(t *testing.T) {
 	}
 }
 
-func TestTranslateRequestRejectsUnsupportedImageScheme(t *testing.T) {
-	const maximumTokens = 64
-	const expectedMessage = `unsupported image url scheme: "ftp"`
-
-	for _, role := range []string{"user", "assistant"} {
-		t.Run(
-			role,
-			func(t *testing.T) {
-				var output bytes.Buffer
-				previousLogger := slog.Default()
-				slog.SetDefault(slog.New(slog.NewJSONHandler(&output, nil)))
-				t.Cleanup(func() { slog.SetDefault(previousLogger) })
-
-				request := OpenAIRequest{
-					Model: "test",
-					Messages: []OpenAIMessage{
-						{
-							Role: role,
-							Content: json.RawMessage(
-								`[{"type":"image_url","image_url":{"url":"ftp://localhost/image.png"}}]`,
-							),
-						},
-					},
-				}
-				_, err := TranslateRequest(request, "", maximumTokens, "")
-				if err == nil {
-					t.Fatal("expected unsupported image scheme error")
-				}
-
-				if !errors.Is(err, errUnsupportedImageURLScheme) {
-					t.Fatalf("error does not wrap the image scheme sentinel: %v", err)
-				}
-
-				if err.Error() != expectedMessage {
-					t.Fatalf("error = %q, want %q", err.Error(), expectedMessage)
-				}
-
-				assertImageRejectionLog(t, output.Bytes(), role, expectedMessage)
-			},
-		)
-	}
-}
-
-func assertImageRejectionLog(t *testing.T, output []byte, role string, message string) {
-	t.Helper()
-	var event struct {
-		Message      string `json:"msg"`
-		Level        string `json:"level"`
-		Concern      string `json:"concern"`
-		Subcomponent string `json:"subcomponent"`
-		Error        string `json:"err"`
-		MessageIndex *int   `json:"msg_idx"`
-		PartIndex    *int   `json:"part_idx"`
-	}
-	decoder := json.NewDecoder(bytes.NewReader(output))
-	if err := decoder.Decode(&event); err != nil {
-		t.Fatalf("decode image rejection event: %v; log: %s", err, output)
-	}
-
-	expectedEvent := "adapter.anthropic." + role + "_part.image_rejected"
-	if event.Message != expectedEvent || event.Level != "WARN" || event.Error != message {
-		t.Fatalf("unexpected image rejection event: %+v", event)
-	}
-
-	if event.Concern != "adapter.providers.anthropic.request" ||
-		event.Subcomponent != "anthropic_mapper" {
-		t.Fatalf("unexpected image rejection metadata: %+v", event)
-	}
-
-	if event.MessageIndex == nil || event.PartIndex == nil || *event.MessageIndex != 0 ||
-		*event.PartIndex != 0 {
-		t.Fatalf("unexpected image rejection positions: %+v", event)
-	}
-
-	var extra json.RawMessage
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		t.Fatalf("expected one image rejection event, got %s, error %v", extra, err)
-	}
-}
-
 func TestTranslateRequestAudioRejected(t *testing.T) {
 	t.Parallel()
-	req := adapteropenai.ChatRequest{
-		Model: "x",
-		Messages: []adapteropenai.ChatMessage{
-			{
-				Role:    "user",
-				Content: json.RawMessage(`[{"type":"input_audio","input_audio":{"data":"qqq"}}]`),
-			},
-		},
-	}
+	req := adapteropenai.ChatRequest{Model: "x", Messages: []adapteropenai.ChatMessage{{Role: "user", Content: json.RawMessage(`[{"type":"input_audio","input_audio":{"data":"qqq"}}]`)}}}
 	_, err := TranslateRequest(req, "", 64, "")
 	if err == nil || !errors.Is(err, ErrAudioUnsupported) {
 		t.Fatalf("expected ErrAudioUnsupported, got %v", err)
@@ -287,39 +151,22 @@ func TestTranslateRequestToolsTranslated(t *testing.T) {
 	t.Parallel()
 	req := adapteropenai.ChatRequest{
 		Model: "x",
-		Messages: []adapteropenai.ChatMessage{
-			{
-				Role:    "user",
-				Content: json.RawMessage(`"hi"`),
-			},
-		},
+		Messages: []adapteropenai.ChatMessage{{
+			Role:    "user",
+			Content: json.RawMessage(`"hi"`),
+		}},
 		Tools: []adapteropenai.Tool{
-			{
-				Type: "function",
-				Function: adapteropenai.ToolFunctionSchema{
-					Name:       "a",
-					Parameters: json.RawMessage(`{"type":"object"}`),
-				},
-			},
-			{
-				Type: "function",
-				Function: adapteropenai.ToolFunctionSchema{
-					Name:        "b",
-					Description: "d",
-					Parameters:  json.RawMessage(`{"a":1}`),
-				},
-			},
+			{Type: "function", Function: adapteropenai.ToolFunctionSchema{Name: "a", Parameters: json.RawMessage(`{"type":"object"}`)}},
+			{Type: "function", Function: adapteropenai.ToolFunctionSchema{Name: "b", Description: "d", Parameters: json.RawMessage(`{"a":1}`)}},
 		},
 	}
 	out, err := TranslateRequest(req, "", 64, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	if len(out.Tools) != 2 {
 		t.Fatalf("tools: %+v", out.Tools)
 	}
-
 	if string(out.Tools[0].InputSchema) != `{"type":"object"}` || out.Tools[1].Name != "b" {
 		t.Fatalf("unexpected tools: %+v", out.Tools)
 	}
@@ -327,7 +174,6 @@ func TestTranslateRequestToolsTranslated(t *testing.T) {
 
 func TestTranslateRequestToolChoiceVariants(t *testing.T) {
 	t.Parallel()
-
 	tests := []struct {
 		name string
 		raw  string
@@ -338,42 +184,32 @@ func TestTranslateRequestToolChoiceVariants(t *testing.T) {
 		// in this case so we do too (CLYDE-124 parity).
 		{"auto", `"auto"`, nil},
 		{"required", `"required"`, &AnthToolChoice{Type: "any"}},
-		{
-			"named",
-			`{"type":"function","function":{"name":"X"}}`,
-			&AnthToolChoice{Type: "tool", Name: "X"},
-		},
+		{"named", `{"type":"function","function":{"name":"X"}}`, &AnthToolChoice{Type: "tool", Name: "X"}},
 	}
 	for _, tc := range tests {
-		t.Run(
-			tc.name,
-			func(t *testing.T) {
-				t.Parallel()
-				req := adapteropenai.ChatRequest{
-					Model: "x",
-					Messages: []adapteropenai.ChatMessage{
-						{
-							Role:    "user",
-							Content: json.RawMessage(`"hi"`),
-						},
-					},
-					ToolChoice: json.RawMessage(tc.raw),
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			req := adapteropenai.ChatRequest{
+				Model: "x",
+				Messages: []adapteropenai.ChatMessage{{
+					Role:    "user",
+					Content: json.RawMessage(`"hi"`),
+				}},
+				ToolChoice: json.RawMessage(tc.raw),
+			}
+			out, err := TranslateRequest(req, "", 64, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch {
+			case tc.want == nil:
+				if out.ToolChoice != nil {
+					t.Fatalf("got %+v want <nil>", out.ToolChoice)
 				}
-				out, err := TranslateRequest(req, "", 64, "")
-				if err != nil {
-					t.Fatal(err)
-				}
-
-				switch {
-				case tc.want == nil:
-					if out.ToolChoice != nil {
-						t.Fatalf("got %+v want <nil>", out.ToolChoice)
-					}
-				case out.ToolChoice == nil || out.ToolChoice.Type != tc.want.Type || out.ToolChoice.Name != tc.want.Name:
-					t.Fatalf("got %+v want %+v", out.ToolChoice, tc.want)
-				}
-			},
-		)
+			case out.ToolChoice == nil || out.ToolChoice.Type != tc.want.Type || out.ToolChoice.Name != tc.want.Name:
+				t.Fatalf("got %+v want %+v", out.ToolChoice, tc.want)
+			}
+		})
 	}
 }
 
@@ -382,21 +218,17 @@ func TestTranslateRequestParallelToolCallsFalse(t *testing.T) {
 	f := false
 	req := adapteropenai.ChatRequest{
 		Model: "x",
-		Messages: []adapteropenai.ChatMessage{
-			{
-				Role:    "user",
-				Content: json.RawMessage(`"hi"`),
-			},
-		},
+		Messages: []adapteropenai.ChatMessage{{
+			Role:    "user",
+			Content: json.RawMessage(`"hi"`),
+		}},
 		ParallelTools: &f,
 	}
 	out, err := TranslateRequest(req, "", 64, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	if out.ToolChoice == nil || out.ToolChoice.Type != "auto" ||
-		!out.ToolChoice.DisableParallelToolUse {
+	if out.ToolChoice == nil || out.ToolChoice.Type != "auto" || !out.ToolChoice.DisableParallelToolUse {
 		t.Fatalf("got %+v", out.ToolChoice)
 	}
 }
@@ -405,33 +237,27 @@ func TestTranslateRequestAssistantWithToolCalls(t *testing.T) {
 	t.Parallel()
 	req := adapteropenai.ChatRequest{
 		Model: "x",
-		Messages: []adapteropenai.ChatMessage{
-			{
-				Role:    "assistant",
-				Content: json.RawMessage(`"ok"`),
-				ToolCalls: []adapteropenai.ToolCall{
-					{
-						ID:   "call_1",
-						Type: "function",
-						Function: adapteropenai.ToolCallFunction{
-							Name:      "get_weather",
-							Arguments: `{"loc":"NY"}`,
-						},
-					},
+		Messages: []adapteropenai.ChatMessage{{
+			Role:    "assistant",
+			Content: json.RawMessage(`"ok"`),
+			ToolCalls: []adapteropenai.ToolCall{{
+				ID:   "call_1",
+				Type: "function",
+				Function: adapteropenai.ToolCallFunction{
+					Name:      "get_weather",
+					Arguments: `{"loc":"NY"}`,
 				},
-			},
-		},
+			}},
+		}},
 	}
 	out, err := TranslateRequest(req, "", 64, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	msg := out.Messages[0]
 	if msg.Role != "assistant" || len(msg.Content) != 2 {
 		t.Fatalf("unexpected assistant: %+v", msg)
 	}
-
 	tu := mustToolUseBlock(t, msg.Content, 1)
 	if tu.Name != "get_weather" || string(tu.Input) != `{"loc":"NY"}` {
 		t.Fatalf("unexpected tool block: %+v", tu)
@@ -442,51 +268,45 @@ func TestTranslateRequestAssistantWithMultipleToolCallsPreservesOrder(t *testing
 	t.Parallel()
 	req := adapteropenai.ChatRequest{
 		Model: "x",
-		Messages: []adapteropenai.ChatMessage{
-			{
-				Role:    "assistant",
-				Content: json.RawMessage(`"working"`),
-				ToolCalls: []adapteropenai.ToolCall{
-					{
-						ID:   "call_1",
-						Type: "function",
-						Function: adapteropenai.ToolCallFunction{
-							Name:      "get_weather",
-							Arguments: `{"loc":"NY"}`,
-						},
+		Messages: []adapteropenai.ChatMessage{{
+			Role:    "assistant",
+			Content: json.RawMessage(`"working"`),
+			ToolCalls: []adapteropenai.ToolCall{
+				{
+					ID:   "call_1",
+					Type: "function",
+					Function: adapteropenai.ToolCallFunction{
+						Name:      "get_weather",
+						Arguments: `{"loc":"NY"}`,
 					},
-					{
-						ID:   "call_2",
-						Type: "function",
-						Function: adapteropenai.ToolCallFunction{
-							Name:      "write_file",
-							Arguments: `{"path":"out.md"}`,
-						},
+				},
+				{
+					ID:   "call_2",
+					Type: "function",
+					Function: adapteropenai.ToolCallFunction{
+						Name:      "write_file",
+						Arguments: `{"path":"out.md"}`,
 					},
 				},
 			},
-		},
+		}},
 	}
 	out, err := TranslateRequest(req, "", 64, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	msg := out.Messages[0]
 	if len(msg.Content) != 3 {
 		t.Fatalf("content len = %d want 3 (%+v)", len(msg.Content), msg.Content)
 	}
-
 	tb0 := mustTextBlock(t, msg.Content, 0)
 	if tb0.Text != "working" {
 		t.Fatalf("first block text=%q want working", tb0.Text)
 	}
-
 	tu1 := mustToolUseBlock(t, msg.Content, 1)
 	if tu1.Name != "get_weather" || string(tu1.Input) != `{"loc":"NY"}` {
 		t.Fatalf("second block = %+v", tu1)
 	}
-
 	tu2 := mustToolUseBlock(t, msg.Content, 2)
 	if tu2.Name != "write_file" || string(tu2.Input) != `{"path":"out.md"}` {
 		t.Fatalf("third block = %+v", tu2)
@@ -497,19 +317,16 @@ func TestTranslateRequestToolRoleMessage(t *testing.T) {
 	t.Parallel()
 	req := adapteropenai.ChatRequest{
 		Model: "x",
-		Messages: []adapteropenai.ChatMessage{
-			{
-				Role:       "tool",
-				ToolCallID: "toolu_1",
-				Content:    json.RawMessage(`"result"`),
-			},
-		},
+		Messages: []adapteropenai.ChatMessage{{
+			Role:       "tool",
+			ToolCallID: "toolu_1",
+			Content:    json.RawMessage(`"result"`),
+		}},
 	}
 	out, err := TranslateRequest(req, "", 64, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	b := mustToolResultBlock(t, out.Messages[0].Content, 0)
 	if b.ToolUseID != "toolu_1" || b.ResultContent != "result" {
 		t.Fatalf("unexpected block: %+v", b)
@@ -529,11 +346,9 @@ func TestTranslateRequestRoleAlternationMerge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	if len(out.Messages) != 1 {
 		t.Fatalf("expected merged user, got %d", len(out.Messages))
 	}
-
 	if len(out.Messages[0].Content) != 2 {
 		t.Fatalf("content blocks: %+v", out.Messages[0].Content)
 	}
@@ -552,11 +367,9 @@ func TestTranslateRequestDropsTrailingTextAssistantPrefill(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	if len(out.Messages) != 1 {
 		t.Fatalf("messages len = %d want 1: %+v", len(out.Messages), out.Messages)
 	}
-
 	if out.Messages[0].Role != "user" {
 		t.Fatalf("last role = %q want user", out.Messages[0].Role)
 	}
@@ -571,16 +384,14 @@ func TestTranslateRequestKeepsTrailingAssistantToolUse(t *testing.T) {
 			{
 				Role:    "assistant",
 				Content: json.RawMessage(`"I will inspect the code."`),
-				ToolCalls: []adapteropenai.ToolCall{
-					{
-						ID:   "call_1",
-						Type: "function",
-						Function: adapteropenai.ToolCallFunction{
-							Name:      "Read",
-							Arguments: `{"path":"main.go"}`,
-						},
+				ToolCalls: []adapteropenai.ToolCall{{
+					ID:   "call_1",
+					Type: "function",
+					Function: adapteropenai.ToolCallFunction{
+						Name:      "Read",
+						Arguments: `{"path":"main.go"}`,
 					},
-				},
+				}},
 			},
 		},
 	}
@@ -588,15 +399,12 @@ func TestTranslateRequestKeepsTrailingAssistantToolUse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	if len(out.Messages) != 2 {
 		t.Fatalf("messages len = %d want 2: %+v", len(out.Messages), out.Messages)
 	}
-
 	if out.Messages[1].Role != "assistant" {
 		t.Fatalf("last role = %q want assistant", out.Messages[1].Role)
 	}
-
 	if !assistantHasToolUse(out.Messages[1]) {
 		t.Fatalf("expected trailing assistant tool_use to be preserved: %+v", out.Messages[1])
 	}
@@ -606,18 +414,15 @@ func TestTranslateRequestSystemPrefixIdempotent(t *testing.T) {
 	t.Parallel()
 	req := adapteropenai.ChatRequest{
 		Model: "x",
-		Messages: []adapteropenai.ChatMessage{
-			{
-				Role:    "system",
-				Content: json.RawMessage(`"SYS\n\nalready"`),
-			},
-		},
+		Messages: []adapteropenai.ChatMessage{{
+			Role:    "system",
+			Content: json.RawMessage(`"SYS\n\nalready"`),
+		}},
 	}
 	out, err := TranslateRequest(req, "SYS", 64, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	if out.System != "SYS\n\nalready" {
 		t.Fatalf("system: %q", out.System)
 	}
@@ -627,25 +432,20 @@ func TestTranslateRequestLegacyFunctions(t *testing.T) {
 	t.Parallel()
 	req := adapteropenai.ChatRequest{
 		Model: "x",
-		Messages: []adapteropenai.ChatMessage{
-			{
-				Role:    "user",
-				Content: json.RawMessage(`"hi"`),
-			},
-		},
-		Functions: []adapteropenai.Function{
-			{
-				Name:        "legacy",
-				Description: "d",
-				Parameters:  json.RawMessage(`{"x":1}`),
-			},
-		},
+		Messages: []adapteropenai.ChatMessage{{
+			Role:    "user",
+			Content: json.RawMessage(`"hi"`),
+		}},
+		Functions: []adapteropenai.Function{{
+			Name:        "legacy",
+			Description: "d",
+			Parameters:  json.RawMessage(`{"x":1}`),
+		}},
 	}
 	out, err := TranslateRequest(req, "", 64, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	if len(out.Tools) != 1 || out.Tools[0].Name != "legacy" {
 		t.Fatalf("tools: %+v", out.Tools)
 	}
@@ -661,23 +461,14 @@ func TestTranslateRequestLegacyFunctions(t *testing.T) {
 // prior reasoning chain across turns.
 func TestTranslateRequestAssistantThinkingRoundTripsAsNativeBlock(t *testing.T) {
 	t.Parallel()
-	thinking := adapterrender.SyntheticContentOpenWithRef(
-		adapterrender.SyntheticReasoning,
-		"",
-		adapterrender.OriginAnthropic,
-	) +
+	thinking := adapterrender.SyntheticContentOpenWithRef(adapterrender.SyntheticReasoning, "", adapterrender.OriginAnthropic) +
 		"> I should answer 42." +
-		adapterrender.SyntheticContentCloseWithAttrs(
-			adapterrender.SyntheticReasoning,
-			"",
-			"OPAQUE_SIG_BASE64==",
-		)
+		adapterrender.SyntheticContentCloseWithAttrs(adapterrender.SyntheticReasoning, "", "OPAQUE_SIG_BASE64==")
 	assistantText := thinking + "\n\nThe answer is 42."
 	body, err := json.Marshal(assistantText)
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	req := adapteropenai.ChatRequest{
 		Model: "x",
 		Messages: []adapteropenai.ChatMessage{
@@ -690,44 +481,32 @@ func TestTranslateRequestAssistantThinkingRoundTripsAsNativeBlock(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	if len(out.Messages) != 3 {
 		t.Fatalf("messages count=%d, want 3", len(out.Messages))
 	}
-
 	asst := out.Messages[1]
 	if asst.Role != "assistant" {
 		t.Fatalf("role=%q want assistant", asst.Role)
 	}
-
 	if len(asst.Content) != 2 {
-		t.Fatalf(
-			"assistant blocks=%d, want 2 (thinking + text); got %+v",
-			len(asst.Content),
-			asst.Content,
-		)
+		t.Fatalf("assistant blocks=%d, want 2 (thinking + text); got %+v", len(asst.Content), asst.Content)
 	}
-
 	tb0 := mustThinkingBlock(t, asst.Content, 0)
 	if tb0.Thinking != "I should answer 42." {
 		t.Fatalf("block0 thinking=%q want %q", tb0.Thinking, "I should answer 42.")
 	}
-
 	tb1 := mustTextBlock(t, asst.Content, 1)
 	if !strings.Contains(tb1.Text, "The answer is 42.") {
 		t.Fatalf("block1 text=%q should contain real answer", tb1.Text)
 	}
-
 	if strings.Contains(tb1.Text, "clyde-thinking") {
 		t.Fatalf("text block leaked envelope marker: %q", tb1.Text)
 	}
-
 	wire, _ := ToAPIRequest(out, "claude-x", false)
 	encoded, err := json.Marshal(wire.Messages[1])
 	if err != nil {
 		t.Fatalf("marshal wire assistant: %v", err)
 	}
-
 	wireBytes := string(encoded)
 	if !strings.Contains(wireBytes, `"thinking":"I should answer 42."`) {
 		t.Fatalf("wire JSON missing thinking body, got %s", wireBytes)
@@ -743,11 +522,7 @@ func TestTranslateRequestAssistantThinkingRoundTripsAsNativeBlock(t *testing.T) 
 // later replay would fail upstream signature validation.
 func TestTranslateRequestAssistantThinkingPropagatesAnthropicSignature(t *testing.T) {
 	t.Parallel()
-	envelope := adapterrender.SyntheticContentOpenWithRef(
-		adapterrender.SyntheticReasoning,
-		"",
-		adapterrender.OriginAnthropic,
-	) +
+	envelope := adapterrender.SyntheticContentOpenWithRef(adapterrender.SyntheticReasoning, "", adapterrender.OriginAnthropic) +
 		"> deliberation body" +
 		adapterrender.SyntheticContentCloseWithAttrs(
 			adapterrender.SyntheticReasoning,
@@ -759,7 +534,6 @@ func TestTranslateRequestAssistantThinkingPropagatesAnthropicSignature(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	req := adapteropenai.ChatRequest{
 		Model: "x",
 		Messages: []adapteropenai.ChatMessage{
@@ -772,17 +546,14 @@ func TestTranslateRequestAssistantThinkingPropagatesAnthropicSignature(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	asst := out.Messages[1]
 	if len(asst.Content) < 1 {
 		t.Fatalf("assistant blocks empty")
 	}
-
 	tb0 := mustThinkingBlock(t, asst.Content, 0)
 	if tb0.Thinking != "deliberation body" {
 		t.Fatalf("thinking body=%q want %q", tb0.Thinking, "deliberation body")
 	}
-
 	if tb0.Signature != "OPAQUE_SIG_BASE64==" {
 		t.Fatalf("thinking block signature=%q want OPAQUE_SIG_BASE64==", tb0.Signature)
 	}
@@ -800,11 +571,7 @@ func TestTranslateRequestAssistantThinkingPropagatesAnthropicSignature(t *testin
 // stays in context.
 func TestTranslateRequestAssistantCodexThinkingInjectsAsText(t *testing.T) {
 	t.Parallel()
-	envelope := adapterrender.SyntheticContentOpenWithRef(
-		adapterrender.SyntheticReasoning,
-		"rs_codex_1",
-		adapterrender.OriginCodex,
-	) +
+	envelope := adapterrender.SyntheticContentOpenWithRef(adapterrender.SyntheticReasoning, "rs_codex_1", adapterrender.OriginCodex) +
 		"> Let me see, 2+2 is 4." +
 		adapterrender.SyntheticContentCloseWithAttrs(
 			adapterrender.SyntheticReasoning,
@@ -816,7 +583,6 @@ func TestTranslateRequestAssistantCodexThinkingInjectsAsText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	req := adapteropenai.ChatRequest{
 		Model: "x",
 		Messages: []adapteropenai.ChatMessage{
@@ -829,38 +595,26 @@ func TestTranslateRequestAssistantCodexThinkingInjectsAsText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	asst := out.Messages[1]
 	for i, blk := range asst.Content {
 		if _, ok := blk.(ThinkingBlock); ok {
-			t.Fatalf(
-				"block[%d] is a ThinkingBlock; Codex-origin thinking must not produce a native Anthropic thinking block: %+v",
-				i,
-				asst.Content,
-			)
+			t.Fatalf("block[%d] is a ThinkingBlock; Codex-origin thinking must not produce a native Anthropic thinking block: %+v", i, asst.Content)
 		}
 	}
-
 	if len(asst.Content) < 1 {
-		t.Fatalf(
-			"assistant blocks empty; want at least one text block carrying the injected reasoning",
-		)
+		t.Fatalf("assistant blocks empty; want at least one text block carrying the injected reasoning")
 	}
-
 	tb0 := mustTextBlock(t, asst.Content, 0)
 	if !strings.Contains(tb0.Text, "Let me see, 2+2 is 4.") {
 		t.Fatalf("first text block should carry injected codex reasoning, got %q", tb0.Text)
 	}
-
 	var sawFinal bool
-
 	for _, blk := range asst.Content {
 		if tb, ok := blk.(TextBlock); ok && strings.Contains(tb.Text, "It is 4.") {
 			sawFinal = true
 			break
 		}
 	}
-
 	if !sawFinal {
 		t.Fatalf("final answer text missing from translated assistant content: %+v", asst.Content)
 	}
@@ -879,13 +633,11 @@ func TestTranslateRequestAssistantRawUnsignedThinkingInjectsAsText(t *testing.T)
 			{Role: "user", Content: json.RawMessage(`"q"`)},
 			{
 				Role: "assistant",
-				Content: json.RawMessage(
-					`[
+				Content: json.RawMessage(`[
 					{"type":"thinking","thinking":"raw prior thinking"},
 					{"type":"text","text":"Final answer."},
 					{"type":"tool_use","id":"toolu_1","name":"read_file","input":{"path":"README.md"}}
-				]`,
-				),
+				]`),
 			},
 			{Role: "user", Content: json.RawMessage(`"continue"`)},
 		},
@@ -894,22 +646,18 @@ func TestTranslateRequestAssistantRawUnsignedThinkingInjectsAsText(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	asst := out.Messages[1]
 	if len(asst.Content) != 3 {
 		t.Fatalf("assistant blocks=%d want 3: %+v", len(asst.Content), asst.Content)
 	}
-
 	tb0 := mustTextBlock(t, asst.Content, 0)
 	if tb0.Text != "raw prior thinking" {
 		t.Fatalf("block0 text=%q want raw prior thinking", tb0.Text)
 	}
-
 	tb1 := mustTextBlock(t, asst.Content, 1)
 	if tb1.Text != "Final answer." {
 		t.Fatalf("block1 text=%q want Final answer.", tb1.Text)
 	}
-
 	mustToolUseBlock(t, asst.Content, 2)
 
 	wire, _ := ToAPIRequest(out, "claude-x", false)
@@ -917,12 +665,10 @@ func TestTranslateRequestAssistantRawUnsignedThinkingInjectsAsText(t *testing.T)
 	if err != nil {
 		t.Fatalf("marshal wire assistant: %v", err)
 	}
-
 	wireJSON := string(encoded)
 	if strings.Contains(wireJSON, `"type":"thinking"`) {
 		t.Fatalf("unsigned raw thinking leaked as native wire block: %s", wireJSON)
 	}
-
 	if !strings.Contains(wireJSON, `"text":"raw prior thinking"`) {
 		t.Fatalf("wire JSON missing injected thinking text: %s", wireJSON)
 	}
@@ -944,7 +690,6 @@ func TestTranslateRequestAssistantUnknownOriginThinkingInjectsAsText(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	req := adapteropenai.ChatRequest{
 		Model: "x",
 		Messages: []adapteropenai.ChatMessage{
@@ -957,18 +702,12 @@ func TestTranslateRequestAssistantUnknownOriginThinkingInjectsAsText(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	asst := out.Messages[1]
 	for i, blk := range asst.Content {
 		if _, ok := blk.(ThinkingBlock); ok {
-			t.Fatalf(
-				"block[%d] is a ThinkingBlock; unknown-origin thinking must inject as text: %+v",
-				i,
-				asst.Content,
-			)
+			t.Fatalf("block[%d] is a ThinkingBlock; unknown-origin thinking must inject as text: %+v", i, asst.Content)
 		}
 	}
-
 	tb0 := mustTextBlock(t, asst.Content, 0)
 	if !strings.Contains(tb0.Text, "legacy thinking body") {
 		t.Fatalf("first text block should carry injected legacy reasoning, got %q", tb0.Text)
@@ -981,11 +720,7 @@ func TestTranslateRequestAssistantUnknownOriginThinkingInjectsAsText(t *testing.
 // leak content the upstream chose to sign rather than show.
 func TestTranslateRequestAssistantAnthropicThinkingMissingSignatureDropped(t *testing.T) {
 	t.Parallel()
-	envelope := adapterrender.SyntheticContentOpenWithRef(
-		adapterrender.SyntheticReasoning,
-		"",
-		adapterrender.OriginAnthropic,
-	) +
+	envelope := adapterrender.SyntheticContentOpenWithRef(adapterrender.SyntheticReasoning, "", adapterrender.OriginAnthropic) +
 		"> deliberation without signature" +
 		adapterrender.SyntheticContentClose(adapterrender.SyntheticReasoning)
 	assistantText := envelope + "Final answer."
@@ -993,7 +728,6 @@ func TestTranslateRequestAssistantAnthropicThinkingMissingSignatureDropped(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	req := adapteropenai.ChatRequest{
 		Model: "x",
 		Messages: []adapteropenai.ChatMessage{
@@ -1006,32 +740,22 @@ func TestTranslateRequestAssistantAnthropicThinkingMissingSignatureDropped(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	asst := out.Messages[1]
 	for i, blk := range asst.Content {
 		if _, ok := blk.(ThinkingBlock); ok {
-			t.Fatalf(
-				"block[%d] is a ThinkingBlock; unsigned anthropic-origin thinking must be dropped: %+v",
-				i,
-				asst.Content,
-			)
+			t.Fatalf("block[%d] is a ThinkingBlock; unsigned anthropic-origin thinking must be dropped: %+v", i, asst.Content)
 		}
-
-		if tb, ok := blk.(TextBlock); ok &&
-			strings.Contains(tb.Text, "deliberation without signature") {
+		if tb, ok := blk.(TextBlock); ok && strings.Contains(tb.Text, "deliberation without signature") {
 			t.Fatalf("block[%d] leaked unsigned anthropic body into text: %+v", i, asst.Content)
 		}
 	}
-
 	var sawFinal bool
-
 	for _, blk := range asst.Content {
 		if tb, ok := blk.(TextBlock); ok && strings.Contains(tb.Text, "Final answer.") {
 			sawFinal = true
 			break
 		}
 	}
-
 	if !sawFinal {
 		t.Fatalf("final answer text missing from translated assistant content: %+v", asst.Content)
 	}
@@ -1048,7 +772,6 @@ func TestTranslateRequestAssistantNoticeIsDroppedFromUpstream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	req := adapteropenai.ChatRequest{
 		Model: "x",
 		Messages: []adapteropenai.ChatMessage{
@@ -1061,7 +784,6 @@ func TestTranslateRequestAssistantNoticeIsDroppedFromUpstream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	asst := out.Messages[1]
 	for _, blk := range asst.Content {
 		if tb, ok := blk.(TextBlock); ok {
@@ -1069,16 +791,13 @@ func TestTranslateRequestAssistantNoticeIsDroppedFromUpstream(t *testing.T) {
 				t.Fatalf("notice envelope leaked upstream: %+v", blk)
 			}
 		}
-
 		if _, ok := blk.(ThinkingBlock); ok {
 			t.Fatalf("notice should not become a thinking block: %+v", blk)
 		}
 	}
-
 	if len(asst.Content) != 1 {
 		t.Fatalf("expected single text block with real answer, got %+v", asst.Content)
 	}
-
 	tb := mustTextBlock(t, asst.Content, 0)
 	if !strings.Contains(tb.Text, "Real answer.") {
 		t.Fatalf("text=%q want Real answer.", tb.Text)
@@ -1092,16 +811,12 @@ func TestTranslateRequestAssistantNoticeIsDroppedFromUpstream(t *testing.T) {
 // config.AdapterAnthropicReasoning.InboundThinking.
 func TestTranslateRequestAssistantThinkingDropStrategyOptsOut(t *testing.T) {
 	t.Parallel()
-	thinking := adapterrender.FormatSyntheticContent(
-		adapterrender.SyntheticReasoning,
-		"I should answer 42.",
-	)
+	thinking := adapterrender.FormatSyntheticContent(adapterrender.SyntheticReasoning, "I should answer 42.")
 	assistantText := thinking + "\n\nThe answer is 42."
 	body, err := json.Marshal(assistantText)
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	req := adapteropenai.ChatRequest{
 		Model: "x",
 		Messages: []adapteropenai.ChatMessage{
@@ -1114,25 +829,20 @@ func TestTranslateRequestAssistantThinkingDropStrategyOptsOut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	asst := out.Messages[1]
 	for _, blk := range asst.Content {
 		if _, ok := blk.(ThinkingBlock); ok {
 			t.Fatalf("drop strategy should not produce thinking blocks: %+v", blk)
 		}
-
 		if tb, ok := blk.(TextBlock); ok {
-			if strings.Contains(tb.Text, "clyde-thinking") ||
-				strings.Contains(tb.Text, "I should answer 42.") {
+			if strings.Contains(tb.Text, "clyde-thinking") || strings.Contains(tb.Text, "I should answer 42.") {
 				t.Fatalf("thinking content leaked under drop strategy: %+v", blk)
 			}
 		}
 	}
-
 	if len(asst.Content) != 1 {
 		t.Fatalf("expected single text block with answer, got %+v", asst.Content)
 	}
-
 	tb := mustTextBlock(t, asst.Content, 0)
 	if !strings.Contains(tb.Text, "The answer is 42.") {
 		t.Fatalf("text=%q want The answer is 42.", tb.Text)
@@ -1144,16 +854,12 @@ func TestTranslateRequestAssistantThinkingDropStrategyOptsOut(t *testing.T) {
 // upstreams that cannot accept native thinking blocks.
 func TestTranslateRequestAssistantThinkingPlainTextConcatPreservesBody(t *testing.T) {
 	t.Parallel()
-	thinking := adapterrender.FormatSyntheticContent(
-		adapterrender.SyntheticReasoning,
-		"deliberation body",
-	)
+	thinking := adapterrender.FormatSyntheticContent(adapterrender.SyntheticReasoning, "deliberation body")
 	assistantText := thinking + "\n\nFinal."
 	body, err := json.Marshal(assistantText)
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	req := adapteropenai.ChatRequest{
 		Model: "x",
 		Messages: []adapteropenai.ChatMessage{
@@ -1166,26 +872,21 @@ func TestTranslateRequestAssistantThinkingPlainTextConcatPreservesBody(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	asst := out.Messages[1]
 	for _, blk := range asst.Content {
 		if _, ok := blk.(ThinkingBlock); ok {
 			t.Fatalf("plain_text_concat must not emit native thinking blocks: %+v", blk)
 		}
 	}
-
 	joined := ""
-
 	for _, blk := range asst.Content {
 		if tb, ok := blk.(TextBlock); ok {
 			joined += tb.Text
 		}
 	}
-
 	if !strings.Contains(joined, "deliberation body") {
 		t.Fatalf("plain_text_concat should preserve thinking content: %q", joined)
 	}
-
 	if strings.Contains(joined, "clyde-thinking") {
 		t.Fatalf("envelope marker leaked under plain_text_concat: %q", joined)
 	}

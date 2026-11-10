@@ -48,31 +48,9 @@ func installHooksOp() Operation[installHooksInput, installHooksPayload] {
 		},
 		Args: nil,
 		Params: []Param[installHooksInput]{
-			EnumParam(
-				"client",
-				"Hook client to install.",
-				string(hookspec.ClientAll),
-				[]string{
-					string(hookspec.ClientAll),
-					string(hookspec.ClientClaudeCode),
-					string(hookspec.ClientCodex),
-					string(hookspec.ClientCursor),
-				},
-				func(in *installHooksInput, v string) { in.Client = v },
-			),
-			StringParam(
-				"clyde_bin",
-				"Absolute path to the clyde binary used by installed hooks.",
-				"",
-				false,
-				func(in *installHooksInput, v string) { in.ClydeBin = v },
-			),
-			BoolParam(
-				"dry_run",
-				"Print the planned settings files without writing them.",
-				false,
-				func(in *installHooksInput, v bool) { in.DryRun = v },
-			),
+			EnumParam("client", "Hook client to install.", string(hookspec.ClientAll), []string{string(hookspec.ClientAll), string(hookspec.ClientClaudeCode), string(hookspec.ClientCodex), string(hookspec.ClientCursor)}, func(in *installHooksInput, v string) { in.Client = v }),
+			StringParam("clyde_bin", "Absolute path to the clyde binary used by installed hooks.", "", false, func(in *installHooksInput, v string) { in.ClydeBin = v }),
+			BoolParam("dry_run", "Print the planned settings files without writing them.", false, func(in *installHooksInput, v bool) { in.DryRun = v }),
 		},
 		New: func() installHooksInput {
 			return installHooksInput{
@@ -89,27 +67,16 @@ func installHooksOp() Operation[installHooksInput, installHooksPayload] {
 		Run:            nil,
 		runResult: func(ctx context.Context, payload installHooksPayload) (Result, error) {
 			installer := hookspec.Installer{Registry: hookspec.NewRegistry()}
-			result, err := installer.Install(
-				ctx,
-				hookspec.InstallOptions{
-					HomeDir:  "",
-					ClydeBin: payload.ClydeBin,
-					Client:   payload.Client,
-					DryRun:   payload.DryRun,
-				},
-			)
+			result, err := installer.Install(ctx, hookspec.InstallOptions{
+				HomeDir:  "",
+				ClydeBin: payload.ClydeBin,
+				Client:   payload.Client,
+				DryRun:   payload.DryRun,
+			})
 			if err != nil {
-				return nil, logFail(
-					ctx,
-					surfaceFromContext(ctx),
-					"install_hooks_failed",
-					"install hooks",
-					err,
-				)
+				return nil, logFail(ctx, surfaceFromContext(ctx), "install_hooks_failed", "install hooks", err)
 			}
-
 			output := installHooksOutputFromResult(result)
-
 			return valueResult{
 				Payload: output,
 				Text:    renderInstallHooksText(result),
@@ -123,13 +90,11 @@ func prepareInstallHooks(input installHooksInput) (installHooksPayload, error) {
 	if client == "" {
 		client = hookspec.ClientAll
 	}
-
 	switch client {
 	case hookspec.ClientAll, hookspec.ClientClaudeCode, hookspec.ClientCodex, hookspec.ClientCursor:
 	default:
 		return installHooksPayload{}, fmt.Errorf("unsupported hooks client %q", client)
 	}
-
 	return installHooksPayload{
 		Client:   client,
 		ClydeBin: strings.TrimSpace(input.ClydeBin),
@@ -147,19 +112,16 @@ func renderInstallHooksText(result hookspec.InstallResult) string {
 	default:
 		builder.WriteString("installed hooks already up to date\n")
 	}
-
 	for _, file := range result.Files {
 		fmt.Fprintf(&builder, "settings: %s\n", file.SettingsPath)
 		fmt.Fprintf(&builder, "hooks: %s\n", joinHookNames(file.Installed))
 	}
-
 	if result.DryRun {
 		for _, file := range result.Files {
 			fmt.Fprintf(&builder, "\n# %s\n", file.SettingsPath)
 			builder.Write(file.Preview)
 		}
 	}
-
 	return builder.String()
 }
 
@@ -168,7 +130,6 @@ func joinHookNames(ids []hookspec.HookID) string {
 	for _, id := range ids {
 		parts = append(parts, renderHookName(id))
 	}
-
 	return strings.Join(parts, ",")
 }
 

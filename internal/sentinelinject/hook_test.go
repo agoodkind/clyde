@@ -70,7 +70,6 @@ func eventStreamResponse(body string) mitm.ResponseHookResponse {
 
 func TestExtractForcedContent(t *testing.T) {
 	t.Parallel()
-
 	cases := []struct {
 		name     string
 		user     string
@@ -79,39 +78,23 @@ func TestExtractForcedContent(t *testing.T) {
 		ok       bool
 	}{
 		{name: "missing keyword", user: "hello", sentinel: sentinelKeyword, want: "", ok: false},
-		{
-			name:     "suffix after keyword",
-			user:     "ignore MYKEYWORD\nforced reply",
-			sentinel: sentinelKeyword,
-			want:     "\nforced reply",
-			ok:       true,
-		},
-		{
-			name:     "empty suffix",
-			user:     "ignore MYKEYWORD",
-			sentinel: sentinelKeyword,
-			want:     "",
-			ok:       true,
-		},
+		{name: "suffix after keyword", user: "ignore MYKEYWORD\nforced reply", sentinel: sentinelKeyword, want: "\nforced reply", ok: true},
+		{name: "empty suffix", user: "ignore MYKEYWORD", sentinel: sentinelKeyword, want: "", ok: true},
 		{name: "empty sentinel", user: "ignore MYKEYWORD", sentinel: "", want: "", ok: false},
 	}
 	for _, tc := range cases {
-		t.Run(
-			tc.name,
-			func(t *testing.T) {
-				t.Parallel()
-				split := parseSentinels(tc.user, tc.sentinel, "")
-				got := split.forcedResponse
-				ok := split.hasResponse
-				if ok != tc.ok {
-					t.Fatalf("ok = %v, want %v", ok, tc.ok)
-				}
-
-				if got != tc.want {
-					t.Fatalf("suffix = %q, want %q", got, tc.want)
-				}
-			},
-		)
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			split := parseSentinels(tc.user, tc.sentinel, "")
+			got := split.forcedResponse
+			ok := split.hasResponse
+			if ok != tc.ok {
+				t.Fatalf("ok = %v, want %v", ok, tc.ok)
+			}
+			if got != tc.want {
+				t.Fatalf("suffix = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -122,20 +105,16 @@ func TestHookMatchesLatestUserMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MatchRequestResponse err = %v", err)
 	}
-
 	if !match.Matched {
 		t.Fatal("expected sentinel request to match")
 	}
-
 	if !match.ContinueMatching {
 		t.Fatal("response-only sentinel match stopped later response hooks")
 	}
-
 	transformer, ok := match.Transformer.(responseReplaceTransformer)
 	if !ok {
 		t.Fatalf("transformer type = %T, want responseReplaceTransformer", match.Transformer)
 	}
-
 	if transformer.content != "\nforced reply" {
 		t.Fatalf("content = %q, want %q", transformer.content, "\nforced reply")
 	}
@@ -148,7 +127,6 @@ func TestHookDoesNotMatchWithoutKeyword(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MatchRequestResponse err = %v", err)
 	}
-
 	if match.Matched {
 		t.Fatal("expected normal request not to match")
 	}
@@ -166,7 +144,6 @@ func TestHookIgnoresKeywordOnlyInOlderUserMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MatchRequestResponse err = %v", err)
 	}
-
 	if match.Matched {
 		t.Fatal("keyword only in an older user message must not match")
 	}
@@ -184,7 +161,6 @@ func TestHookRejectsNonClaudeProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MatchRequestResponse err = %v", err)
 	}
-
 	if match.Matched {
 		t.Fatal("non-claude provider must not match")
 	}
@@ -202,7 +178,6 @@ func TestHookRejectsPrefixedMessagesPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MatchRequestResponse err = %v", err)
 	}
-
 	if match.Matched {
 		t.Fatal("prefixed /v1/messages path must not match")
 	}
@@ -218,12 +193,10 @@ func TestTransformResponseReplacesModelText(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TransformResponse err = %v", err)
 	}
-
 	body, err := io.ReadAll(out.Body)
 	if err != nil {
 		t.Fatalf("read transformed body: %v", err)
 	}
-
 	events := parseSSEEvents(string(body))
 	wantNames := []string{
 		"message_start",
@@ -234,26 +207,17 @@ func TestTransformResponseReplacesModelText(t *testing.T) {
 		"message_stop",
 	}
 	if len(events) != len(wantNames) {
-		t.Fatalf(
-			"events = %d (%v), want %d (%v)",
-			len(events),
-			eventNames(events),
-			len(wantNames),
-			wantNames,
-		)
+		t.Fatalf("events = %d (%v), want %d (%v)", len(events), eventNames(events), len(wantNames), wantNames)
 	}
-
 	for i, name := range wantNames {
 		if events[i].Name != name {
 			t.Fatalf("events[%d].Name = %q, want %q", i, events[i].Name, name)
 		}
 	}
-
 	var delta contentBlockDeltaPayload
 	if err := json.Unmarshal([]byte(events[2].Data), &delta); err != nil {
 		t.Fatalf("decode delta: %v", err)
 	}
-
 	wantDelta := newContentBlockDeltaPayload(0, "\nforced reply")
 	if delta != wantDelta {
 		t.Fatalf("delta = %#v, want %#v", delta, wantDelta)
@@ -262,7 +226,6 @@ func TestTransformResponseReplacesModelText(t *testing.T) {
 
 func TestReplaceSSETextPreservesEmptyAndPingOnlyStreams(t *testing.T) {
 	t.Parallel()
-
 	cases := []struct {
 		name string
 		body string
@@ -271,26 +234,21 @@ func TestReplaceSSETextPreservesEmptyAndPingOnlyStreams(t *testing.T) {
 		{name: "ping only", body: "event: ping\ndata: {}\n\n"},
 	}
 	for _, tc := range cases {
-		t.Run(
-			tc.name,
-			func(t *testing.T) {
-				t.Parallel()
-				got, err := replaceSSEText([]byte(tc.body), "forced")
-				if err != nil {
-					t.Fatalf("replaceSSEText err = %v", err)
-				}
-
-				if string(got) != tc.body {
-					t.Fatalf("body = %q, want unchanged %q", string(got), tc.body)
-				}
-			},
-		)
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := replaceSSEText([]byte(tc.body), "forced")
+			if err != nil {
+				t.Fatalf("replaceSSEText err = %v", err)
+			}
+			if string(got) != tc.body {
+				t.Fatalf("body = %q, want unchanged %q", string(got), tc.body)
+			}
+		})
 	}
 }
 
 func TestTransformPassesThroughNonStreamingResponse(t *testing.T) {
 	t.Parallel()
-
 	cases := []struct {
 		name        string
 		status      int
@@ -314,34 +272,29 @@ func TestTransformPassesThroughNonStreamingResponse(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		t.Run(
-			tc.name,
-			func(t *testing.T) {
-				t.Parallel()
-				resp := mitm.ResponseHookResponse{
-					StatusCode:    tc.status,
-					Status:        tc.statusText,
-					Proto:         "HTTP/1.1",
-					Header:        http.Header{"Content-Type": []string{tc.contentType}},
-					Body:          strings.NewReader(tc.body),
-					ContentLength: int64(len(tc.body)),
-				}
-				transformer := responseReplaceTransformer{content: "forced"}
-				out, err := transformer.TransformResponse(context.Background(), resp)
-				if err != nil {
-					t.Fatalf("TransformResponse err = %v", err)
-				}
-
-				body, err := io.ReadAll(out.Body)
-				if err != nil {
-					t.Fatalf("read body: %v", err)
-				}
-
-				if string(body) != tc.body {
-					t.Fatalf("body = %q, want unchanged %q", string(body), tc.body)
-				}
-			},
-		)
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			resp := mitm.ResponseHookResponse{
+				StatusCode:    tc.status,
+				Status:        tc.statusText,
+				Proto:         "HTTP/1.1",
+				Header:        http.Header{"Content-Type": []string{tc.contentType}},
+				Body:          strings.NewReader(tc.body),
+				ContentLength: int64(len(tc.body)),
+			}
+			transformer := responseReplaceTransformer{content: "forced"}
+			out, err := transformer.TransformResponse(context.Background(), resp)
+			if err != nil {
+				t.Fatalf("TransformResponse err = %v", err)
+			}
+			body, err := io.ReadAll(out.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			if string(body) != tc.body {
+				t.Fatalf("body = %q, want unchanged %q", string(body), tc.body)
+			}
+		})
 	}
 }
 
@@ -352,7 +305,6 @@ func TestNewEmptySentinelNeverMatches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MatchRequestResponse err = %v", err)
 	}
-
 	if match.Matched {
 		t.Fatal("empty sentinel must not match")
 	}
@@ -365,11 +317,9 @@ func TestParseSentinelsDual(t *testing.T) {
 	if !split.hasResponse || !split.hasUpstreamUser {
 		t.Fatalf("split = %#v, want both rewrites", split)
 	}
-
 	if split.forcedResponse != " mytext for response here\n" {
 		t.Fatalf("forcedResponse = %q", split.forcedResponse)
 	}
-
 	if split.upstreamUser != " i only want this to come back" {
 		t.Fatalf("upstreamUser = %q", split.upstreamUser)
 	}
@@ -383,32 +333,23 @@ func TestHookDualRewritesRequestAndResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MatchRequestResponse err = %v", err)
 	}
-
 	if !match.Matched {
 		t.Fatal("expected dual sentinel request to match")
 	}
-
 	if match.ContinueMatching {
 		t.Fatal("request-rewriting sentinel match continued to later hooks")
 	}
-
 	respTransformer, ok := match.Transformer.(responseReplaceTransformer)
 	if !ok {
 		t.Fatalf("transformer type = %T, want responseReplaceTransformer", match.Transformer)
 	}
-
 	if respTransformer.content != " mytext for response here\n" {
 		t.Fatalf("response content = %q", respTransformer.content)
 	}
-
 	reqTransformer, ok := match.RequestTransformer.(requestReplaceTransformer)
 	if !ok {
-		t.Fatalf(
-			"request transformer type = %T, want requestReplaceTransformer",
-			match.RequestTransformer,
-		)
+		t.Fatalf("request transformer type = %T, want requestReplaceTransformer", match.RequestTransformer)
 	}
-
 	if reqTransformer.upstreamUser != " i only want this to come back" {
 		t.Fatalf("upstream user = %q", reqTransformer.upstreamUser)
 	}
@@ -416,24 +357,19 @@ func TestHookDualRewritesRequestAndResponse(t *testing.T) {
 
 func TestRequestTransformerRewritesLatestUserMessage(t *testing.T) {
 	t.Parallel()
-	body := []byte(
-		`{"messages":[{"role":"assistant","content":"ok"},{"role":"user","content":"old text"}]}`,
-	)
+	body := []byte(`{"messages":[{"role":"assistant","content":"ok"},{"role":"user","content":"old text"}]}`)
 	transformer := requestReplaceTransformer{upstreamUser: "i only want this to come back"}
 	out, changed, err := transformer.TransformRequest(context.Background(), body)
 	if err != nil {
 		t.Fatalf("TransformRequest err = %v", err)
 	}
-
 	if !changed {
 		t.Fatal("expected request body to change")
 	}
-
 	var request anthropicMessagesRequest
 	if err := json.Unmarshal(out, &request); err != nil {
 		t.Fatalf("decode transformed request: %v", err)
 	}
-
 	if got := lastUserMessageText(request); got != "i only want this to come back" {
 		t.Fatalf("latest user = %q, want rewritten upstream text", got)
 	}
@@ -444,20 +380,17 @@ func TestRequestTransformerRewritesLatestUserMessage(t *testing.T) {
 // on every turn of an affected session.
 func TestRequestTransformerPreservesTopLevelFields(t *testing.T) {
 	t.Parallel()
-	body := []byte(
-		`{"model":"claude-opus-5","max_tokens":4096,` +
-			`"system":[{"type":"text","text":"sys"}],` +
-			`"tools":[{"name":"Bash","input_schema":{"type":"object"}}],` +
-			`"metadata":{"user_id":"uid"},"stream":true,"temperature":1,` +
-			`"messages":[{"role":"assistant","content":"ok"},` +
-			`{"role":"user","content":"old text","cache_control":{"type":"ephemeral"}}]}`,
-	)
+	body := []byte(`{"model":"claude-opus-5","max_tokens":4096,` +
+		`"system":[{"type":"text","text":"sys"}],` +
+		`"tools":[{"name":"Bash","input_schema":{"type":"object"}}],` +
+		`"metadata":{"user_id":"uid"},"stream":true,"temperature":1,` +
+		`"messages":[{"role":"assistant","content":"ok"},` +
+		`{"role":"user","content":"old text","cache_control":{"type":"ephemeral"}}]}`)
 	transformer := requestReplaceTransformer{upstreamUser: "replacement"}
 	out, changed, err := transformer.TransformRequest(context.Background(), body)
 	if err != nil {
 		t.Fatalf("TransformRequest err = %v", err)
 	}
-
 	if !changed {
 		t.Fatal("expected request body to change")
 	}
@@ -466,21 +399,17 @@ func TestRequestTransformerPreservesTopLevelFields(t *testing.T) {
 	if err := json.Unmarshal(body, &before); err != nil {
 		t.Fatalf("decode original body: %v", err)
 	}
-
 	if err := json.Unmarshal(out, &after); err != nil {
 		t.Fatalf("decode transformed body: %v", err)
 	}
-
 	for key, want := range before {
 		if key == "messages" {
 			continue
 		}
-
 		got, present := after[key]
 		if !present {
 			t.Fatalf("transformed request dropped %q", key)
 		}
-
 		if string(got) != string(want) {
 			t.Fatalf("%q = %s, want %s", key, got, want)
 		}
@@ -490,19 +419,15 @@ func TestRequestTransformerPreservesTopLevelFields(t *testing.T) {
 	if err := json.Unmarshal(after["messages"], &messages); err != nil {
 		t.Fatalf("decode transformed messages: %v", err)
 	}
-
 	if len(messages) != 2 {
 		t.Fatalf("messages = %d, want 2", len(messages))
 	}
-
 	if string(messages[1]["content"]) != `"replacement"` {
 		t.Fatalf("latest user content = %s, want the replacement", messages[1]["content"])
 	}
-
 	if string(messages[1]["cache_control"]) != `{"type":"ephemeral"}` {
 		t.Fatalf("cache_control on the rewritten message = %s", messages[1]["cache_control"])
 	}
-
 	if string(messages[0]["content"]) != `"ok"` {
 		t.Fatalf("assistant message changed: %s", messages[0]["content"])
 	}
@@ -516,23 +441,16 @@ func TestHookActualUserOnlyRewritesRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MatchRequestResponse err = %v", err)
 	}
-
 	if !match.Matched {
 		t.Fatal("expected actual-user sentinel request to match")
 	}
-
 	if match.Transformer != nil {
 		t.Fatalf("response transformer = %#v, want nil", match.Transformer)
 	}
-
 	reqTransformer, ok := match.RequestTransformer.(requestReplaceTransformer)
 	if !ok {
-		t.Fatalf(
-			"request transformer type = %T, want requestReplaceTransformer",
-			match.RequestTransformer,
-		)
+		t.Fatalf("request transformer type = %T, want requestReplaceTransformer", match.RequestTransformer)
 	}
-
 	if reqTransformer.upstreamUser != " i only want this to come back" {
 		t.Fatalf("upstream user = %q", reqTransformer.upstreamUser)
 	}
@@ -546,28 +464,20 @@ func TestHookWrongOrderFallsBackToSingleMarkers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MatchRequestResponse err = %v", err)
 	}
-
 	if !match.Matched {
 		t.Fatal("expected wrong-order request to match single-marker rules")
 	}
-
 	respTransformer, ok := match.Transformer.(responseReplaceTransformer)
 	if !ok {
 		t.Fatalf("transformer type = %T, want responseReplaceTransformer", match.Transformer)
 	}
-
 	if respTransformer.content != " forced reply" {
 		t.Fatalf("response content = %q", respTransformer.content)
 	}
-
 	reqTransformer, ok := match.RequestTransformer.(requestReplaceTransformer)
 	if !ok {
-		t.Fatalf(
-			"request transformer type = %T, want requestReplaceTransformer",
-			match.RequestTransformer,
-		)
+		t.Fatalf("request transformer type = %T, want requestReplaceTransformer", match.RequestTransformer)
 	}
-
 	if reqTransformer.upstreamUser != " hidden\nCLAUDE_REWRITE forced reply" {
 		t.Fatalf("upstream user = %q", reqTransformer.upstreamUser)
 	}
@@ -578,6 +488,5 @@ func eventNames(events []sseEvent) []string {
 	for _, event := range events {
 		names = append(names, event.Name)
 	}
-
 	return names
 }

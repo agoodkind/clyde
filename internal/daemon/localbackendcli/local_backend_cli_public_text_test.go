@@ -20,35 +20,14 @@ const (
 // It rejects U+1F50D, U+1F50E, trace_id=, and clyde-conversations in all three outputs.
 func assertLocalProofPublicText(t *testing.T, d *localProofDaemon) {
 	t.Helper()
-	request := localProofSearchRequest{
-		Query:           localProofQuery,
-		Provider:        "",
-		Workspace:       "",
-		Roles:           "",
-		Limit:           localProofPageLimit,
-		Offset:          0,
-		IncludeArchived: false,
-	}
-	structured := mustLocalProofSearch(
-		t,
-		localProofSurface{name: "cli", search: d.searchCLI},
-		request,
-	)
+	request := localProofSearchRequest{Query: localProofQuery, Provider: "", Workspace: "", Roles: "", Limit: localProofPageLimit, Offset: 0, IncludeArchived: false}
+	structured := mustLocalProofSearch(t, localProofSurface{name: "cli", search: d.searchCLI}, request)
 	if len(structured.Matches) == 0 {
 		t.Fatalf("conversation search returned no matches for %q", request.Query)
 	}
-
 	firstConversation := structured.Matches[0].Conversation.ID
 
-	searchText := d.runCLIText(
-		t,
-		"conversation",
-		"search",
-		"--query",
-		request.Query,
-		"--limit",
-		strconv.Itoa(request.Limit),
-	)
+	searchText := d.runCLIText(t, "conversation", "search", "--query", request.Query, "--limit", strconv.Itoa(request.Limit))
 	assertLocalProofOmitsTrace(t, "conversation search", searchText)
 	if !strings.Contains(searchText, firstConversation) {
 		t.Errorf("conversation search text does not contain %q:\n%s", firstConversation, searchText)
@@ -64,15 +43,9 @@ func assertLocalProofPublicText(t *testing.T, d *localProofDaemon) {
 	if err != nil {
 		t.Fatalf("clyde_search: %v", err)
 	}
-
 	if response.Result.IsError || len(response.Result.Content) == 0 {
-		t.Fatalf(
-			"clyde_search returned error=%t with %d content items",
-			response.Result.IsError,
-			len(response.Result.Content),
-		)
+		t.Fatalf("clyde_search returned error=%t with %d content items", response.Result.IsError, len(response.Result.Content))
 	}
-
 	for _, content := range response.Result.Content {
 		assertLocalProofOmitsTrace(t, "clyde_search", content.Text)
 		if !strings.Contains(content.Text, firstConversation) {
@@ -94,26 +67,14 @@ func (d *localProofDaemon) runCLIText(t *testing.T, arguments ...string) string 
 	if err != nil {
 		t.Fatalf("clyde %s: %v\n%s", strings.Join(arguments, " "), err, output)
 	}
-
 	return string(output)
 }
 
 func assertLocalProofOmitsTrace(t *testing.T, surface string, text string) {
 	t.Helper()
-
-	for _, marker := range []string{
-		localProofTraceMarker,
-		localProofSearchMarker,
-		localProofTraceIDField,
-		localProofCollectionLabel,
-	} {
+	for _, marker := range []string{localProofTraceMarker, localProofSearchMarker, localProofTraceIDField, localProofCollectionLabel} {
 		if strings.Contains(text, marker) {
-			t.Errorf(
-				"%s contains a magnifier character, trace annotation, or collection label: %s",
-				surface,
-				text,
-			)
-
+			t.Errorf("%s contains a magnifier character, trace annotation, or collection label: %s", surface, text)
 			return
 		}
 	}

@@ -46,25 +46,19 @@ func seedBaselineStore(t *testing.T, snap mitm.Snapshot) *capture.Store {
 	if err != nil {
 		t.Fatalf("open capture store: %v", err)
 	}
-
 	t.Cleanup(func() { _ = store.Close(context.Background(), "test cleanup") })
 	raw, err := json.Marshal(snap)
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)
 	}
-
-	if err := store.PutBaseline(
-		context.Background(),
-		capture.BaselineChange{
-			Timestamp: time.Unix(1700000000, 0),
-			Upstream:  "claude-code",
-			Snapshot:  raw,
-			Diffs:     nil,
-		},
-	); err != nil {
+	if err := store.PutBaseline(context.Background(), capture.BaselineChange{
+		Timestamp: time.Unix(1700000000, 0),
+		Upstream:  "claude-code",
+		Snapshot:  raw,
+		Diffs:     nil,
+	}); err != nil {
 		t.Fatalf("PutBaseline: %v", err)
 	}
-
 	return store
 }
 
@@ -77,16 +71,12 @@ func seedBaselineIntoStore(t *testing.T, store *capture.Store) {
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)
 	}
-
-	if err := store.PutBaseline(
-		context.Background(),
-		capture.BaselineChange{
-			Timestamp: time.Unix(1700000000, 0),
-			Upstream:  "claude-code",
-			Snapshot:  raw,
-			Diffs:     nil,
-		},
-	); err != nil {
+	if err := store.PutBaseline(context.Background(), capture.BaselineChange{
+		Timestamp: time.Unix(1700000000, 0),
+		Upstream:  "claude-code",
+		Snapshot:  raw,
+		Diffs:     nil,
+	}); err != nil {
 		t.Fatalf("PutBaseline: %v", err)
 	}
 }
@@ -112,13 +102,8 @@ func seedTestWireBaselineWithAttestation(t *testing.T, cch string) *capture.Stor
 }
 
 func testWireBaselineSnapshot(cch string) mitm.Snapshot {
-	defaultFlavor := testInteractiveFlavorShapeForModel(
-		testDefaultFlavorSlug,
-		testDefaultModel,
-		testStandardBetaHeader,
-	)
+	defaultFlavor := testInteractiveFlavorShapeForModel(testDefaultFlavorSlug, testDefaultModel, testStandardBetaHeader)
 	defaultFlavor.BillingAttestation = cch
-
 	return mitm.Snapshot{
 		Upstream: mitm.Upstream{
 			Name:        "claude-code",
@@ -128,46 +113,22 @@ func testWireBaselineSnapshot(cch string) mitm.Snapshot {
 		},
 		Flavors: []mitm.FlavorShape{
 			defaultFlavor,
-			testInteractiveFlavorShapeForModel(
-				testSonnetFlavorSlug,
-				testSonnetModel,
-				testStandardBetaHeader,
-			),
-			testInteractiveFlavorShapeForModel(
-				testFableStandardFlavorSlug,
-				testFableModel,
-				testStandardBetaHeader,
-			),
-			testInteractiveFlavorShapeForModel(
-				testFable1MFlavorSlug,
-				testFableModel,
-				testModelGatedBetaHeader,
-			),
-			testInteractiveFlavorShapeForModel(
-				testOpus1MFlavorSlug,
-				testOpusModel,
-				testModelGatedBetaHeader,
-			),
+			testInteractiveFlavorShapeForModel(testSonnetFlavorSlug, testSonnetModel, testStandardBetaHeader),
+			testInteractiveFlavorShapeForModel(testFableStandardFlavorSlug, testFableModel, testStandardBetaHeader),
+			testInteractiveFlavorShapeForModel(testFable1MFlavorSlug, testFableModel, testModelGatedBetaHeader),
+			testInteractiveFlavorShapeForModel(testOpus1MFlavorSlug, testOpusModel, testModelGatedBetaHeader),
 			testProbeFlavorShape(),
 		},
 	}
 }
 
 func testInteractiveFlavorShape() mitm.FlavorShape {
-	return testInteractiveFlavorShapeWithBeta(
-		"claude-code-interactive-17c1f069",
-		testStandardBetaHeader,
-	)
+	return testInteractiveFlavorShapeWithBeta("claude-code-interactive-17c1f069", testStandardBetaHeader)
 }
 
-func testInteractiveFlavorShapeForModel(
-	slug string,
-	model string,
-	betaHeader string,
-) mitm.FlavorShape {
+func testInteractiveFlavorShapeForModel(slug string, model string, betaHeader string) mitm.FlavorShape {
 	shape := testInteractiveFlavorShapeWithBeta(slug, betaHeader)
 	shape.FeatureVectors = []mitm.RequestFeatures{testRequestFeatures(model)}
-
 	return shape
 }
 
@@ -180,43 +141,16 @@ func testInteractiveFlavorShapeWithBeta(slug string, betaHeader string) mitm.Fla
 		Signature: mitm.Signature{
 			UserAgent:       "claude-cli/2.1.123 (external, sdk-cli)",
 			BetaFingerprint: betaHeader,
-			BodyKeys: []string{
-				"max_tokens",
-				"messages",
-				"metadata",
-				"model",
-				"stream",
-				"system",
-			},
+			BodyKeys:        []string{"max_tokens", "messages", "metadata", "model", "stream", "system"},
 		},
 		Headers: testInteractiveFlavorHeadersWithBeta(betaHeader),
 		Body: mitm.Body{
 			BodyType: "object",
 			Fields: []mitm.Field{
-				{
-					Name:           "max_tokens",
-					Kind:           mitm.FieldKindNumber,
-					Presence:       mitm.HeaderPresenceRequired,
-					OccurrenceRate: 1.0,
-				},
-				{
-					Name:           "messages",
-					Kind:           mitm.FieldKindArray,
-					Presence:       mitm.HeaderPresenceRequired,
-					OccurrenceRate: 1.0,
-				},
-				{
-					Name:           "model",
-					Kind:           mitm.FieldKindString,
-					Presence:       mitm.HeaderPresenceRequired,
-					OccurrenceRate: 1.0,
-				},
-				{
-					Name:           "stream",
-					Kind:           mitm.FieldKindBool,
-					Presence:       mitm.HeaderPresenceOptional,
-					OccurrenceRate: 0.5,
-				},
+				{Name: "max_tokens", Kind: mitm.FieldKindNumber, Presence: mitm.HeaderPresenceRequired, OccurrenceRate: 1.0},
+				{Name: "messages", Kind: mitm.FieldKindArray, Presence: mitm.HeaderPresenceRequired, OccurrenceRate: 1.0},
+				{Name: "model", Kind: mitm.FieldKindString, Presence: mitm.HeaderPresenceRequired, OccurrenceRate: 1.0},
+				{Name: "stream", Kind: mitm.FieldKindBool, Presence: mitm.HeaderPresenceOptional, OccurrenceRate: 0.5},
 			},
 		},
 	}
@@ -236,7 +170,6 @@ func testInteractiveFlavorHeadersWithBeta(betaHeader string) []mitm.Header {
 			OccurrenceRate: 1.0,
 		}
 	}
-
 	return []mitm.Header{
 		constant("user-agent", "claude-cli/2.1.123 (external, sdk-cli)"),
 		constant("anthropic-version", "2023-06-01"),
@@ -279,27 +212,9 @@ func testProbeFlavorShape() mitm.FlavorShape {
 			BodyKeys:  []string{"max_tokens", "messages", "model", "stream"},
 		},
 		Headers: []mitm.Header{
-			{
-				Name:           "user-agent",
-				Classification: mitm.HeaderClassConstant,
-				Presence:       mitm.HeaderPresenceRequired,
-				ObservedValues: []string{"claude-cli/2.1.123 (external, sdk-cli)"},
-				OccurrenceRate: 1.0,
-			},
-			{
-				Name:           "anthropic-version",
-				Classification: mitm.HeaderClassConstant,
-				Presence:       mitm.HeaderPresenceRequired,
-				ObservedValues: []string{"2023-06-01"},
-				OccurrenceRate: 1.0,
-			},
-			{
-				Name:           "anthropic-beta",
-				Classification: mitm.HeaderClassConstant,
-				Presence:       mitm.HeaderPresenceRequired,
-				ObservedValues: []string{"oauth-2025-04-20"},
-				OccurrenceRate: 1.0,
-			},
+			{Name: "user-agent", Classification: mitm.HeaderClassConstant, Presence: mitm.HeaderPresenceRequired, ObservedValues: []string{"claude-cli/2.1.123 (external, sdk-cli)"}, OccurrenceRate: 1.0},
+			{Name: "anthropic-version", Classification: mitm.HeaderClassConstant, Presence: mitm.HeaderPresenceRequired, ObservedValues: []string{"2023-06-01"}, OccurrenceRate: 1.0},
+			{Name: "anthropic-beta", Classification: mitm.HeaderClassConstant, Presence: mitm.HeaderPresenceRequired, ObservedValues: []string{"oauth-2025-04-20"}, OccurrenceRate: 1.0},
 		},
 	}
 }

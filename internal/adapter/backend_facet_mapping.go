@@ -29,23 +29,18 @@ func (r *backendFacetRegistry) Register(backend string, factory backendfacet.Fac
 	if backend == "" || factory == nil {
 		return
 	}
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.factories[backend] = factory
 }
 
-func (r *backendFacetRegistry) requestFacet(
-	backend string,
-	input backendfacet.Input,
-) logevent.Facet {
+func (r *backendFacetRegistry) requestFacet(backend string, input backendfacet.Input) logevent.Facet {
 	r.mu.RLock()
 	factory := r.factories[backend]
 	r.mu.RUnlock()
 	if factory == nil {
 		return nil
 	}
-
 	return factory.RequestFacet(input)
 }
 

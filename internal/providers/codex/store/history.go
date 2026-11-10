@@ -101,7 +101,6 @@ func ReadHeader(path string, archived bool) (ThreadSummary, error) {
 	if err != nil {
 		return ThreadSummary{}, err
 	}
-
 	defer func() { _ = f.Close() }()
 
 	summary := ThreadSummary{
@@ -126,7 +125,6 @@ func ReadHeader(path string, archived bool) (ThreadSummary, error) {
 	}
 
 	reader := bufio.NewReader(f)
-
 	for range headerLineCap {
 		raw, readErr := reader.ReadBytes('\n')
 		line := bytes.TrimRight(raw, "\r\n")
@@ -136,52 +134,25 @@ func ReadHeader(path string, archived bool) (ThreadSummary, error) {
 			case historyEnvelopeSessionMeta:
 				var payload sessionMetaPayload
 				if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
-					slog.Warn(
-						"codex.store.history.session_meta_unmarshal_failed",
-						"concern",
-						"providers.codex.store",
-						"path",
-						path,
-						"err",
-						err,
-					)
-
-					return ThreadSummary{}, fmt.Errorf(
-						"unmarshal codex session metadata %s: %w",
-						path,
-						err,
-					)
+					slog.Warn("codex.store.history.session_meta_unmarshal_failed", "concern", "providers.codex.store", "path", path, "err", err)
+					return ThreadSummary{}, fmt.Errorf("unmarshal codex session metadata %s: %w", path, err)
 				}
-
 				applySessionMeta(&summary, payload, parseCodexTime(envelope.Timestamp))
 				summary.UpdatedAt = time.Time{}
-
 				return summary, nil
 			case historyEnvelopeTurnContext:
 				applyTurnContext(&summary, envelope.Payload)
 			case historyEnvelopeResponseItem, historyEnvelopeEventMsg, historyEnvelopeCompacted:
 			}
 		}
-
 		if readErr == io.EOF {
 			break
 		}
-
 		if readErr != nil {
-			slog.Warn(
-				"codex.store.history.read_failed",
-				"concern",
-				"providers.codex.store",
-				"path",
-				path,
-				"err",
-				readErr,
-			)
-
+			slog.Warn("codex.store.history.read_failed", "concern", "providers.codex.store", "path", path, "err", readErr)
 			return ThreadSummary{}, fmt.Errorf("read codex rollout %s: %w", path, readErr)
 		}
 	}
-
 	return summary, nil
 }
 
@@ -219,25 +190,17 @@ func StreamMessages(path string, opts HistoryOptions) iter.Seq2[HistoryMessage, 
 			yield(emptyHistoryMessage(), err)
 			return
 		}
-
 		defer func() { _ = f.Close() }()
 
 		if opts.ResolveUnmarked != nil {
 			opts.history = &rolloutHistory{window: nil, lastWindow: nil}
 		}
-
 		streamRolloutLines(bufio.NewReaderSize(f, streamReaderBufferSize), path, opts, yield)
 	}
 }
 
-func streamRolloutLines(
-	reader *bufio.Reader,
-	path string,
-	opts HistoryOptions,
-	yield func(HistoryMessage, error) bool,
-) {
+func streamRolloutLines(reader *bufio.Reader, path string, opts HistoryOptions, yield func(HistoryMessage, error) bool) {
 	held := heldAgentMessage{message: nil}
-
 	for {
 		if !opts.IncludeSystemMessages {
 			skipped, skipErr := skipLargeCompactedLine(reader)
@@ -245,17 +208,14 @@ func streamRolloutLines(
 				finishRolloutStream(path, skipErr, &held, yield)
 				return
 			}
-
 			if skipped {
 				continue
 			}
 		}
-
 		raw, readErr := reader.ReadBytes('\n')
 		if !emitStreamLine(raw, opts, &held, yield) {
 			return
 		}
-
 		if readErr != nil {
 			finishRolloutStream(path, readErr, &held, yield)
 			return
@@ -263,12 +223,7 @@ func streamRolloutLines(
 	}
 }
 
-func finishRolloutStream(
-	path string,
-	readErr error,
-	held *heldAgentMessage,
-	yield func(HistoryMessage, error) bool,
-) {
+func finishRolloutStream(path string, readErr error, held *heldAgentMessage, yield func(HistoryMessage, error) bool) {
 	if held.flush(yield) && !errors.Is(readErr, io.EOF) {
 		reportStreamReadError(path, readErr, yield)
 	}
@@ -287,43 +242,30 @@ func emitStreamLine(
 	if len(line) == 0 {
 		return true
 	}
-
 	var envelope historyLine
 	if json.Unmarshal(line, &envelope) != nil {
 		return true
 	}
-
 	held.applyMarkedResponseItem(envelope, opts)
 	msg, ok := streamMessageFromEnvelope(envelope, opts)
 	opts.history.record(envelope)
 	if !ok {
 		return true
 	}
-
 	if !held.flush(yield) {
 		return false
 	}
-
 	if envelopeIsAgentMessage(envelope) {
 		held.message = &msg
 		return true
 	}
-
 	return yield(msg, nil)
 }
 
 // reportStreamReadError logs a Codex rollout read failure and surfaces it to the
 // iteration consumer through the yield function.
 func reportStreamReadError(path string, readErr error, yield func(HistoryMessage, error) bool) {
-	slog.Warn(
-		"codex.store.history.read_failed",
-		"concern",
-		"providers.codex.store",
-		"path",
-		path,
-		"err",
-		readErr,
-	)
+	slog.Warn("codex.store.history.read_failed", "concern", "providers.codex.store", "path", path, "err", readErr)
 	yield(emptyHistoryMessage(), fmt.Errorf("read codex rollout %s: %w", path, readErr))
 }
 
@@ -351,24 +293,19 @@ func skipLargeCompactedLine(reader *bufio.Reader) (bool, error) {
 	if len(prefix) == 0 {
 		return false, nil
 	}
-
 	if bytes.IndexByte(prefix, '\n') >= 0 {
 		return false, nil
 	}
-
 	if peekErr != nil && !errors.Is(peekErr, bufio.ErrBufferFull) {
 		return false, nil
 	}
-
 	envelopeType, ok := peekedEnvelopeType(prefix)
 	if !ok || historyEnvelopeType(envelopeType) != historyEnvelopeCompacted {
 		return false, nil
 	}
-
 	if err := drainLine(reader); err != nil {
 		return false, err
 	}
-
 	return true, nil
 }
 
@@ -382,23 +319,13 @@ func drainLine(reader *bufio.Reader) error {
 		if err == nil {
 			return nil
 		}
-
 		if errors.Is(err, bufio.ErrBufferFull) {
 			continue
 		}
-
 		if errors.Is(err, io.EOF) {
 			return nil
 		}
-
-		slog.Warn(
-			"codex.store.history.drain_failed",
-			"concern",
-			"providers.codex.store",
-			"err",
-			err,
-		)
-
+		slog.Warn("codex.store.history.drain_failed", "concern", "providers.codex.store", "err", err)
 		return fmt.Errorf("drain codex rollout line: %w", err)
 	}
 }
@@ -413,27 +340,21 @@ func peekedEnvelopeType(prefix []byte) (string, bool) {
 	if !found {
 		return "", false
 	}
-
 	cursor := 0
 	for cursor < len(rest) && (rest[cursor] == ' ' || rest[cursor] == '\t' || rest[cursor] == ':') {
 		cursor++
 	}
-
 	if cursor >= len(rest) || rest[cursor] != '"' {
 		return "", false
 	}
-
 	cursor++
-
 	valueStart := cursor
 	for cursor < len(rest) && rest[cursor] != '"' {
 		cursor++
 	}
-
 	if cursor >= len(rest) {
 		return "", false
 	}
-
 	return string(rest[valueStart:cursor]), true
 }
 
@@ -448,13 +369,11 @@ func streamMessageFromEnvelope(envelope historyLine, opts HistoryOptions) (Histo
 		if !opts.IncludeSystemMessages {
 			return emptyHistoryMessage(), false
 		}
-
 		return compactedMessage(envelope.Payload, lineTime, opts)
 	case historyEnvelopeSessionMeta:
 		if !opts.IncludeSystemPrompts {
 			return emptyHistoryMessage(), false
 		}
-
 		return sessionPromptMessage(envelope.Payload, lineTime)
 	case historyEnvelopeTurnContext:
 		return emptyHistoryMessage(), false
@@ -526,14 +445,11 @@ func (s *sourceUnion) UnmarshalJSON(data []byte) error {
 		s.applyScalarSource(scalar)
 		return nil
 	}
-
 	var object sourceObject
 	if err := json.Unmarshal(data, &object); err != nil {
 		return fmt.Errorf("unmarshal codex source object: %w", err)
 	}
-
 	s.applyObjectSource(object)
-
 	return nil
 }
 
@@ -545,10 +461,8 @@ func (s *sourceUnion) applyScalarSource(scalar string) {
 	if role, ok := machineryScalarRole(scalar); ok {
 		s.Kind = ThreadSourceSubagent
 		s.AgentRole = role
-
 		return
 	}
-
 	s.Kind = normalizeThreadSourceKind(scalar)
 }
 
@@ -609,11 +523,9 @@ const (
 func (i *internalSource) UnmarshalJSON(data []byte) error {
 	i.Kind = internalSourceNone
 	var scalar string
-	if json.Unmarshal(data, &scalar) == nil &&
-		strings.TrimSpace(scalar) == string(internalSourceMemoryConsolidation) {
+	if json.Unmarshal(data, &scalar) == nil && strings.TrimSpace(scalar) == string(internalSourceMemoryConsolidation) {
 		i.Kind = internalSourceMemoryConsolidation
 	}
-
 	return nil
 }
 
@@ -655,10 +567,8 @@ func (s *subagentSource) UnmarshalJSON(data []byte) error {
 		default:
 			s.Kind = subagentSourceNone
 		}
-
 		return nil
 	}
-
 	var object subagentObject
 	if json.Unmarshal(data, &object) == nil {
 		switch {
@@ -672,7 +582,6 @@ func (s *subagentSource) UnmarshalJSON(data []byte) error {
 			s.AgentRole = object.Other
 		}
 	}
-
 	return nil
 }
 
@@ -761,11 +670,9 @@ func applySessionMeta(summary *ThreadSummary, payload sessionMetaPayload, lineTi
 	if summary.Source.AgentNickname == "" {
 		summary.Source.AgentNickname = payload.AgentNickname
 	}
-
 	if summary.Source.AgentRole == "" {
 		summary.Source.AgentRole = payload.AgentRole
 	}
-
 	summary.ForkedFromID = payload.ForkedFromID
 	summary.IsSubagent = payload.Source.Kind == ThreadSourceSubagent ||
 		payload.Source.Kind == ThreadSourceSubagentOld ||
@@ -778,7 +685,6 @@ func applySessionMeta(summary *ThreadSummary, payload sessionMetaPayload, lineTi
 	} else if !lineTime.IsZero() {
 		summary.CreatedAt = lineTime
 	}
-
 	if summary.UpdatedAt.IsZero() {
 		summary.UpdatedAt = summary.CreatedAt
 	}
@@ -789,7 +695,6 @@ func applyTurnContext(summary *ThreadSummary, raw json.RawMessage) {
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return
 	}
-
 	if strings.TrimSpace(payload.CWD) != "" {
 		summary.LatestCWD = payload.CWD
 	}
@@ -817,22 +722,18 @@ func emptyHistoryMessage() HistoryMessage {
 
 func contentText(parts []contentPart) string {
 	var b strings.Builder
-
 	for _, part := range parts {
 		switch contentPartTypeKey(part.Type) {
 		case contentPartTypeKeyInputText, contentPartTypeKeyOutputText:
 			if part.Text == "" {
 				continue
 			}
-
 			if b.Len() > 0 {
 				b.WriteString("\n")
 			}
-
 			b.WriteString(part.Text)
 		}
 	}
-
 	return b.String()
 }
 
@@ -840,15 +741,12 @@ func parseCodexTime(value string) time.Time {
 	if value == "" {
 		return time.Time{}
 	}
-
 	if t, err := time.Parse(time.RFC3339Nano, value); err == nil {
 		return t
 	}
-
 	if t, err := time.Parse(time.RFC3339, value); err == nil {
 		return t
 	}
-
 	return time.Time{}
 }
 
@@ -864,16 +762,12 @@ func normalizeThreadSourceKind(value string) ThreadSourceKind {
 		return ThreadSourceMCP
 	case threadSourceAliasCustom:
 		return ThreadSourceCustom
-	case threadSourceAliasSubagent,
-		threadSourceAliasSubAgentSnake,
-		threadSourceAliasSubagentOld,
-		threadSourceAliasSubagentOldDash:
+	case threadSourceAliasSubagent, threadSourceAliasSubAgentSnake, threadSourceAliasSubagentOld, threadSourceAliasSubagentOldDash:
 		return ThreadSourceSubagent
 	default:
 		if strings.TrimSpace(value) == "" {
 			return ThreadSourceUnknown
 		}
-
 		return ThreadSourceKind(strings.TrimSpace(value))
 	}
 }

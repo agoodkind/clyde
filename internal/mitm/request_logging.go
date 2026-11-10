@@ -26,17 +26,13 @@ func mitmRequestIdentity(headers http.Header, contrib IdentityContribution) loge
 	identity.SpanID = string(corr.SpanID)
 	identity.ParentSpanID = string(corr.ParentSpanID)
 	identity.RequestID = firstNonEmptyString(corr.RequestID, contrib.PreferredRequestID)
-	identity.UpstreamRequestID = firstNonEmptyString(
-		clydeingress.UpstreamRequestID(corr),
-		contrib.PreferredUpstreamRequestID,
-	)
+	identity.UpstreamRequestID = firstNonEmptyString(clydeingress.UpstreamRequestID(corr), contrib.PreferredUpstreamRequestID)
 	identity.UpstreamResponseID = clydeingress.UpstreamResponseID(corr)
 	identity.ChatKey = clydeingress.ChatKey(corr)
 	identity.ChatKeySource = clydeingress.ChatKeySource(corr)
 	identity.ChatRootKey = clydeingress.ChatRootKey(corr)
 	identity.ChatBranchKey = clydeingress.ChatBranchKey(corr)
 	identity.SessionID = contrib.SessionID
-
 	return identity
 }
 
@@ -51,19 +47,16 @@ func extractIdentityContribution(host, path string, headers http.Header) Identit
 			return contrib
 		}
 	}
-
 	if provider, _, ok := providerForConnect(host); ok {
 		if contrib := provider.ExtractIdentity(headers); !identityContributionEmpty(contrib) {
 			return contrib
 		}
 	}
-
 	for _, provider := range defaultRegistry.snapshot() {
 		if contrib := provider.ExtractIdentity(headers); !identityContributionEmpty(contrib) {
 			return contrib
 		}
 	}
-
 	return IdentityContribution{
 		PreferredRequestID:         "",
 		PreferredUpstreamRequestID: "",
@@ -85,25 +78,19 @@ func identityContributionEmpty(contrib IdentityContribution) bool {
 // captureConversationFields derives the Clyde conversation id and
 // source tag stored on MITM capture rows from the provider label and
 // native conversation id contributed by the provider extractor.
-func captureConversationFields(
-	provider string,
-	contrib IdentityContribution,
-) (conversationID string, conversationSource string) {
+func captureConversationFields(provider string, contrib IdentityContribution) (conversationID string, conversationSource string) {
 	nativeID := strings.TrimSpace(contrib.ConversationID)
 	if nativeID == "" {
 		return "", ""
 	}
-
 	prov, ok := providerid.Parse(provider)
 	if !ok || prov == providerid.ProviderUnspecified {
 		return "", ""
 	}
-
 	source := strings.TrimSpace(contrib.ConversationSource)
 	if source == "" {
 		source = "header"
 	}
-
 	return conversation.DerivedID(prov, nativeID, ""), source
 }
 
@@ -111,16 +98,11 @@ func (p *Proxy) beginMITMLogRecorder(headers http.Header, path logevent.Path) *l
 	if p == nil || p.requestLog == nil {
 		return nil
 	}
-
 	contrib := extractIdentityContribution(path.Host, path.Path, headers)
-
 	return p.requestLog.Begin(mitmRequestIdentity(headers, contrib), path)
 }
 
-func (p *Proxy) beginHTTPLogRecorder(
-	r *http.Request,
-	input *httpCaptureRecordInput,
-) *logevent.Recorder {
+func (p *Proxy) beginHTTPLogRecorder(r *http.Request, input *httpCaptureRecordInput) *logevent.Recorder {
 	var path logevent.Path
 	path.Surface = logevent.SurfaceMITMIDE
 	path.RouteFamily = logevent.RouteFamilyMITMProxy
@@ -133,27 +115,17 @@ func (p *Proxy) beginHTTPLogRecorder(
 	if input.clientFacet == nil {
 		input.clientFacet = contrib.Facet
 	}
-
 	if p == nil || p.requestLog == nil {
 		return nil
 	}
-
 	contrib.Facet = input.clientFacet
-
 	return p.requestLog.Begin(mitmRequestIdentity(r.Header, contrib), path)
 }
 
-func (p *Proxy) emitHTTPLogLeg(
-	ctx context.Context,
-	recorder *logevent.Recorder,
-	leg logevent.Leg,
-	phase logevent.Phase,
-	input httpCaptureRecordInput,
-) {
+func (p *Proxy) emitHTTPLogLeg(ctx context.Context, recorder *logevent.Recorder, leg logevent.Leg, phase logevent.Phase, input httpCaptureRecordInput) {
 	if recorder == nil {
 		return
 	}
-
 	mitmFacet := Facet{
 		Concern:             "providers.mitm.wire",
 		Transport:           "http",
@@ -177,21 +149,13 @@ func (p *Proxy) emitHTTPLogLeg(
 	if input.clientFacet != nil {
 		event.Facets.Set(input.clientFacet)
 	}
-
 	recorder.Emit(ctx, event)
 }
 
-func (p *Proxy) emitHTTPPayloadLeg(
-	ctx context.Context,
-	recorder *logevent.Recorder,
-	r *http.Request,
-	responseHeader http.Header,
-	input httpCaptureRecordInput,
-) {
+func (p *Proxy) emitHTTPPayloadLeg(ctx context.Context, recorder *logevent.Recorder, r *http.Request, responseHeader http.Header, input httpCaptureRecordInput) {
 	if recorder == nil {
 		return
 	}
-
 	mitmFacet := Facet{
 		Concern:             "providers.mitm.wire",
 		Transport:           "http",
@@ -215,7 +179,6 @@ func (p *Proxy) emitHTTPPayloadLeg(
 	if input.clientFacet != nil {
 		event.Facets.Set(input.clientFacet)
 	}
-
 	recorder.Emit(ctx, event)
 }
 
@@ -251,31 +214,22 @@ func buildHTTPFailureCaptureInput(
 	}
 }
 
-func (p *Proxy) recordHTTPFailure(
-	r *http.Request,
-	responseHeader http.Header,
-	input httpCaptureRecordInput,
-	failure httpFailureRecord,
-) {
+func (p *Proxy) recordHTTPFailure(r *http.Request, responseHeader http.Header, input httpCaptureRecordInput, failure httpFailureRecord) {
 	if p == nil || r == nil || strings.TrimSpace(input.provider) == "" {
 		return
 	}
-
 	recorder := p.beginHTTPLogRecorder(r, &input)
 	if recorder == nil {
 		return
 	}
-
 	ctx := r.Context()
 	p.emitHTTPLogLeg(ctx, recorder, logevent.LegMITMIngress, logevent.PhaseStarted, input)
 	if failure.includePayload {
 		p.emitHTTPPayloadLeg(ctx, recorder, r, responseHeader, input)
 	}
-
 	if failure.includeUpstreamSend {
 		p.emitHTTPLogLeg(ctx, recorder, logevent.LegMITMUpstreamSend, logevent.PhaseStarted, input)
 	}
-
 	recorder.EmitError(ctx, failure.errorCode, failure.errorMessage)
 	recorder.Complete(ctx)
 }
@@ -286,19 +240,13 @@ func firstNonEmptyString(values ...string) string {
 			return trimmed
 		}
 	}
-
 	return ""
 }
 
-func (p *Proxy) completeHTTPLogRecorder(
-	ctx context.Context,
-	recorder *logevent.Recorder,
-	input httpCaptureRecordInput,
-) {
+func (p *Proxy) completeHTTPLogRecorder(ctx context.Context, recorder *logevent.Recorder, input httpCaptureRecordInput) {
 	if recorder == nil {
 		return
 	}
-
 	p.emitHTTPLogLeg(ctx, recorder, logevent.LegMITMComplete, logevent.PhaseCompleted, input)
 	recorder.Complete(ctx)
 }

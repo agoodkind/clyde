@@ -34,25 +34,17 @@ func TestAppendTextBlockAddsDiagnosticBeforeMessageDelta(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AppendTextBlock: %v", err)
 	}
-
 	if !bytes.Contains(output, []byte(`"index":1`)) {
 		t.Fatalf("appended block index missing: %s", output)
 	}
-
 	if !bytes.Contains(output, []byte(`"text":"diagnostic"`)) {
 		t.Fatalf("diagnostic missing: %s", output)
 	}
-
 	diagnosticIndex := strings.Index(string(output), `"text":"diagnostic"`)
 	messageDeltaIndex := strings.Index(string(output), "event: message_delta")
 	if diagnosticIndex < 0 || messageDeltaIndex < 0 || diagnosticIndex >= messageDeltaIndex {
-		t.Fatalf(
-			"diagnostic index = %d, message delta index = %d",
-			diagnosticIndex,
-			messageDeltaIndex,
-		)
+		t.Fatalf("diagnostic index = %d, message delta index = %d", diagnosticIndex, messageDeltaIndex)
 	}
-
 	if got := ResponseText(output); got != "hello\ndiagnostic" {
 		t.Fatalf("ResponseText(output) = %q", got)
 	}

@@ -56,7 +56,6 @@ func mapUsable() (Message, bool) {
 		HasTools:          false,
 		Tools:             nil,
 	}
-
 	return message, true
 }
 
@@ -70,9 +69,7 @@ func TestContainMappingPanicReportsTheSkipCallersAlreadyHandle(t *testing.T) {
 	if include {
 		t.Fatal("include = true after a panic, want false so the caller skips the record")
 	}
-
-	if message.Role != "" || message.Text != "" || !message.Timestamp.IsZero() ||
-		message.Tools != nil {
+	if message.Role != "" || message.Text != "" || !message.Timestamp.IsZero() || message.Tools != nil {
 		t.Fatalf("message = %+v, want the zero message a declined record reports", message)
 	}
 }
@@ -86,11 +83,9 @@ func TestContainMappingPanicZeroesEveryResult(t *testing.T) {
 	if ok {
 		t.Fatal("ok = true after a panic")
 	}
-
 	if tools != nil {
 		t.Fatalf("tools = %v, want nil", tools)
 	}
-
 	if message.Role != "" {
 		t.Fatalf("message = %+v, want zero", message)
 	}
@@ -124,7 +119,6 @@ func TestContainMappingPanicLeavesTheOrdinaryPathAlone(t *testing.T) {
 	if !include {
 		t.Fatal("include = false for a usable record")
 	}
-
 	if message.Role != "user" || message.Text != "kept" {
 		t.Fatalf("message = %+v, want the mapped role and text", message)
 	}
@@ -138,17 +132,14 @@ func TestContainMappingPanicLeavesTheOrdinaryPathAlone(t *testing.T) {
 func TestContainMappingPanicKeepsMappingAfterOneBadRecord(t *testing.T) {
 	t.Parallel()
 	records := []func() (Message, bool){mapUsable, mapPanicking, mapUsable}
-
 	kept := make([]Message, 0, len(records))
 	for _, mapRecord := range records {
 		message, include := mapRecord()
 		if !include {
 			continue
 		}
-
 		kept = append(kept, message)
 	}
-
 	if len(kept) != 2 {
 		t.Fatalf("kept %d records, want 2: the bad record must cost only itself", len(kept))
 	}
@@ -160,30 +151,17 @@ func TestContainMappingPanicKeepsMappingAfterOneBadRecord(t *testing.T) {
 func TestContainMappingPanicRecordsWhereToLook(t *testing.T) {
 	buffer := &bytes.Buffer{}
 	previous := slog.Default()
-	slog.SetDefault(
-		slog.New(
-			slog.NewJSONHandler(
-				buffer,
-				&slog.HandlerOptions{
-					AddSource:   false,
-					Level:       slog.LevelDebug,
-					ReplaceAttr: nil,
-				},
-			),
-		),
-	)
+	slog.SetDefault(slog.New(slog.NewJSONHandler(buffer, &slog.HandlerOptions{
+		AddSource:   false,
+		Level:       slog.LevelDebug,
+		ReplaceAttr: nil,
+	})))
 	t.Cleanup(func() { slog.SetDefault(previous) })
 
 	_, _ = mapPanicking()
 
 	logs := buffer.String()
-
-	for _, want := range []string{
-		"transcript.mapping_panic",
-		"transcript",
-		"345:344",
-		"mapPanicking",
-	} {
+	for _, want := range []string{"transcript.mapping_panic", "transcript", "345:344", "mapPanicking"} {
 		if !strings.Contains(logs, want) {
 			t.Fatalf("logs missing %q: %s", want, logs)
 		}

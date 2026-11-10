@@ -71,15 +71,10 @@ func NewChatIdentityResolver() *ChatIdentityResolver {
 }
 
 // Resolve returns the effective chat identity for a Cursor request.
-func (r *ChatIdentityResolver) Resolve(
-	corr correlation.Context,
-	cursorReq Request,
-	req adapteropenai.ChatRequest,
-) ChatIdentity {
+func (r *ChatIdentityResolver) Resolve(corr correlation.Context, cursorReq Request, req adapteropenai.ChatRequest) ChatIdentity {
 	if existing := strings.TrimSpace(clydeingress.ChatKey(corr)); existing != "" {
 		return nativeChatIdentity(existing)
 	}
-
 	if strings.TrimSpace(cursorReq.ConversationID) != "" {
 		return nativeChatIdentity(cursorReq.ConversationID)
 	}
@@ -88,7 +83,6 @@ func (r *ChatIdentityResolver) Resolve(
 	if rootKey == "" {
 		return emptyChatIdentity()
 	}
-
 	lineage := DeriveLineage(req)
 	if len(lineage) == 0 {
 		return ChatIdentity{
@@ -125,19 +119,15 @@ func (r *ChatIdentityResolver) Resolve(
 		if !compacted && len(lineage) > len(branch.lineage) {
 			root.branches[branchIndex].lineage = cloneStrings(lineage)
 		}
-
 		return derivedChatIdentity(rootKey, branch.key, req, lineage, emptyChatFork())
 	}
 
 	priorBranch, commonPrefixLen := closestBranch(root.branches, lineage)
 	branchKey := fmt.Sprintf("b%02d", len(root.branches)+1)
-	root.branches = append(
-		root.branches,
-		chatBranch{
-			key:     branchKey,
-			lineage: cloneStrings(lineage),
-		},
-	)
+	root.branches = append(root.branches, chatBranch{
+		key:     branchKey,
+		lineage: cloneStrings(lineage),
+	})
 
 	fork := emptyChatFork()
 	if len(root.branches) == 2 && !root.forkAnnounced {
@@ -148,41 +138,31 @@ func (r *ChatIdentityResolver) Resolve(
 			CommonPrefixLen: commonPrefixLen,
 		}
 	}
-
 	return derivedChatIdentity(rootKey, branchKey, req, lineage, fork)
 }
 
-func (r *ChatIdentityResolver) matchCompactedRoot(
-	rootKey string,
-	lineage []string,
-) (string, string, bool) {
+func (r *ChatIdentityResolver) matchCompactedRoot(rootKey string, lineage []string) (string, string, bool) {
 	rootKeys := make([]string, 0, len(r.roots))
 	for existingRootKey := range r.roots {
 		rootKeys = append(rootKeys, existingRootKey)
 	}
-
 	sort.Strings(rootKeys)
-
 	for _, existingRootKey := range rootKeys {
 		if existingRootKey == rootKey {
 			continue
 		}
-
 		root := r.roots[existingRootKey]
 		branchIndex, compacted := matchingBranch(root.branches, lineage)
 		if branchIndex < 0 || !compacted {
 			continue
 		}
-
 		return existingRootKey, root.branches[branchIndex].key, true
 	}
-
 	return "", "", false
 }
 
 func nativeChatIdentity(key string) ChatIdentity {
 	trimmed := strings.TrimSpace(key)
-
 	return ChatIdentity{
 		ChatKey:        trimmed,
 		ChatKeySource:  ChatKeySourceNative,
@@ -216,13 +196,7 @@ func emptyChatFork() ChatFork {
 	}
 }
 
-func derivedChatIdentity(
-	rootKey string,
-	branchKey string,
-	req adapteropenai.ChatRequest,
-	lineage []string,
-	fork ChatFork,
-) ChatIdentity {
+func derivedChatIdentity(rootKey string, branchKey string, req adapteropenai.ChatRequest, lineage []string, fork ChatFork) ChatIdentity {
 	return ChatIdentity{
 		ChatKey:        rootKey + "." + branchKey,
 		ChatKeySource:  ChatKeySourceDerived,
@@ -236,33 +210,28 @@ func derivedChatIdentity(
 }
 
 func matchingBranch(branches []chatBranch, lineage []string) (int, bool) {
-	for branchIndex, branch := range branches {
+	for i, branch := range branches {
 		if stringSliceHasPrefix(lineage, branch.lineage) {
-			return branchIndex, false
+			return i, false
 		}
-
 		if stringSliceHasSuffix(branch.lineage, lineage) {
-			return branchIndex, true
+			return i, true
 		}
 	}
-
 	return -1, false
 }
 
 func closestBranch(branches []chatBranch, lineage []string) (string, int) {
 	priorBranchKey := ""
 	longestPrefix := 0
-
 	for _, branch := range branches {
 		commonPrefixLen := commonPrefix(branch.lineage, lineage)
 		if commonPrefixLen <= longestPrefix {
 			continue
 		}
-
 		longestPrefix = commonPrefixLen
 		priorBranchKey = branch.key
 	}
-
 	return priorBranchKey, longestPrefix
 }
 
@@ -273,7 +242,6 @@ func commonPrefix(left []string, right []string) int {
 			return i
 		}
 	}
-
 	return limit
 }
 
@@ -281,13 +249,11 @@ func stringSliceHasPrefix(values []string, prefix []string) bool {
 	if len(prefix) > len(values) {
 		return false
 	}
-
 	for i := range prefix {
 		if values[i] != prefix[i] {
 			return false
 		}
 	}
-
 	return true
 }
 
@@ -295,14 +261,12 @@ func stringSliceHasSuffix(values []string, suffix []string) bool {
 	if len(suffix) > len(values) {
 		return false
 	}
-
 	offset := len(values) - len(suffix)
 	for i := range suffix {
 		if values[offset+i] != suffix[i] {
 			return false
 		}
 	}
-
 	return true
 }
 
@@ -310,10 +274,8 @@ func cloneStrings(values []string) []string {
 	if len(values) == 0 {
 		return nil
 	}
-
 	out := make([]string, len(values))
 	copy(out, values)
-
 	return out
 }
 
@@ -326,10 +288,8 @@ func DeriveLineage(req adapteropenai.ChatRequest) []string {
 		if entry == "" {
 			continue
 		}
-
 		lineage = append(lineage, entry)
 	}
-
 	return lineage
 }
 
@@ -339,16 +299,13 @@ func lineageEntry(msg adapteropenai.ChatMessage) string {
 	appendLineagePart(&parts, "name", msg.Name)
 	appendLineagePart(&parts, "tool_call_id", msg.ToolCallID)
 	appendLineagePart(&parts, "content_hash", normalizedContentHash(msg.Content))
-
 	for _, toolCall := range msg.ToolCalls {
 		appendLineagePart(&parts, "tool_id", toolCall.ID)
 		appendLineagePart(&parts, "tool_name", toolCall.Function.Name)
 	}
-
 	if len(parts) == 0 {
 		return ""
 	}
-
 	return strings.Join(parts, "\x1f")
 }
 
@@ -357,7 +314,6 @@ func appendLineagePart(parts *[]string, key string, value string) {
 	if value == "" {
 		return
 	}
-
 	*parts = append(*parts, key+"="+value)
 }
 
@@ -366,9 +322,7 @@ func normalizedContentHash(raw json.RawMessage) string {
 	if len(normalized) == 0 {
 		return ""
 	}
-
 	sum := sha256.Sum256(normalized)
-
 	return hex.EncodeToString(sum[:8])
 }
 
@@ -376,26 +330,21 @@ func normalizedContent(raw json.RawMessage) []byte {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil
 	}
-
 	var plain string
 	if err := json.Unmarshal(raw, &plain); err == nil {
 		trimmed := strings.TrimSpace(plain)
 		if trimmed == "" {
 			return nil
 		}
-
 		return []byte(trimmed)
 	}
-
 	var compacted bytes.Buffer
 	if err := json.Compact(&compacted, raw); err == nil {
 		return compacted.Bytes()
 	}
-
 	trimmed := strings.TrimSpace(string(raw))
 	if trimmed == "" {
 		return nil
 	}
-
 	return []byte(trimmed)
 }

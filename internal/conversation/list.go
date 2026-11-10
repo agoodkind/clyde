@@ -141,7 +141,6 @@ func (idx *Index) ListPage(ctx context.Context, options ListOptions) (ListResult
 	if err != nil {
 		return ListResult{}, err
 	}
-
 	return FilterRecords(records, options), nil
 }
 
@@ -149,40 +148,29 @@ func (idx *Index) ListPage(ctx context.Context, options ListOptions) (ListResult
 // archived) into the conversation-id set that scopes engine retrieval, so a
 // record-scoped search filters in the vector store instead of post-filtering
 // engine hits.
-func (idx *Index) ConversationIDsMatching(
-	ctx context.Context,
-	provider Provider,
-	workspaceRoot string,
-	includeArchived bool,
-) ([]string, error) {
-	result, err := idx.ListPage(
-		ctx,
-		ListOptions{
-			Limit:           0,
-			Offset:          0,
-			Provider:        provider,
-			WorkspaceRoot:   workspaceRoot,
-			Query:           "",
-			IncludeArchived: includeArchived,
-			All:             true,
-		},
-	)
+func (idx *Index) ConversationIDsMatching(ctx context.Context, provider Provider, workspaceRoot string, includeArchived bool) ([]string, error) {
+	result, err := idx.ListPage(ctx, ListOptions{
+		Limit:           0,
+		Offset:          0,
+		Provider:        provider,
+		WorkspaceRoot:   workspaceRoot,
+		Query:           "",
+		IncludeArchived: includeArchived,
+		All:             true,
+	})
 	if err != nil {
 		return nil, err
 	}
-
 	conversationIDs := make([]string, 0, len(result.Records))
 	for _, record := range result.Records {
 		conversationIDs = append(conversationIDs, record.ID)
 	}
-
 	return conversationIDs, nil
 }
 
 // FilterRecords applies list filters and pagination to a pre-sorted record slice.
 func FilterRecords(records []Record, options ListOptions) ListResult {
 	options = normalizeListOptions(options)
-
 	filtered := make([]Record, 0, len(records))
 	for _, record := range records {
 		if recordMatchesListOptions(record, options) {
@@ -201,7 +189,6 @@ func FilterRecords(records []Record, options ListOptions) ListResult {
 	page := cloneRecords(filtered[start:end])
 	nextOffset := start + len(page)
 	hasMore := nextOffset < totalMatched
-
 	return ListResult{
 		Records:       page,
 		TotalMatched:  totalMatched,
@@ -217,22 +204,18 @@ func normalizeListOptions(options ListOptions) ListOptions {
 	if options.Offset < 0 {
 		options.Offset = 0
 	}
-
 	options.WorkspaceRoot = cleanWorkspaceFilter(options.WorkspaceRoot)
 	options.Query = strings.TrimSpace(options.Query)
 	if options.All {
 		options.Limit = 0
 		return options
 	}
-
 	if options.Limit <= 0 {
 		options.Limit = DefaultListLimit
 	}
-
 	if options.Limit > MaxListLimit {
 		options.Limit = MaxListLimit
 	}
-
 	return options
 }
 
@@ -240,28 +223,23 @@ func recordMatchesListOptions(record Record, options ListOptions) bool {
 	if !options.IncludeArchived && record.Archived {
 		return false
 	}
-
 	if options.Provider.Valid() && record.Provider != options.Provider {
 		return false
 	}
-
 	if options.WorkspaceRoot != "" {
 		filterWorkspace := cleanWorkspaceFilter(options.WorkspaceRoot)
 		recordWorkspace := cleanWorkspaceFilter(record.WorkspaceRoot)
 		// Prefix match so a project-root filter includes its subdirectories: a
 		// filter of ~/Sites/clyde-dev matches ~/Sites/clyde-dev and
 		// ~/Sites/clyde-dev/clyde, not just the exact path.
-		if recordWorkspace != filterWorkspace &&
-			!strings.HasPrefix(recordWorkspace, filterWorkspace+"/") {
+		if recordWorkspace != filterWorkspace && !strings.HasPrefix(recordWorkspace, filterWorkspace+"/") {
 			return false
 		}
 	}
-
 	terms := queryTerms(options.Query)
 	if len(terms) > 0 && !recordMatchesTerms(record, terms) {
 		return false
 	}
-
 	return true
 }
 
@@ -277,13 +255,11 @@ func recordMatchesTerms(record Record, terms []string) bool {
 		record.Model,
 	}
 	joined := strings.ToLower(strings.Join(fields, "\n"))
-
 	for _, term := range terms {
 		if !strings.Contains(joined, term) {
 			return false
 		}
 	}
-
 	return true
 }
 
@@ -292,7 +268,6 @@ func queryTerms(query string) []string {
 	if len(fields) == 0 {
 		return nil
 	}
-
 	terms := make([]string, 0, len(fields))
 	for _, field := range fields {
 		term := strings.TrimSpace(field)
@@ -300,7 +275,6 @@ func queryTerms(query string) []string {
 			terms = append(terms, term)
 		}
 	}
-
 	return terms
 }
 
@@ -309,7 +283,6 @@ func cleanWorkspaceFilter(workspaceRoot string) string {
 	if workspaceRoot == "" {
 		return ""
 	}
-
 	return filepath.Clean(workspaceRoot)
 }
 
@@ -334,16 +307,13 @@ func snippet(text string) string {
 		for cut > 0 && !utf8.RuneStart(text[cut]) {
 			cut--
 		}
-
 		text = text[:cut]
 	}
-
 	normalized := strings.Join(strings.Fields(text), " ")
 	runes := []rune(normalized)
 	if len(runes) <= searchSnippetRunes {
 		return normalized
 	}
-
 	return string(runes[:searchSnippetRunes]) + "..."
 }
 
@@ -362,11 +332,9 @@ func Excerpt(text string) string {
 	if len(trimmed) <= searchExcerptMaxBytes {
 		return trimmed
 	}
-
 	cut := searchExcerptMaxBytes
 	for cut > 0 && !utf8.RuneStart(trimmed[cut]) {
 		cut--
 	}
-
 	return strings.TrimRight(trimmed[:cut], " \t\n") + "\n..."
 }

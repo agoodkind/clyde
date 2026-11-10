@@ -30,28 +30,21 @@ func (Provider) ParseCompaction(body []byte) (reorientinject.ParsedRequest, bool
 	if err != nil {
 		return noRequest(), false
 	}
-
 	roles := make([]string, 0, len(decoded.Messages))
 	texts := make([]string, 0, len(decoded.Messages))
-
 	messages := make([]reorientinject.Message, 0, len(decoded.Messages))
 	for _, message := range decoded.Messages {
 		roles = append(roles, string(message.Role))
 		texts = append(texts, messageText(message))
-		messages = append(
-			messages,
-			reorientinject.Message{
-				Role:     role(message.Role),
-				Segments: segments(message),
-			},
-		)
+		messages = append(messages, reorientinject.Message{
+			Role:     role(message.Role),
+			Segments: segments(message),
+		})
 	}
-
 	promptIndex, ok := PromptIndex(roles, texts)
 	if !ok {
 		return noRequest(), false
 	}
-
 	return reorientinject.ParsedRequest{
 		SessionID:        decoded.SessionID,
 		Messages:         messages,
@@ -67,35 +60,22 @@ func (Provider) Truncate(
 	cut reorientinject.Cut,
 	instructionStart int,
 ) ([]byte, error) {
-	truncated, err := anthropic.TruncateCompactionRequest(
-		body,
-		anthropic.CompactionCut{
-			MessageIndex: cut.MessageIndex,
-			SegmentIndex: cut.SegmentIndex,
-			HeadRunes:    cut.HeadRunes,
-		},
-		instructionStart,
-	)
+	truncated, err := anthropic.TruncateCompactionRequest(body, anthropic.CompactionCut{
+		MessageIndex: cut.MessageIndex,
+		SegmentIndex: cut.SegmentIndex,
+		HeadRunes:    cut.HeadRunes,
+	}, instructionStart)
 	if err != nil {
-		slog.Warn(
-			"providers.claude.compaction_truncate_failed",
-			"concern",
-			logConcern,
-			"component",
-			logComponent,
-			"message_index",
-			cut.MessageIndex,
-			"segment_index",
-			cut.SegmentIndex,
-			"head_runes",
-			cut.HeadRunes,
-			"err",
-			err,
+		slog.Warn("providers.claude.compaction_truncate_failed",
+			"concern", logConcern,
+			"component", logComponent,
+			"message_index", cut.MessageIndex,
+			"segment_index", cut.SegmentIndex,
+			"head_runes", cut.HeadRunes,
+			"err", err,
 		)
-
 		return nil, fmt.Errorf("truncate claude compaction request: %w", err)
 	}
-
 	return truncated, nil
 }
 
@@ -104,21 +84,14 @@ func (Provider) Truncate(
 func (Provider) InjectSummary(body []byte, injection string) ([]byte, error) {
 	injected, err := anthropic.InjectIntoSummary(body, injection)
 	if err != nil {
-		slog.Warn(
-			"providers.claude.compaction_inject_failed",
-			"concern",
-			logConcern,
-			"component",
-			logComponent,
-			"injection_bytes",
-			len(injection),
-			"err",
-			err,
+		slog.Warn("providers.claude.compaction_inject_failed",
+			"concern", logConcern,
+			"component", logComponent,
+			"injection_bytes", len(injection),
+			"err", err,
 		)
-
 		return nil, fmt.Errorf("inject into claude summary: %w", err)
 	}
-
 	return injected, nil
 }
 
@@ -142,10 +115,8 @@ func messageText(message anthropic.CompactionMessage) string {
 		if segment.Kind != anthropic.SegmentText || segment.Text == "" {
 			continue
 		}
-
 		parts = append(parts, segment.Text)
 	}
-
 	return strings.Join(parts, "\n")
 }
 
@@ -160,23 +131,18 @@ func role(wire anthropic.CompactionRole) reorientinject.Role {
 	case anthropic.CompactionRoleOther:
 		return reorientinject.RoleOther
 	}
-
 	return reorientinject.RoleOther
 }
 
 func segments(message anthropic.CompactionMessage) []reorientinject.Segment {
 	out := make([]reorientinject.Segment, 0, len(message.Segments))
 	for _, segment := range message.Segments {
-		out = append(
-			out,
-			reorientinject.Segment{
-				Kind:   segmentKind(segment.Kind),
-				Text:   segment.Text,
-				Atomic: false,
-			},
-		)
+		out = append(out, reorientinject.Segment{
+			Kind:   segmentKind(segment.Kind),
+			Text:   segment.Text,
+			Atomic: false,
+		})
 	}
-
 	return out
 }
 
@@ -195,6 +161,5 @@ func segmentKind(kind anthropic.SegmentKind) reorientinject.SegmentKind {
 	case anthropic.SegmentOther:
 		return reorientinject.KindOther
 	}
-
 	return reorientinject.KindOther
 }

@@ -60,76 +60,36 @@ func (metric StatusMetric) MarshalJSON() ([]byte, error) {
 	default:
 		value = []byte("null")
 	}
-
 	if err != nil {
 		return nil, fmt.Errorf("encode metric value %s: %w", metric.Name, err)
 	}
-
-	encoded, err := json.Marshal(statusMetricJSON{
-		Name:  metric.Name,
-		Value: value,
-		Unit:  metric.Unit,
-	})
+	encoded, err := json.Marshal(statusMetricJSON{Name: metric.Name, Value: value, Unit: metric.Unit})
 	if err != nil {
 		return nil, fmt.Errorf("encode metric object %s: %w", metric.Name, err)
 	}
-
 	return encoded, nil
 }
 
 func absentMetric(name, unit string) StatusMetric {
-	return StatusMetric{
-		Name:  name,
-		Unit:  unit,
-		Kind:  StatusMetricAbsent,
-		Int:   0,
-		Float: 0,
-		Bool:  false,
-		Text:  "",
-	}
+	return StatusMetric{Name: name, Unit: unit, Kind: StatusMetricAbsent, Int: 0, Float: 0, Bool: false, Text: ""}
 }
 
 func intMetric(name string, value int64, unit string) StatusMetric {
-	return StatusMetric{
-		Name:  name,
-		Unit:  unit,
-		Kind:  StatusMetricInt,
-		Int:   value,
-		Float: 0,
-		Bool:  false,
-		Text:  "",
-	}
+	return StatusMetric{Name: name, Unit: unit, Kind: StatusMetricInt, Int: value, Float: 0, Bool: false, Text: ""}
 }
 
 func floatMetric(name string, value float64, unit string) StatusMetric {
-	return StatusMetric{
-		Name:  name,
-		Unit:  unit,
-		Kind:  StatusMetricFloat,
-		Int:   0,
-		Float: value,
-		Bool:  false,
-		Text:  "",
-	}
+	return StatusMetric{Name: name, Unit: unit, Kind: StatusMetricFloat, Int: 0, Float: value, Bool: false, Text: ""}
 }
 
 func textMetric(name, value string) StatusMetric {
-	return StatusMetric{
-		Name:  name,
-		Unit:  "",
-		Kind:  StatusMetricText,
-		Int:   0,
-		Float: 0,
-		Bool:  false,
-		Text:  value,
-	}
+	return StatusMetric{Name: name, Unit: "", Kind: StatusMetricText, Int: 0, Float: 0, Bool: false, Text: value}
 }
 
 func knownIntMetric(name string, value int64, unit string, known bool) StatusMetric {
 	if !known {
 		return absentMetric(name, unit)
 	}
-
 	return intMetric(name, value, unit)
 }
 
@@ -137,7 +97,6 @@ func knownTextMetric(name, value string, known bool) StatusMetric {
 	if !known {
 		return absentMetric(name, "")
 	}
-
 	return textMetric(name, value)
 }
 
@@ -145,7 +104,6 @@ func timeMetric(name string, value time.Time, known bool) StatusMetric {
 	if !known || value.IsZero() {
 		return absentMetric(name, "")
 	}
-
 	return textMetric(name, value.UTC().Format(time.RFC3339))
 }
 
@@ -164,10 +122,8 @@ func statusMetricsProto(metrics []StatusMetric) []*clydev1.StatusMetric {
 			entry.Value = &clydev1.StatusMetric_TextValue{TextValue: metric.Text}
 		case StatusMetricAbsent:
 		}
-
 		encoded = append(encoded, entry)
 	}
-
 	return encoded
 }
 
@@ -189,11 +145,8 @@ func statusMetricsFromProto(encoded []*clydev1.StatusMetric) []StatusMetric {
 			metric.Kind = StatusMetricText
 			metric.Text = value.TextValue
 		}
-
 		metrics = append(metrics, metric)
 	}
-
 	sort.Slice(metrics, func(i, j int) bool { return metrics[i].Name < metrics[j].Name })
-
 	return metrics
 }

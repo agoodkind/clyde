@@ -68,64 +68,46 @@ func TestErrorBoundaryNoUnshapedErrorWrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read adapter directory: %v", err)
 	}
-
 	fset := token.NewFileSet()
 	violations := 0
-
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
-
 		name := entry.Name()
 		if !strings.HasSuffix(name, ".go") {
 			continue
 		}
-
 		if allowlist[name] {
 			continue
 		}
-
 		// Test files that legitimately test error handling are
 		// allowed; the non-test file gate is the production lockdown.
 		if strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-
 		path := filepath.Join(".", name)
 		file, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 		if parseErr != nil {
 			t.Fatalf("parse %s: %v", path, parseErr)
 		}
-
-		ast.Inspect(
-			file,
-			func(node ast.Node) bool {
-				candidates := identifierCandidatesFromNode(node)
-				if len(candidates) == 0 {
-					return true
-				}
-
-				for _, candidate := range candidates {
-					for _, sym := range prohibited {
-						if candidate == string(sym) {
-							pos := fset.Position(node.Pos())
-							t.Errorf(
-								"%s:%d: prohibited symbol %q referenced outside boundary allowlist",
-								pos.Filename,
-								pos.Line,
-								sym,
-							)
-							violations++
-						}
+		ast.Inspect(file, func(node ast.Node) bool {
+			candidates := identifierCandidatesFromNode(node)
+			if len(candidates) == 0 {
+				return true
+			}
+			for _, candidate := range candidates {
+				for _, sym := range prohibited {
+					if candidate == string(sym) {
+						pos := fset.Position(node.Pos())
+						t.Errorf("%s:%d: prohibited symbol %q referenced outside boundary allowlist", pos.Filename, pos.Line, sym)
+						violations++
 					}
 				}
-
-				return true
-			},
-		)
+			}
+			return true
+		})
 	}
-
 	if violations > 0 {
 		t.Fatalf("error boundary self-test found %d violations", violations)
 	}
@@ -144,49 +126,33 @@ func TestTopLevelAdapterProductionDoesNotOwnOpenAIErrorBodies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read adapter directory: %v", err)
 	}
-
 	fset := token.NewFileSet()
 	violations := 0
-
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
-
 		name := entry.Name()
 		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-
 		path := filepath.Join(".", name)
 		file, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 		if parseErr != nil {
 			t.Fatalf("parse %s: %v", path, parseErr)
 		}
-
-		ast.Inspect(
-			file,
-			func(node ast.Node) bool {
-				for _, candidate := range identifierCandidatesFromNode(node) {
-					if !prohibited[candidate] {
-						continue
-					}
-
-					pos := fset.Position(node.Pos())
-					t.Errorf(
-						"%s:%d: OpenAI error envelope symbol %q must stay in provider packages",
-						pos.Filename,
-						pos.Line,
-						candidate,
-					)
-					violations++
+		ast.Inspect(file, func(node ast.Node) bool {
+			for _, candidate := range identifierCandidatesFromNode(node) {
+				if !prohibited[candidate] {
+					continue
 				}
-
-				return true
-			},
-		)
+				pos := fset.Position(node.Pos())
+				t.Errorf("%s:%d: OpenAI error envelope symbol %q must stay in provider packages", pos.Filename, pos.Line, candidate)
+				violations++
+			}
+			return true
+		})
 	}
-
 	if violations > 0 {
 		t.Fatalf("OpenAI error body ownership self-test found %d violations", violations)
 	}
@@ -211,19 +177,12 @@ func TestAdapterErrorFileImportsNoProviderPackage(t *testing.T) {
 	if parseErr != nil {
 		t.Fatalf("parse %s: %v", target, parseErr)
 	}
-
 	for _, imp := range file.Imports {
 		path := strings.Trim(imp.Path.Value, `"`)
-
 		for _, forbidden := range forbiddenImports {
 			if path == forbidden {
 				pos := fset.Position(imp.Pos())
-				t.Errorf(
-					"%s:%d: generic boundary file must not import provider package %q",
-					pos.Filename,
-					pos.Line,
-					path,
-				)
+				t.Errorf("%s:%d: generic boundary file must not import provider package %q", pos.Filename, pos.Line, path)
 			}
 		}
 	}
@@ -243,9 +202,7 @@ func identifierCandidatesFromNode(node ast.Node) []string {
 		if x, ok := typed.X.(*ast.Ident); ok {
 			out = append(out, x.Name+"."+typed.Sel.Name)
 		}
-
 		return out
 	}
-
 	return nil
 }

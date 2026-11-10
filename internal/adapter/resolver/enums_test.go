@@ -56,25 +56,15 @@ func TestEffortString(t *testing.T) {
 }
 
 func TestEffortValid(t *testing.T) {
-	known := []Effort{
-		EffortUnset,
-		EffortNone,
-		EffortLow,
-		EffortMedium,
-		EffortHigh,
-		EffortXHigh,
-		EffortMax,
-	}
+	known := []Effort{EffortUnset, EffortNone, EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax}
 	for _, e := range known {
 		if !e.Valid() {
 			t.Errorf("Effort(%q).Valid() = false, want true", e)
 		}
 	}
-
 	if !Effort("future-provider-tier").Valid() {
 		t.Errorf("future provider effort should be valid")
 	}
-
 	if !Effort(" future-provider-tier ").Valid() {
 		t.Errorf("wildcard effort with surrounding whitespace should remain valid")
 	}
@@ -100,14 +90,7 @@ func TestParseEffort(t *testing.T) {
 	for _, tc := range cases {
 		got, ok := ParseEffort(tc.raw)
 		if got != tc.want || ok != tc.wantOK {
-			t.Errorf(
-				"ParseEffort(%q) = (%q, %v), want (%q, %v)",
-				tc.raw,
-				got,
-				ok,
-				tc.want,
-				tc.wantOK,
-			)
+			t.Errorf("ParseEffort(%q) = (%q, %v), want (%q, %v)", tc.raw, got, ok, tc.want, tc.wantOK)
 		}
 	}
 }

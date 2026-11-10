@@ -72,22 +72,14 @@ func (c *sseAggregateCollector) observe(eventName string, raw transportStreamEve
 	}
 }
 
-func (c *sseAggregateCollector) Log(
-	ctx context.Context,
-	logCtx sseInstrumentationContext,
-	responseID string,
-	status string,
-	errText string,
-) {
+func (c *sseAggregateCollector) Log(ctx context.Context, logCtx sseInstrumentationContext, responseID, status, errText string) {
 	if logCtx.Transport == "" {
 		logCtx.Transport = "responses_websocket"
 	}
-
 	corr := logCtx.Correlation
 	if strings.TrimSpace(responseID) != "" {
 		corr = clydeingress.WithUpstreamResponseID(corr, responseID)
 	}
-
 	attrs := []slog.Attr{
 		slog.String("subcomponent", "codex"),
 		slog.String("transport", logCtx.Transport),
@@ -96,55 +88,39 @@ func (c *sseAggregateCollector) Log(
 	if logCtx.RequestID != "" {
 		attrs = append(attrs, slog.String("request_id", logCtx.RequestID))
 	}
-
 	if logCtx.CursorRequestID != "" {
 		attrs = append(attrs, slog.String("cursor_request_id", logCtx.CursorRequestID))
 	}
-
 	if logCtx.ConversationID != "" {
 		attrs = append(attrs, slog.String("conversation_id", logCtx.ConversationID))
 	}
-
 	attrs = correlation.AppendAttrs(attrs, corr)
 	if logCtx.Alias != "" {
 		attrs = append(attrs, slog.String("alias", logCtx.Alias))
 	}
-
 	if logCtx.Model != "" {
 		attrs = append(attrs, slog.String("model", logCtx.Model))
 	}
-
 	if logCtx.ServiceTier != "" {
 		attrs = append(attrs, slog.String("service_tier", logCtx.ServiceTier))
 	}
-
 	if logCtx.PromptCacheKey != "" {
 		attrs = append(attrs, slog.String("prompt_cache_key", logCtx.PromptCacheKey))
 	}
-
 	if logCtx.PreviousResponseID != "" {
 		attrs = append(attrs, slog.Bool("previous_response_id_present", true))
 	}
-
 	if status != "" {
 		attrs = append(attrs, slog.String("response_status", status))
 	}
-
 	if errText != "" {
 		attrs = append(attrs, slog.String("err", errText))
 	}
-
 	attrs = append(attrs, c.Assistant.toSlogAttrs()...)
 	attrs = append(attrs, c.Items.toSlogAttrs()...)
 	attrs = append(attrs, c.Tools.toSlogAttrs()...)
 	attrs = append(attrs, c.Reasoning.toSlogAttrs()...)
-	logCodexEventWithConcern(
-		ctx,
-		slog.LevelInfo,
-		"adapter.codex.upstream_sse.aggregate",
-		slogger.ConcernAdapterProviderCodexWS,
-		attrs,
-	)
+	logCodexEventWithConcern(ctx, slog.LevelInfo, "adapter.codex.upstream_sse.aggregate", slogger.ConcernAdapterProviderCodexWS, attrs)
 }
 
 type assistantTextDeltaAggregate struct {
@@ -160,13 +136,11 @@ func (a *assistantTextDeltaAggregate) Add(delta string) {
 	if delta == "" {
 		return
 	}
-
 	a.DeltaCount++
 	a.CharCount += utf8.RuneCountInString(delta)
 	if a.FirstPreview == "" {
 		a.FirstPreview = boundedPreview(delta)
 	}
-
 	a.LastPreview = boundedPreview(delta)
 	a.appendText(delta)
 }
@@ -177,11 +151,9 @@ func (a *assistantTextDeltaAggregate) appendText(delta string) {
 			a.PendingWhitespace = true
 			continue
 		}
-
 		if a.PendingWhitespace && a.NormalizedText.Len() > 0 {
 			a.NormalizedText.WriteByte(' ')
 		}
-
 		a.PendingWhitespace = false
 		a.NormalizedText.WriteRune(r)
 	}
@@ -203,25 +175,15 @@ func (a *assistantTextDeltaAggregate) toSlogAttrs() []slog.Attr {
 	if a.FirstPreview != "" {
 		attrs = append(attrs, slog.String("assistant_text_first_preview", a.FirstPreview))
 	}
-
 	if a.LastPreview != "" {
 		attrs = append(attrs, slog.String("assistant_text_last_preview", a.LastPreview))
 	}
-
 	if repeated.BlockSHA256 != "" {
-		attrs = append(
-			attrs,
-			slog.String("assistant_text_repeated_block_sha256", repeated.BlockSHA256),
-		)
+		attrs = append(attrs, slog.String("assistant_text_repeated_block_sha256", repeated.BlockSHA256))
 	}
-
 	if repeated.BlockPreview != "" {
-		attrs = append(
-			attrs,
-			slog.String("assistant_text_repeated_block_preview", repeated.BlockPreview),
-		)
+		attrs = append(attrs, slog.String("assistant_text_repeated_block_preview", repeated.BlockPreview))
 	}
-
 	return attrs
 }
 
@@ -237,23 +199,14 @@ type assistantRepeatedText struct {
 func detectRepeatedAssistantText(text string) assistantRepeatedText {
 	normalized := normalizeAssistantText(text)
 	if normalized == "" {
-		return assistantRepeatedText{
-			Detected:          false,
-			BlockCount:        0,
-			BlockChars:        0,
-			BlockSHA256:       "",
-			BlockPreview:      "",
-			PrefixSuffixChars: 0,
-		}
+		return assistantRepeatedText{Detected: false, BlockCount: 0, BlockChars: 0, BlockSHA256: "", BlockPreview: "", PrefixSuffixChars: 0}
 	}
-
 	prefixSuffixChars := repeatedPrefixSuffixChars(normalized)
 	runes := []rune(normalized)
 	if len(runes)%2 == 1 {
 		mid := len(runes) / 2
 		if runes[mid] == ' ' && string(runes[:mid]) == string(runes[mid+1:]) {
 			block := string(runes[:mid])
-
 			return assistantRepeatedText{
 				Detected:          true,
 				BlockCount:        2,
@@ -264,27 +217,22 @@ func detectRepeatedAssistantText(text string) assistantRepeatedText {
 			}
 		}
 	}
-
 	for blockLen := 1; blockLen <= len(runes)/2; blockLen++ {
 		if len(runes)%blockLen != 0 {
 			continue
 		}
-
 		count := len(runes) / blockLen
 		if count < 2 {
 			continue
 		}
-
 		block := string(runes[:blockLen])
 		ok := true
-
 		for start := blockLen; start < len(runes); start += blockLen {
 			if string(runes[start:start+blockLen]) != block {
 				ok = false
 				break
 			}
 		}
-
 		if ok {
 			return assistantRepeatedText{
 				Detected:          true,
@@ -296,15 +244,7 @@ func detectRepeatedAssistantText(text string) assistantRepeatedText {
 			}
 		}
 	}
-
-	return assistantRepeatedText{
-		PrefixSuffixChars: prefixSuffixChars,
-		Detected:          false,
-		BlockCount:        0,
-		BlockChars:        0,
-		BlockSHA256:       "",
-		BlockPreview:      "",
-	}
+	return assistantRepeatedText{PrefixSuffixChars: prefixSuffixChars, Detected: false, BlockCount: 0, BlockChars: 0, BlockSHA256: "", BlockPreview: ""}
 }
 
 func repeatedPrefixSuffixChars(text string) int {
@@ -314,7 +254,6 @@ func repeatedPrefixSuffixChars(text string) int {
 			return size
 		}
 	}
-
 	return 0
 }
 
@@ -331,25 +270,11 @@ func (a outputItemAggregate) toSlogAttrs() []slog.Attr {
 		slog.Int("output_item_tool_done_count", a.Done.ToolTotal),
 	}
 	if len(a.Added.TypeCounts) > 0 {
-		attrs = append(
-			attrs,
-			slog.Attr{
-				Key:   "output_item_added_type_counts",
-				Value: slog.GroupValue(intMapAttrs(a.Added.TypeCounts)...),
-			},
-		)
+		attrs = append(attrs, slog.Attr{Key: "output_item_added_type_counts", Value: slog.GroupValue(intMapAttrs(a.Added.TypeCounts)...)})
 	}
-
 	if len(a.Done.TypeCounts) > 0 {
-		attrs = append(
-			attrs,
-			slog.Attr{
-				Key:   "output_item_done_type_counts",
-				Value: slog.GroupValue(intMapAttrs(a.Done.TypeCounts)...),
-			},
-		)
+		attrs = append(attrs, slog.Attr{Key: "output_item_done_type_counts", Value: slog.GroupValue(intMapAttrs(a.Done.TypeCounts)...)})
 	}
-
 	return attrs
 }
 
@@ -365,19 +290,14 @@ func (c *outputItemCounts) Add(item transportItem) {
 	if itemType == "" {
 		itemType = "unknown"
 	}
-
 	if c.TypeCounts == nil {
 		c.TypeCounts = make(map[string]int)
 	}
-
 	c.TypeCounts[itemType]++
 	switch codexItemType(itemType) {
 	case codexItemTypeFunctionCall, codexItemTypeLocalShellCall, codexItemTypeCustomToolCall:
 		c.ToolTotal++
-	case codexItemTypeMessage,
-		codexItemTypeFunctionCallOutput,
-		codexItemTypeCustomToolCallOutput,
-		codexItemTypeReasoning:
+	case codexItemTypeMessage, codexItemTypeFunctionCallOutput, codexItemTypeCustomToolCallOutput, codexItemTypeReasoning:
 		// Non-tool items don't bump ToolTotal; explicit cases keep
 		// the switch exhaustive for the codexItemType enum.
 	}
@@ -424,17 +344,14 @@ func (a *reasoningAggregate) Add(eventName, delta string) {
 	if delta == "" {
 		return
 	}
-
 	chars := utf8.RuneCountInString(delta)
 	a.DeltaCount++
 	a.DeltaChars += chars
 	if strings.Contains(eventName, "summary") {
 		a.SummaryDeltaCount++
 		a.SummaryDeltaChars += chars
-
 		return
 	}
-
 	a.TextDeltaCount++
 	a.TextDeltaChars += chars
 }
@@ -459,11 +376,9 @@ func boundedPreview(text string) string {
 	if normalized == "" {
 		return ""
 	}
-
 	runes := []rune(normalized)
 	if len(runes) <= assistantDeltaPreviewRunes {
 		return normalized
 	}
-
 	return string(runes[:assistantDeltaPreviewRunes])
 }

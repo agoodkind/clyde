@@ -32,22 +32,16 @@ import (
 
 func main() {
 	slog.Debug("cli.main.entry", "concern", "cmd.dispatch", "component", "cli")
-	if os.Getenv("CLYDE_SELF_RELOAD_PROBE") == "1" && len(os.Args) == 2 &&
-		os.Args[1] == "__clyde_self_reload_probe__" {
+	if os.Getenv("CLYDE_SELF_RELOAD_PROBE") == "1" && len(os.Args) == 2 && os.Args[1] == "__clyde_self_reload_probe__" {
 		_, _ = fmt.Fprintln(os.Stdout, "clyde-self-reload-probe:ok")
 		os.Exit(0)
 	}
-
 	os.Exit(run())
 }
 
 func run() int {
 	rootCtx := correlation.WithContext(context.Background(), correlation.New(""))
-	f := cli.NewSystemFactory(cli.BuildInfo{
-		Version: version.Version,
-		Commit:  version.Commit,
-		Date:    version.BuildTime,
-	})
+	f := cli.NewSystemFactory(cli.BuildInfo{Version: version.Version, Commit: version.Commit, Date: version.BuildTime})
 	root := newRoot(f)
 	root.SetContext(rootCtx)
 	root.SetArgs(os.Args[1:])
@@ -57,29 +51,24 @@ func run() int {
 		// sinks, so a configured path collision cannot overwrite protected data.
 		return executeRoot(rootCtx, root, f)
 	}
-
 	cfg, err := config.LoadGlobalOrDefault()
 	if err != nil {
 		_ = response.WriteResult(rootCtx, os.Stderr, "config load failed: "+err.Error()+"\n")
 		return 1
 	}
-
 	setupPolicy, err := logpolicy.ResolveSloggerSetup(*cfg, detectSlogRole(os.Args[1:]))
 	if err != nil {
 		_ = response.WriteResult(rootCtx, os.Stderr, "logging policy failed: "+err.Error()+"\n")
 		return 1
 	}
-
 	closer, err := slogger.SetupWithPolicy(setupPolicy)
 	if err != nil {
 		_ = response.WriteResult(rootCtx, os.Stderr, "slogger setup failed: "+err.Error()+"\n")
 		return 1
 	}
-
 	defer func() { _ = closer.Close() }()
 
 	slog.Info("cli.main.start", "concern", "cmd.dispatch", "component", "cli")
-
 	return executeRoot(rootCtx, root, f)
 }
 
@@ -88,7 +77,6 @@ func executeRoot(rootCtx context.Context, root *cobra.Command, f *cli.Factory) i
 		_ = response.WriteResult(rootCtx, f.IOStreams.Err, "Error: "+err.Error()+"\n")
 		return 1
 	}
-
 	return 0
 }
 
@@ -115,33 +103,16 @@ func newRoot(f *cli.Factory) *cobra.Command {
 	output.PersistentFlag(root)
 
 	reg := clispec.NewConversationRegistry()
-	reg.AddHandwritten(clispec.HandwrittenCommand{
-		Build:  daemon.NewCmd,
-		Parent: nil,
-	})
-	reg.AddHandwritten(clispec.HandwrittenCommand{
-		Build:  daemon.NewConversationIndexCmd,
-		Parent: clispec.ConversationGroup(),
-	})
-	reg.AddHandwritten(clispec.HandwrittenCommand{
-		Build:  cliHooks.NewCmd,
-		Parent: nil,
-	})
-	reg.AddHandwritten(clispec.HandwrittenCommand{
-		Build:  cliMITM.NewCmd,
-		Parent: nil,
-	})
-	reg.AddHandwritten(clispec.HandwrittenCommand{
-		Build:  cliStatus.NewCmd,
-		Parent: nil,
-	})
-
+	reg.AddHandwritten(clispec.HandwrittenCommand{Build: daemon.NewCmd, Parent: nil})
+	reg.AddHandwritten(clispec.HandwrittenCommand{Build: daemon.NewConversationIndexCmd, Parent: clispec.ConversationGroup()})
+	reg.AddHandwritten(clispec.HandwrittenCommand{Build: cliHooks.NewCmd, Parent: nil})
+	reg.AddHandwritten(clispec.HandwrittenCommand{Build: cliMITM.NewCmd, Parent: nil})
+	reg.AddHandwritten(clispec.HandwrittenCommand{Build: cliStatus.NewCmd, Parent: nil})
 	for _, command := range clispec.RenderCobra(reg, f) {
 		root.AddCommand(command)
 	}
 
 	cli.InstallHelpRendering(root)
-
 	return root
 }
 
@@ -150,13 +121,10 @@ func detectSlogRole(args []string) slogger.ProcessRole {
 		if strings.HasPrefix(arg, "-") {
 			continue
 		}
-
 		if arg == "daemon" {
 			return slogger.ProcessRoleDaemon
 		}
-
 		return slogger.ProcessRoleCLI
 	}
-
 	return slogger.ProcessRoleCLI
 }

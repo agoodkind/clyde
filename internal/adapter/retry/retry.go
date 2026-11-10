@@ -79,30 +79,25 @@ func FromConfig(cfg config.AdapterRetry) []Policy {
 		if item.Enabled != nil {
 			enabled = *item.Enabled
 		}
-
-		policies = append(
-			policies,
-			Policy{
-				Name:                     strings.TrimSpace(item.Name),
-				Enabled:                  enabled,
-				MaxAttempts:              item.MaxAttempts,
-				InitialDelay:             item.InitialDelay.AsDuration(),
-				MaxDelay:                 item.MaxDelay.AsDuration(),
-				Multiplier:               item.Multiplier,
-				JitterFraction:           item.JitterFraction,
-				RetryWhenResponseStarted: item.RetryWhenResponseStarted,
-				Match: Matchers{
-					Backends:          cloneStrings(item.Match.Backends),
-					Operations:        cloneStrings(item.Match.Operations),
-					Statuses:          cloneInts(item.Match.Statuses),
-					ErrorClasses:      cloneStrings(item.Match.ErrorClasses),
-					ErrorCodes:        cloneStrings(item.Match.ErrorCodes),
-					MessageSubstrings: cloneStrings(item.Match.MessageSubstrings),
-				},
+		policies = append(policies, Policy{
+			Name:                     strings.TrimSpace(item.Name),
+			Enabled:                  enabled,
+			MaxAttempts:              item.MaxAttempts,
+			InitialDelay:             item.InitialDelay.AsDuration(),
+			MaxDelay:                 item.MaxDelay.AsDuration(),
+			Multiplier:               item.Multiplier,
+			JitterFraction:           item.JitterFraction,
+			RetryWhenResponseStarted: item.RetryWhenResponseStarted,
+			Match: Matchers{
+				Backends:          cloneStrings(item.Match.Backends),
+				Operations:        cloneStrings(item.Match.Operations),
+				Statuses:          cloneInts(item.Match.Statuses),
+				ErrorClasses:      cloneStrings(item.Match.ErrorClasses),
+				ErrorCodes:        cloneStrings(item.Match.ErrorCodes),
+				MessageSubstrings: cloneStrings(item.Match.MessageSubstrings),
 			},
-		)
+		})
 	}
-
 	return policies
 }
 
@@ -113,11 +108,9 @@ func Decide(policies []Policy, signal Signal, attempt int, random RandFloat) Dec
 		if !policy.Enabled {
 			continue
 		}
-
 		if !policy.Matches(signal) {
 			continue
 		}
-
 		if signal.ResponseStarted && !policy.RetryWhenResponseStarted {
 			return Decision{
 				Retry:      false,
@@ -126,7 +119,6 @@ func Decide(policies []Policy, signal Signal, attempt int, random RandFloat) Dec
 				Reason:     "response_started",
 			}
 		}
-
 		if attempt >= policy.MaxAttempts {
 			return Decision{
 				Retry:      false,
@@ -135,7 +127,6 @@ func Decide(policies []Policy, signal Signal, attempt int, random RandFloat) Dec
 				Reason:     "max_attempts_exhausted",
 			}
 		}
-
 		return Decision{
 			Retry:      true,
 			PolicyName: policy.Name,
@@ -143,7 +134,6 @@ func Decide(policies []Policy, signal Signal, attempt int, random RandFloat) Dec
 			Reason:     "matched",
 		}
 	}
-
 	return Decision{
 		Retry:      false,
 		PolicyName: "",
@@ -157,23 +147,18 @@ func (p Policy) Matches(signal Signal) bool {
 	if !matchStringSet(p.Match.Backends, signal.Backend) {
 		return false
 	}
-
 	if !matchStringSet(p.Match.Operations, signal.Operation) {
 		return false
 	}
-
 	if !matchIntSet(p.Match.Statuses, signal.Status) {
 		return false
 	}
-
 	if !matchStringSet(p.Match.ErrorClasses, signal.ErrorClass) {
 		return false
 	}
-
 	if !matchStringSet(p.Match.ErrorCodes, signal.ErrorCode) {
 		return false
 	}
-
 	return matchMessageSubstrings(p.Match.MessageSubstrings, signal.Message)
 }
 
@@ -185,35 +170,28 @@ func (p Policy) DelayForAttempt(attempt int, random RandFloat) time.Duration {
 	if multiplier == 0 {
 		multiplier = 1
 	}
-
 	if attempt > 1 && delay > 0 {
 		power := math.Pow(multiplier, float64(attempt-1))
 		delay = time.Duration(float64(delay) * power)
 	}
-
 	if p.MaxDelay > 0 && delay > p.MaxDelay {
 		delay = p.MaxDelay
 	}
-
 	if delay <= 0 || p.JitterFraction <= 0 {
 		return delay
 	}
-
 	if random == nil {
 		random = rand.Float64
 	}
-
 	jitterRange := float64(delay) * p.JitterFraction
 	offset := (random()*2 - 1) * jitterRange
 	jittered := time.Duration(float64(delay) + offset)
 	if jittered < 0 {
 		return 0
 	}
-
 	if p.MaxDelay > 0 && jittered > p.MaxDelay {
 		return p.MaxDelay
 	}
-
 	return jittered
 }
 
@@ -222,26 +200,15 @@ func Sleep(ctx context.Context, delay time.Duration) error {
 	if delay <= 0 {
 		return nil
 	}
-
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
-		slog.WarnContext(
-			ctx,
-			"adapter.retry.sleep_cancelled",
-			"concern",
-			"adapter.chat.dispatch",
-			"component",
-			"adapter",
-			"subcomponent",
-			"retry",
-			"delay_ms",
-			delay.Milliseconds(),
-			"err",
-			ctx.Err(),
+		slog.WarnContext(ctx, "adapter.retry.sleep_cancelled", "concern", "adapter.chat.dispatch", "component", "adapter",
+			"subcomponent", "retry",
+			"delay_ms", delay.Milliseconds(),
+			"err", ctx.Err(),
 		)
-
 		return fmt.Errorf("sleep retry delay: %w", ctx.Err())
 	case <-timer.C:
 		return nil
@@ -249,48 +216,22 @@ func Sleep(ctx context.Context, delay time.Duration) error {
 }
 
 // LogDecision emits the common retry-decision shape.
-func LogDecision(
-	ctx context.Context,
-	log *slog.Logger,
-	decision Decision,
-	attempt int,
-	maxAttempts int,
-	info AttemptLogContext,
-	finalOutcome string,
-) {
+func LogDecision(ctx context.Context, log *slog.Logger, decision Decision, attempt int, maxAttempts int, info AttemptLogContext, finalOutcome string) {
 	if log == nil {
 		log = slog.Default()
 	}
-
-	log.InfoContext(
-		ctx,
-		"adapter.retry.decision",
-		"concern",
-		"adapter.chat.dispatch",
-		"component",
-		"adapter",
-		"subcomponent",
-		"retry",
-		"retry_policy",
-		decision.PolicyName,
-		"attempt",
-		attempt,
-		"max_attempts",
-		maxAttempts,
-		"delay_ms",
-		decision.Delay.Milliseconds(),
-		"request_id",
-		info.RequestID,
-		"trace_id",
-		info.TraceID,
-		"chat_key",
-		info.ChatKey,
-		"operation",
-		info.Operation,
-		"final_outcome",
-		finalOutcome,
-		"reason",
-		decision.Reason,
+	log.InfoContext(ctx, "adapter.retry.decision", "concern", "adapter.chat.dispatch", "component", "adapter",
+		"subcomponent", "retry",
+		"retry_policy", decision.PolicyName,
+		"attempt", attempt,
+		"max_attempts", maxAttempts,
+		"delay_ms", decision.Delay.Milliseconds(),
+		"request_id", info.RequestID,
+		"trace_id", info.TraceID,
+		"chat_key", info.ChatKey,
+		"operation", info.Operation,
+		"final_outcome", finalOutcome,
+		"reason", decision.Reason,
 	)
 }
 
@@ -301,7 +242,6 @@ func MaxAttempts(policies []Policy, policyName string) int {
 			return policy.MaxAttempts
 		}
 	}
-
 	return 0
 }
 
@@ -309,15 +249,12 @@ func matchStringSet(values []string, got string) bool {
 	if len(values) == 0 {
 		return true
 	}
-
 	normalized := strings.TrimSpace(got)
-
 	for _, value := range values {
 		if strings.EqualFold(strings.TrimSpace(value), normalized) {
 			return true
 		}
 	}
-
 	return false
 }
 
@@ -325,7 +262,6 @@ func matchIntSet(values []int, got int) bool {
 	if len(values) == 0 {
 		return true
 	}
-
 	return slices.Contains(values, got)
 }
 
@@ -333,13 +269,11 @@ func matchMessageSubstrings(values []string, got string) bool {
 	if len(values) == 0 {
 		return true
 	}
-
 	for _, value := range values {
 		if strings.Contains(got, value) {
 			return true
 		}
 	}
-
 	return false
 }
 
@@ -347,10 +281,8 @@ func cloneStrings(values []string) []string {
 	if len(values) == 0 {
 		return nil
 	}
-
 	out := make([]string, len(values))
 	copy(out, values)
-
 	return out
 }
 
@@ -358,9 +290,7 @@ func cloneInts(values []int) []int {
 	if len(values) == 0 {
 		return nil
 	}
-
 	out := make([]int, len(values))
 	copy(out, values)
-
 	return out
 }

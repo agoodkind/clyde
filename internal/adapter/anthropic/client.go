@@ -36,11 +36,9 @@ func onceSessionID() string {
 		// Fall back to a stable string so the header is always set.
 		return "00000000-0000-4000-8000-000000000000"
 	}
-
 	b[6] = (b[6] & 0x0f) | 0x40
 	b[8] = (b[8] & 0x3f) | 0x80
 	h := hex.EncodeToString(b)
-
 	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]
 }
 
@@ -56,7 +54,6 @@ func New(httpClient *http.Client, source OAuthSource, cfg Config) *Client {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 10 * time.Minute}
 	}
-
 	return &Client{http: httpClient, oauth: source, cfg: cfg, flavorLoader: newWireFlavorsLoader()}
 }
 
@@ -84,28 +81,16 @@ func (c *Client) CCEntrypoint() string { return c.cfg.CCEntrypoint }
 // StreamEvents issues a streaming /v1/messages request and invokes sink
 // for each decoded stream event (text, tool-use lifecycle, thinking,
 // and final stop).
-func (c *Client) StreamEvents(
-	ctx context.Context,
-	req Request,
-	sink EventSink,
-) (Usage, string, error) {
+func (c *Client) StreamEvents(ctx context.Context, req Request, sink EventSink) (Usage, string, error) {
 	log := anthropicRequestLog.Logger()
 	req.Stream = true
 	resp, err := c.do(ctx, req)
 	if err != nil {
 		return Usage{}, "", err
 	}
-
 	defer func() { _ = resp.Body.Close() }()
 
-	usage := Usage{
-		InputTokens:              0,
-		OutputTokens:             0,
-		CacheCreationInputTokens: 0,
-		CacheReadInputTokens:     0,
-		CacheCountsReported:      false,
-		ThinkingTokens:           nil,
-	}
+	usage := Usage{InputTokens: 0, OutputTokens: 0, CacheCreationInputTokens: 0, CacheReadInputTokens: 0, CacheCountsReported: false, ThinkingTokens: nil}
 	stopReason := ""
 	blockTypes := make(map[int]string)
 
@@ -113,7 +98,6 @@ func (c *Client) StreamEvents(
 	scanner.Buffer(make([]byte, 0, 1<<20), 8<<20)
 
 	var currentEvent string
-
 	for scanner.Scan() {
 		line := scanner.Text()
 		switch {
@@ -124,37 +108,18 @@ func (c *Client) StreamEvents(
 			if data == "" {
 				continue
 			}
-
-			if err := dispatchSSE(
-				currentEvent,
-				data,
-				sink,
-				&usage,
-				&stopReason,
-				blockTypes,
-			); err != nil {
+			if err := dispatchSSE(currentEvent, data, sink, &usage, &stopReason, blockTypes); err != nil {
 				return usage, stopReason, err
 			}
 		}
 	}
-
 	if err := scanner.Err(); err != nil {
-		log.WarnContext(
-			ctx,
-			"anthropic.stream.scan_failed",
-			"concern",
-			"adapter.providers.anthropic.sse",
-			"subcomponent",
-			"anthropic",
-			"model",
-			req.Model,
-			"err",
-			err.Error(),
+		log.WarnContext(ctx, "anthropic.stream.scan_failed", "concern", "adapter.providers.anthropic.sse", "subcomponent", "anthropic",
+			"model", req.Model,
+			"err", err.Error(),
 		)
-
 		return usage, stopReason, fmt.Errorf("anthropic stream scan: %w", err)
 	}
-
 	return usage, stopReason, nil
 }
 
@@ -170,7 +135,6 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 	if c.oauth == nil {
 		return nil, errors.New("anthropic client missing oauth source")
 	}
-
 	if req.MaxTokens <= 0 {
 		req.MaxTokens = MaxOutputTokens
 	}
@@ -180,13 +144,30 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		return nil, err
 	}
 
-	token, httpReq, err := c.prepareMessagesPost(ctx, log, req, body, flavor)
+	token, err := c.oauth.Token(ctx)
+	if err != nil {
+		log.WarnContext(ctx, "anthropic.messages.auth_lookup_failed", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
+			"model", req.Model,
+			"err", err.Error(),
+		)
+		return nil, fmt.Errorf("oauth token: %w", err)
+	}
+
+	httpReq, err := c.buildMessagesRequest(ctx, req, body, token, flavor)
 	if err != nil {
 		return nil, err
 	}
 
 	postStarted := clock.Now()
-	ex := newEgressExchange(httpReq, body, postStarted)
+	ex := egressExchange{
+		method:     httpReq.Method,
+		host:       httpReq.URL.Host,
+		path:       httpReq.URL.Path,
+		reqType:    httpReq.Header.Get("Content-Type"),
+		reqHeaders: httpReq.Header,
+		reqBody:    body,
+		started:    postStarted,
+	}
 	resp, err := c.http.Do(httpReq)
 	if resp != nil {
 		// We set Accept-Encoding explicitly, so Go's transparent gzip
@@ -197,26 +178,19 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		// body untouched so callers can still inspect bytes for debug.
 		decodeResponseBody(resp)
 	}
-
 	if err != nil {
-		logResponse(
-			ctx,
-			slog.LevelError,
-			"anthropic.messages.post_failed",
-			responseEvent{
-				Subcomponent:  "anthropic",
-				Model:         req.Model,
-				Status:        0,
-				RequestID:     "",
-				RequestBytes:  len(body),
-				ResponseBytes: 0,
-				DurationMs:    clock.Since(postStarted).Milliseconds(),
-				RateLimits:    nil,
-				RetryAfter:    "",
-				Err:           err.Error(),
-			},
-		)
-
+		logResponse(ctx, slog.LevelError, "anthropic.messages.post_failed", responseEvent{
+			Subcomponent:  "anthropic",
+			Model:         req.Model,
+			Status:        0,
+			RequestID:     "",
+			RequestBytes:  len(body),
+			ResponseBytes: 0,
+			DurationMs:    clock.Since(postStarted).Milliseconds(),
+			RateLimits:    nil,
+			RetryAfter:    "",
+			Err:           err.Error(),
+		})
 		return nil, &UpstreamError{
 			Classification: Classify(nil, err),
 			Status:         0,
@@ -236,15 +210,12 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		RequestBytes:  len(body),
 		ResponseBytes: 0,
 		DurationMs:    clock.Since(postStarted).Milliseconds(),
-		RateLimits:    rateLimitAttrs(resp.Header),
-		RetryAfter:    "",
-		Err:           "",
+		RateLimits:    rateLimitAttrs(resp.Header), RetryAfter: "", Err: "",
 	}
 
 	if resp.StatusCode == http.StatusTooManyRequests {
 		return nil, c.handle429Response(ctx, req, resp, base, ex)
 	}
-
 	if resp.StatusCode != http.StatusOK {
 		errBody := readDecodedBody(resp)
 		ev := base
@@ -255,7 +226,6 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		ev.ResponseBytes = len(errBody)
 		logResponse(ctx, slog.LevelError, "anthropic.messages.upstream_error", ev)
 		c.recordEgress(ctx, ex, resp.StatusCode, resp.Header, errBody)
-
 		return nil, &UpstreamError{
 			Classification: Classify(resp, nil),
 			Status:         resp.StatusCode,
@@ -264,72 +234,18 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 			ErrorType:      ErrorKindNone,
 		}
 	}
-
 	logResponse(ctx, slog.LevelInfo, "anthropic.messages.connected", base)
 	if req.OnHeaders != nil {
 		req.OnHeaders(resp.Header.Clone())
 	}
-
 	c.attachEgressObservers(ctx, resp, base, ex)
-
 	return resp, nil
-}
-
-func newEgressExchange(request *http.Request, body []byte, started time.Time) egressExchange {
-	return egressExchange{
-		method:     request.Method,
-		host:       request.URL.Host,
-		path:       request.URL.Path,
-		reqType:    request.Header.Get("Content-Type"),
-		reqHeaders: request.Header,
-		reqBody:    body,
-		started:    started,
-	}
-}
-
-func (c *Client) prepareMessagesPost(
-	ctx context.Context,
-	log *slog.Logger,
-	req Request,
-	body []byte,
-	flavor WireFlavor,
-) (string, *http.Request, error) {
-	token, err := c.oauth.Token(ctx)
-	if err != nil {
-		log.WarnContext(
-			ctx,
-			"anthropic.messages.auth_lookup_failed",
-			"concern",
-			"adapter.providers.anthropic.request",
-			"subcomponent",
-			"anthropic",
-			"model",
-			req.Model,
-			"err",
-			err.Error(),
-		)
-
-		return "", nil, fmt.Errorf("oauth token: %w", err)
-	}
-
-	httpReq, err := c.buildMessagesRequest(ctx, req, body, token, flavor)
-	if err != nil {
-		return "", nil, err
-	}
-
-	return token, httpReq, nil
 }
 
 // handle429Response builds the typed UpstreamError for a 429 reply, logs the
 // rate-limit event, and fires the OnHeaders callback. The returned error is
 // the value do() propagates to its caller.
-func (c *Client) handle429Response(
-	ctx context.Context,
-	req Request,
-	resp *http.Response,
-	base responseEvent,
-	ex egressExchange,
-) error {
+func (c *Client) handle429Response(ctx context.Context, req Request, resp *http.Response, base responseEvent, ex egressExchange) error {
 	errBody := readDecodedBody(resp)
 	ev := base
 	ev.RetryAfter = resp.Header.Get("Retry-After")
@@ -347,12 +263,7 @@ func (c *Client) handle429Response(
 	// 200-OK path also calls OnHeaders; this is the rejection peer of
 	// that hook and is intentionally invoked before returning.
 	if req.OnHeaders != nil {
-		slog.LogAttrs(
-			ctx,
-			slog.LevelDebug,
-			"anthropic.notice.headers_observed",
-			slog.String("concern", "adapter.notice"),
-			slog.String("subcomponent", "anthropic"),
+		slog.LogAttrs(ctx, slog.LevelDebug, "anthropic.notice.headers_observed", slog.String("concern", "adapter.notice"), slog.String("subcomponent", "anthropic"),
 			slog.String("phase", "ratelimit_429"),
 			slog.String("model", req.Model),
 			slog.String("request_id", resp.Header.Get("Request-Id")),
@@ -370,7 +281,6 @@ func (c *Client) handle429Response(
 	default:
 		message = truncate(string(errBody), 600)
 	}
-
 	return &UpstreamError{
 		Classification: class,
 		Status:         resp.StatusCode,
@@ -392,44 +302,23 @@ func (c *Client) prepareRequestBody(ctx context.Context, req Request) (WireFlavo
 	log := anthropicRequestLog.Logger()
 	flavor, err := c.activeFlavor(ctx, featureVectorForRequest(req))
 	if err != nil {
-		log.WarnContext(
-			ctx,
-			"anthropic.messages.wire_baseline_unavailable",
-			"concern",
-			"adapter.providers.anthropic.request",
-			"subcomponent",
-			"anthropic",
-			"model",
-			req.Model,
-			"err",
-			err.Error(),
+		log.WarnContext(ctx, "anthropic.messages.wire_baseline_unavailable", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
+			"model", req.Model,
+			"err", err.Error(),
 		)
-
 		return WireFlavor{}, nil, err
 	}
-
 	applyBillingAttestation(req.SystemBlocks, flavor.BillingAttestation)
 
 	body, err := json.Marshal(req)
 	if err != nil {
-		log.WarnContext(
-			ctx,
-			"anthropic.messages.marshal_failed",
-			"concern",
-			"adapter.providers.anthropic.request",
-			"subcomponent",
-			"anthropic",
-			"model",
-			req.Model,
-			"err",
-			err.Error(),
+		log.WarnContext(ctx, "anthropic.messages.marshal_failed", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
+			"model", req.Model,
+			"err", err.Error(),
 		)
-
 		return WireFlavor{}, nil, fmt.Errorf("marshal anthropic request: %w", err)
 	}
-
 	checkBodyShape(ctx, req.Model, body, flavor)
-
 	return flavor, body, nil
 }
 
@@ -440,78 +329,36 @@ func (c *Client) prepareRequestBody(ctx context.Context, req Request) (WireFlavo
 // the request with a fresh token without re-marshaling the body. The flavor
 // is resolved once by the caller and threaded through so the header build
 // and the body shaping in do() agree on a single resolved baseline.
-func (c *Client) buildMessagesRequest(
-	ctx context.Context,
-	req Request,
-	body []byte,
-	token string,
-	flavor WireFlavor,
-) (*http.Request, error) {
+func (c *Client) buildMessagesRequest(ctx context.Context, req Request, body []byte, token string, flavor WireFlavor) (*http.Request, error) {
 	log := anthropicRequestLog.Logger()
-	httpReq, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodPost,
-		c.cfg.MessagesURL,
-		bytes.NewReader(body),
-	)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.MessagesURL, bytes.NewReader(body))
 	if err != nil {
-		log.WarnContext(
-			ctx,
-			"anthropic.messages.request_build_failed",
-			"concern",
-			"adapter.providers.anthropic.request",
-			"subcomponent",
-			"anthropic",
-			"model",
-			req.Model,
-			"url",
-			c.cfg.MessagesURL,
-			"err",
-			err.Error(),
+		log.WarnContext(ctx, "anthropic.messages.request_build_failed", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
+			"model", req.Model,
+			"url", c.cfg.MessagesURL,
+			"err", err.Error(),
 		)
-
 		return nil, fmt.Errorf("build messages request: %w", err)
 	}
-
 	dropped := c.applyMessagesHeaders(httpReq, req, token, flavor)
 	if len(dropped) > 0 {
 		keys := make([]string, 0, len(dropped))
 		for k := range dropped {
 			keys = append(keys, k)
 		}
-
-		log.WarnContext(
-			ctx,
-			"anthropic.probe.headers_dropped",
-			"concern",
-			"adapter.providers.anthropic.request",
-			"subcomponent",
-			"anthropic",
-			"dropped",
-			keys,
+		log.WarnContext(ctx, "anthropic.probe.headers_dropped", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
+			"dropped", keys,
 		)
 	}
-
 	// The request body is never logged, even at Debug: it carries the user
 	// prompt. The full outbound body lives in the capture store; the log keeps
 	// only the size and the redacted headers.
-	log.DebugContext(
-		ctx,
-		"anthropic.messages.request",
-		"concern",
-		"adapter.providers.anthropic.request",
-		"subcomponent",
-		"anthropic",
-		"model",
-		req.Model,
-		"url",
-		c.cfg.MessagesURL,
-		"request_bytes",
-		len(body),
-		"headers",
-		redactedOutboundHeaders(httpReq.Header),
+	log.DebugContext(ctx, "anthropic.messages.request", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
+		"model", req.Model,
+		"url", c.cfg.MessagesURL,
+		"request_bytes", len(body),
+		"headers", redactedOutboundHeaders(httpReq.Header),
 	)
-
 	return httpReq, nil
 }
 
@@ -522,12 +369,7 @@ func (c *Client) buildMessagesRequest(
 // header omission for local debugging. The flavor is resolved by do() and
 // passed in, so a missing or invalid baseline is rejected before this point
 // and the request never goes out with no identity.
-func (c *Client) applyMessagesHeaders(
-	httpReq *http.Request,
-	req Request,
-	token string,
-	flavor WireFlavor,
-) map[string]struct{} {
+func (c *Client) applyMessagesHeaders(httpReq *http.Request, req Request, token string, flavor WireFlavor) map[string]struct{} {
 	httpReq.Header.Set("Authorization", "Bearer "+token)
 	// Prefer the learned baseline's anthropic-version; the loader
 	// validates it is non-empty so the flavor wins in practice. Fall
@@ -536,7 +378,6 @@ func (c *Client) applyMessagesHeaders(
 	if anthropicVersion == "" {
 		anthropicVersion = c.cfg.OAuthAnthropicVersion
 	}
-
 	httpReq.Header.Set("Anthropic-Version", anthropicVersion)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
@@ -555,41 +396,30 @@ func (c *Client) applyMessagesHeaders(
 		if _, skip := dropped[strings.ToLower(key)]; skip {
 			return
 		}
-
 		httpReq.Header.Set(key, value)
 	}
 
 	beta := flavor.AnthropicBeta
 	filtered, removed := wireflags.Suppress(beta, c.cfg.StripWireFlags)
 	if len(removed) > 0 {
-		anthropicRequestLog.Logger().DebugContext(
-			httpReq.Context(),
-			"anthropic.messages.wire_flags_stripped",
-			"concern",
-			"adapter.providers.anthropic.request",
-			"subcomponent",
-			"anthropic",
-			"model",
-			req.Model,
-			"removed",
-			removed,
+		anthropicRequestLog.Logger().DebugContext(httpReq.Context(), "anthropic.messages.wire_flags_stripped",
+			"concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
+			"model", req.Model,
+			"removed", removed,
 		)
 		beta = filtered
 	}
-
 	setHard("Anthropic-Beta", beta)
 
 	userAgent := flavor.UserAgent
 	if v := strings.TrimSpace(c.cfg.UserAgent); v != "" {
 		userAgent = v
 	}
-
 	setHard("User-Agent", userAgent)
 
 	for _, h := range freeIdentityHeaders(c, flavor) {
 		httpReq.Header.Set(h.key, h.value)
 	}
-
 	return dropped
 }
 
@@ -598,24 +428,14 @@ func (c *Client) applyMessagesHeaders(
 // timestamp so downstream logging measures the retry duration. When the
 // initial response is not 401 or the retry is skipped or fails, the original
 // response and timestamp pass through unchanged.
-func (c *Client) maybeRetryOn401(
-	ctx context.Context,
-	req Request,
-	body []byte,
-	token string,
-	flavor WireFlavor,
-	resp *http.Response,
-	postStarted time.Time,
-) (*http.Response, time.Time) {
+func (c *Client) maybeRetryOn401(ctx context.Context, req Request, body []byte, token string, flavor WireFlavor, resp *http.Response, postStarted time.Time) (*http.Response, time.Time) {
 	if resp.StatusCode != http.StatusUnauthorized {
 		return resp, postStarted
 	}
-
 	retried, retryDuration, retryErr := c.retryAfter401(ctx, req, body, token, flavor, resp)
 	if retryErr != nil || retried == nil {
 		return resp, postStarted
 	}
-
 	return retried, clock.Now().Add(-retryDuration)
 }
 
@@ -625,16 +445,12 @@ func (c *Client) maybeRetryOn401(
 // [http.Request]. A nil return value means the retry was skipped (oauth
 // reported the token is unchanged) or failed; the caller falls through to the
 // existing classifier with the original 401 in that case.
-func (c *Client) retryAfter401(
-	ctx context.Context,
-	req Request,
-	body []byte,
-	failedToken string,
-	flavor WireFlavor,
-	originalResp *http.Response,
-) (*http.Response, time.Duration, error) {
+func (c *Client) retryAfter401(ctx context.Context, req Request, body []byte, failedToken string, flavor WireFlavor, originalResp *http.Response) (*http.Response, time.Duration, error) {
 	log := anthropicRequestLog.Logger()
-	logAuthRetryAttempt(ctx, log, req.Model)
+	log.InfoContext(ctx, "anthropic.messages.auth_retry_attempted", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
+		"model", req.Model,
+		"attempt", 1,
+	)
 	// Read and close the original 401 body, then replace it with a reader
 	// over the saved bytes. The retry path consumes the underlying
 	// connection either way; the in-memory copy lets the fall-through
@@ -646,54 +462,25 @@ func (c *Client) retryAfter401(
 
 	refresher, ok := c.oauth.(OAuthRefresher)
 	if !ok {
-		log.WarnContext(
-			ctx,
-			"anthropic.messages.auth_retry_skipped",
-			"concern",
-			"adapter.providers.anthropic.request",
-			"subcomponent",
-			"anthropic",
-			"model",
-			req.Model,
-			"reason",
-			"auth_refresh_unavailable",
+		log.WarnContext(ctx, "anthropic.messages.auth_retry_skipped", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
+			"model", req.Model,
+			"reason", "auth_refresh_unavailable",
 		)
-
 		return nil, 0, errors.New("auth refresh unavailable")
 	}
-
 	freshToken, recoverErr := refresher.ForceRefresh(ctx)
 	if recoverErr != nil {
-		log.WarnContext(
-			ctx,
-			"anthropic.messages.auth_retry_skipped",
-			"concern",
-			"adapter.providers.anthropic.request",
-			"subcomponent",
-			"anthropic",
-			"model",
-			req.Model,
-			"err",
-			recoverErr.Error(),
+		log.WarnContext(ctx, "anthropic.messages.auth_retry_skipped", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
+			"model", req.Model,
+			"err", recoverErr.Error(),
 		)
-
 		return nil, 0, fmt.Errorf("anthropic auth-retry recover: %w", recoverErr)
 	}
-
 	if freshToken == "" || freshToken == failedToken {
-		log.WarnContext(
-			ctx,
-			"anthropic.messages.auth_retry_skipped",
-			"concern",
-			"adapter.providers.anthropic.request",
-			"subcomponent",
-			"anthropic",
-			"model",
-			req.Model,
-			"reason",
-			"token_unchanged",
+		log.WarnContext(ctx, "anthropic.messages.auth_retry_skipped", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
+			"model", req.Model,
+			"reason", "token_unchanged",
 		)
-
 		return nil, 0, errors.New("token unchanged after recovery")
 	}
 
@@ -701,75 +488,27 @@ func (c *Client) retryAfter401(
 	if buildErr != nil {
 		return nil, 0, buildErr
 	}
-
 	retryStarted := clock.Now()
 	retryResp, retryErr := c.http.Do(retryReq)
 	if retryResp != nil {
 		decodeResponseBody(retryResp)
 	}
-
 	if retryErr != nil {
-		log.WarnContext(
-			ctx,
-			"anthropic.messages.auth_retry_post_failed",
-			"concern",
-			"adapter.providers.anthropic.request",
-			"subcomponent",
-			"anthropic",
-			"model",
-			req.Model,
-			"err",
-			retryErr.Error(),
+		log.WarnContext(ctx, "anthropic.messages.auth_retry_post_failed", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
+			"model", req.Model,
+			"err", retryErr.Error(),
 		)
-
 		return nil, 0, fmt.Errorf("anthropic auth-retry post: %w", retryErr)
 	}
-
 	if retryResp.StatusCode != http.StatusUnauthorized {
-		logAuthRetryRecovered(ctx, log, req.Model, retryResp, retryStarted)
+		log.InfoContext(ctx, "anthropic.messages.auth_retry_recovered", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
+			"model", req.Model,
+			"attempt", 1,
+			"status", retryResp.StatusCode,
+			"duration_ms", clock.Since(retryStarted).Milliseconds(),
+		)
 	}
-
 	return retryResp, clock.Since(retryStarted), nil
-}
-
-func logAuthRetryAttempt(ctx context.Context, log *slog.Logger, model string) {
-	log.InfoContext(
-		ctx,
-		"anthropic.messages.auth_retry_attempted",
-		"concern",
-		"adapter.providers.anthropic.request",
-		"subcomponent",
-		"anthropic",
-		"model",
-		model,
-		"attempt",
-		1,
-	)
-}
-
-func logAuthRetryRecovered(
-	ctx context.Context,
-	log *slog.Logger,
-	model string,
-	retryResp *http.Response,
-	retryStarted time.Time,
-) {
-	log.InfoContext(
-		ctx,
-		"anthropic.messages.auth_retry_recovered",
-		"concern",
-		"adapter.providers.anthropic.request",
-		"subcomponent",
-		"anthropic",
-		"model",
-		model,
-		"attempt",
-		1,
-		"status",
-		retryResp.StatusCode,
-		"duration_ms",
-		clock.Since(retryStarted).Milliseconds(),
-	)
 }
 
 // captureTee is the [io.ReadCloser] shim the egress capture wraps around
@@ -784,11 +523,7 @@ type captureTee struct {
 	closed  bool
 }
 
-func newCaptureTee(
-	inner io.ReadCloser,
-	capBytes int,
-	onClose func(captured []byte, truncated bool, totalRead int),
-) *captureTee {
+func newCaptureTee(inner io.ReadCloser, capBytes int, onClose func(captured []byte, truncated bool, totalRead int)) *captureTee {
 	return &captureTee{
 		inner:   inner,
 		buf:     capture.NewCappedBuffer(capBytes),
@@ -808,25 +543,15 @@ func (t *captureTee) Read(p []byte) (int, error) {
 	if n > 0 {
 		_, _ = t.buf.Write(p[:n])
 	}
-
 	if err == nil {
 		return n, nil
 	}
-
 	if errors.Is(err, io.EOF) {
 		return n, io.EOF
 	}
-
-	slog.Warn(
-		"anthropic.sse.tee_read_failed",
-		"concern",
-		"adapter.providers.anthropic.sse",
-		"subcomponent",
-		"anthropic",
-		"err",
-		err.Error(),
+	slog.Warn("anthropic.sse.tee_read_failed", "concern", "adapter.providers.anthropic.sse", "subcomponent", "anthropic",
+		"err", err.Error(),
 	)
-
 	return n, fmt.Errorf("captureTee read: %w", err)
 }
 
@@ -842,21 +567,12 @@ func (t *captureTee) Close() error {
 			t.onClose(t.buf.Bytes(), t.buf.Truncated(), t.buf.TotalRead())
 		}
 	}
-
 	if err == nil {
 		return nil
 	}
-
-	slog.Warn(
-		"anthropic.wire_capture.tee_close_failed",
-		"concern",
-		"adapter.providers.anthropic.wire_capture",
-		"subcomponent",
-		"anthropic",
-		"err",
-		err.Error(),
+	slog.Warn("anthropic.wire_capture.tee_close_failed", "concern", "adapter.providers.anthropic.wire_capture", "subcomponent", "anthropic",
+		"err", err.Error(),
 	)
-
 	return fmt.Errorf("captureTee close: %w", err)
 }
 
@@ -866,16 +582,13 @@ func probeDropSet() map[string]struct{} {
 	if raw == "" {
 		return nil
 	}
-
 	out := map[string]struct{}{}
-
 	for part := range strings.SplitSeq(raw, ",") {
 		name := strings.ToLower(strings.TrimSpace(part))
 		if name != "" {
 			out[name] = struct{}{}
 		}
 	}
-
 	return out
 }
 
@@ -892,15 +605,11 @@ type freeHeader struct {
 // compiled-in fallback: a missing, invalid, or unseeded baseline error
 // returns a typed sentinel-bearing error so the caller can map it to an
 // HTTP 503.
-func (c *Client) activeFlavor(
-	ctx context.Context,
-	featureVector WireFlavorFeatureVector,
-) (WireFlavor, error) {
+func (c *Client) activeFlavor(ctx context.Context, featureVector WireFlavorFeatureVector) (WireFlavor, error) {
 	var zero WireFlavor
 	if c.flavorLoader == nil {
 		c.flavorLoader = newWireFlavorsLoader()
 	}
-
 	flavors, err := c.flavorLoader.Load(ctx, c.cfg.CaptureStore)
 	if err != nil {
 		// The loader logs the specific cause on its concern; return the
@@ -908,38 +617,20 @@ func (c *Client) activeFlavor(
 		// can map it to an operator-actionable HTTP 503.
 		return zero, err
 	}
-
 	flavor, err := selectInteractiveFlavor(flavors, featureVector)
 	if err != nil {
 		if errors.Is(err, ErrBaselineInvalid) {
-			slog.WarnContext(
-				ctx,
-				"anthropic.wire_baseline.no_interactive_flavor",
-				"concern",
-				wireBaselineConcern,
-				"subcomponent",
-				"anthropic",
-				"model",
-				featureVector.ModelID,
+			slog.WarnContext(ctx, "anthropic.wire_baseline.no_interactive_flavor", "concern", wireBaselineConcern, "subcomponent", "anthropic",
+				"model", featureVector.ModelID,
 			)
 		}
-
 		if errors.Is(err, ErrFlavorUnseeded) {
-			slog.WarnContext(
-				ctx,
-				"anthropic.wire_baseline.flavor_unseeded",
-				"concern",
-				wireBaselineConcern,
-				"subcomponent",
-				"anthropic",
-				"model",
-				featureVector.ModelID,
+			slog.WarnContext(ctx, "anthropic.wire_baseline.flavor_unseeded", "concern", wireBaselineConcern, "subcomponent", "anthropic",
+				"model", featureVector.ModelID,
 			)
 		}
-
 		return zero, err
 	}
-
 	return flavor, nil
 }
 
@@ -970,13 +661,10 @@ func freeIdentityHeaders(c *Client, flavor WireFlavor) []freeHeader {
 		case stainlessHeaderTimeout:
 			val = c.stainlessTimeout()
 		}
-
 		out = append(out, freeHeader{key: h.Name, value: val})
 	}
-
 	// Runtime-only header not present in the captured flavor (per-process UUID).
 	out = append(out, freeHeader{key: "X-Claude-Code-Session-Id", value: sessionID})
-
 	return out
 }
 
@@ -984,7 +672,6 @@ func (c *Client) stainlessTimeout() string {
 	if c.http.Timeout == 0 {
 		return "600"
 	}
-
 	return strconv.Itoa(int(c.http.Timeout / time.Second))
 }
 
@@ -1036,25 +723,14 @@ func decodeResponseBody(resp *http.Response) {
 	if enc == "" || enc == "identity" {
 		return
 	}
-
 	switch httpContentEncoding(enc) {
 	case httpContentEncodingGzip:
-		gzipReader, err := gzip.NewReader(resp.Body)
+		zr, err := gzip.NewReader(resp.Body)
 		if err != nil {
-			anthropicRequestLog.Logger().Warn(
-				"anthropic.response.gzip_decode_failed",
-				"concern",
-				"adapter.providers.anthropic.request",
-				"subcomponent",
-				"anthropic",
-				"err",
-				err.Error(),
-			)
-
+			anthropicRequestLog.Logger().Warn("anthropic.response.gzip_decode_failed", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic", "err", err.Error())
 			return
 		}
-
-		resp.Body = &decodedBody{r: gzipReader, src: resp.Body}
+		resp.Body = &decodedBody{r: zr, src: resp.Body}
 		resp.Header.Del("Content-Encoding")
 	case httpContentEncodingDeflate:
 		fr := flate.NewReader(resp.Body)
@@ -1063,15 +739,7 @@ func decodeResponseBody(resp *http.Response) {
 	default:
 		// br, zstd, etc. Keep raw bytes; callers will see binary in
 		// the slog body field if the server actually picks one of these.
-		anthropicRequestLog.Logger().Warn(
-			"anthropic.response.unsupported_encoding",
-			"concern",
-			"adapter.providers.anthropic.request",
-			"subcomponent",
-			"anthropic",
-			"encoding",
-			enc,
-		)
+		anthropicRequestLog.Logger().Warn("anthropic.response.unsupported_encoding", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic", "encoding", enc)
 	}
 }
 
@@ -1098,29 +766,13 @@ func (d *decodedBody) Close() error {
 	rerr := d.r.Close()
 	serr := d.src.Close()
 	if rerr != nil {
-		slog.Warn(
-			"adapter.anthropic.decoded_body.reader_close_failed",
-			"concern",
-			"adapter.providers.anthropic.request",
-			"err",
-			rerr,
-		)
-
+		slog.Warn("adapter.anthropic.decoded_body.reader_close_failed", "concern", "adapter.providers.anthropic.request", "err", rerr)
 		return fmt.Errorf("close decoded anthropic reader: %w", rerr)
 	}
-
 	if serr != nil {
-		slog.Warn(
-			"adapter.anthropic.decoded_body.source_close_failed",
-			"concern",
-			"adapter.providers.anthropic.request",
-			"err",
-			serr,
-		)
-
+		slog.Warn("adapter.anthropic.decoded_body.source_close_failed", "concern", "adapter.providers.anthropic.request", "err", serr)
 		return fmt.Errorf("close anthropic source body: %w", serr)
 	}
-
 	return nil
 }
 
@@ -1131,7 +783,6 @@ func (d *decodedBody) Close() error {
 func readDecodedBody(resp *http.Response) []byte {
 	defer func() { _ = resp.Body.Close() }()
 	b, _ := io.ReadAll(resp.Body)
-
 	return b
 }
 
@@ -1149,6 +800,5 @@ func redactedOutboundHeaders(h http.Header) map[string]string {
 			out[lk] = joined
 		}
 	}
-
 	return out
 }

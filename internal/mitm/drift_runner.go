@@ -28,21 +28,15 @@ type DriftCheckOptions struct {
 // that is the refresher's job. Returns the outcome and a non-nil error on
 // infrastructure failure. The outcome's Diverged field reports whether the
 // candidate disagreed with the stored baseline.
-func RunDriftCheck(
-	ctx context.Context,
-	store *capture.Store,
-	opts DriftCheckOptions,
-) (DriftOutcome, error) {
+func RunDriftCheck(ctx context.Context, store *capture.Store, opts DriftCheckOptions) (DriftOutcome, error) {
 	log := opts.Log
 	if log == nil {
 		log = slog.Default()
 	}
-
 	upstream := strings.TrimSpace(opts.Upstream)
 	if upstream == "" {
 		return DriftOutcome{}, fmt.Errorf("drift check: upstream is required")
 	}
-
 	if store == nil {
 		return DriftOutcome{}, fmt.Errorf("drift check: capture store is required")
 	}
@@ -62,30 +56,18 @@ func RunDriftCheck(
 	if err != nil {
 		return outcome, fmt.Errorf("drift check: read shapes: %w", err)
 	}
-
 	versionTag := "live-" + startedAt.Format("20060102T150405")
-	candidate, err := ExtractSnapshotFromShapes(
-		shapes,
-		driftSnapshotOptions(upstream, versionTag, opts),
-	)
+	candidate, err := ExtractSnapshotFromShapes(shapes, SnapshotOptions{
+		UpstreamName:               upstream,
+		UpstreamVersion:            versionTag,
+		IncludeUserAgentSubstrings: opts.IncludeUA,
+		ExcludeUserAgentSubstrings: opts.ExcludeUA,
+		RequireBodyKeys:            opts.RequireBodyKeys,
+		ForbidBodyKeys:             opts.ForbidBodyKeys, MaxBodyDepth: 0, EnumThreshold: 0,
+	})
 	if err != nil {
-		log.WarnContext(
-			ctx,
-			"mitm.drift.no_usable_shapes",
-			"concern",
-			"providers.mitm.wire",
-			"upstream",
-			upstream,
-			"err",
-			err,
-		)
-		store.RecordCheck(capture.DriftCheck{
-			Timestamp: startedAt,
-			Upstream:  upstream,
-			Diverged:  false,
-			Summary:   "no usable shapes",
-		})
-
+		log.WarnContext(ctx, "mitm.drift.no_usable_shapes", "concern", "providers.mitm.wire", "upstream", upstream, "err", err)
+		store.RecordCheck(capture.DriftCheck{Timestamp: startedAt, Upstream: upstream, Diverged: false, Summary: "no usable shapes"})
 		return outcome, nil
 	}
 
@@ -93,51 +75,19 @@ func RunDriftCheck(
 	if err != nil {
 		return outcome, fmt.Errorf("drift check: read current baseline: %w", err)
 	}
-
 	if !hasExisting {
 		outcome.Summary = "no baseline for upstream=" + upstream
-		store.RecordCheck(capture.DriftCheck{
-			Timestamp: startedAt,
-			Upstream:  upstream,
-			Diverged:  false,
-			Summary:   outcome.Summary,
-		})
-
+		store.RecordCheck(capture.DriftCheck{Timestamp: startedAt, Upstream: upstream, Diverged: false, Summary: outcome.Summary})
 		return outcome, nil
 	}
-
 	existing, err := unmarshalSnapshot(existingRaw)
 	if err != nil {
 		return outcome, fmt.Errorf("drift check: decode current baseline: %w", err)
 	}
-
 	report := DiffSnapshots(existing, candidate)
 	outcome.Report = &report
 	outcome.Diverged = report.HasDiverged()
 	outcome.Summary = report.SummaryString()
-	store.RecordCheck(capture.DriftCheck{
-		Timestamp: startedAt,
-		Upstream:  upstream,
-		Diverged:  outcome.Diverged,
-		Summary:   outcome.Summary,
-	})
-
+	store.RecordCheck(capture.DriftCheck{Timestamp: startedAt, Upstream: upstream, Diverged: outcome.Diverged, Summary: outcome.Summary})
 	return outcome, nil
-}
-
-func driftSnapshotOptions(
-	upstream string,
-	versionTag string,
-	opts DriftCheckOptions,
-) SnapshotOptions {
-	return SnapshotOptions{
-		UpstreamName:               upstream,
-		UpstreamVersion:            versionTag,
-		IncludeUserAgentSubstrings: opts.IncludeUA,
-		ExcludeUserAgentSubstrings: opts.ExcludeUA,
-		RequireBodyKeys:            opts.RequireBodyKeys,
-		ForbidBodyKeys:             opts.ForbidBodyKeys,
-		MaxBodyDepth:               0,
-		EnumThreshold:              0,
-	}
 }

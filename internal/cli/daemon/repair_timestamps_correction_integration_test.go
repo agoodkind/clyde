@@ -41,166 +41,51 @@ func writeCorrectionSources(t *testing.T, dataRoot string, projects string) {
 	writeCorrectionSourcesOmitting(t, dataRoot, projects, nil)
 }
 
-func writeCorrectionSourcesOmitting(
-	t *testing.T,
-	dataRoot string,
-	projects string,
-	omitted map[int]bool,
-) {
+func writeCorrectionSourcesOmitting(t *testing.T, dataRoot string, projects string, omitted map[int]bool) {
 	t.Helper()
 	marshal := combinedCopyJSON(t)
 	commandArgs := func(command string) json.RawMessage {
 		return json.RawMessage(marshal(json.Marshal(userBoundaryArgs{Command: command})))
 	}
 	toolFormer := func(callID string) *userBoundaryToolFormer {
-		return &userBoundaryToolFormer{
-			Name:       "run_terminal_command_v2",
-			RawArgs:    "",
-			Status:     "completed",
-			ToolCallID: callID,
-		}
+		return &userBoundaryToolFormer{Name: "run_terminal_command_v2", RawArgs: "", Status: "completed", ToolCallID: callID}
 	}
-	writeNativeComposerStoreOmitting(
-		t,
-		dataRoot,
-		correctionComposerID,
-		[]userBoundaryNativeMessage{
-			{
-				Role: "user",
-				Content: []userBoundaryNativePart{
-					{
-						Type:       "text",
-						Text:       correctionQuestion,
-						ToolCallID: "",
-						ToolName:   "",
-						Args:       nil,
-					},
-				},
-			},
-			{
-				Role: "assistant",
-				Content: []userBoundaryNativePart{
-					{
-						Type:       "tool-call",
-						Text:       "",
-						ToolCallID: "call_a",
-						ToolName:   "Shell",
-						Args:       commandArgs(userBoundaryGit),
-					},
-				},
-			},
-			{
-				Role: "assistant",
-				Content: []userBoundaryNativePart{
-					{Type: "text", Text: correctionReply, ToolCallID: "", ToolName: "", Args: nil},
-				},
-			},
-			{
-				Role: "assistant",
-				Content: []userBoundaryNativePart{
-					{
-						Type:       "tool-call",
-						Text:       "",
-						ToolCallID: "call_b",
-						ToolName:   "Shell",
-						Args:       commandArgs(userBoundaryTest),
-					},
-				},
-			},
-		},
-		omitted,
-		[]userBoundaryBubble{
-			{
-				Version:        3,
-				Type:           1,
-				BubbleID:       "u1",
-				Text:           correctionQuestion,
-				CreatedAt:      "2026-05-20T10:00:00.000Z",
-				ToolFormerData: nil,
-			},
-			{
-				Version:        3,
-				Type:           2,
-				BubbleID:       "t1",
-				Text:           "",
-				CreatedAt:      "2026-05-20T10:01:00.000Z",
-				ToolFormerData: toolFormer("call_a"),
-			},
-			{
-				Version:        3,
-				Type:           2,
-				BubbleID:       "a1",
-				Text:           correctionReply,
-				CreatedAt:      "2026-05-20T10:02:00.000Z",
-				ToolFormerData: nil,
-			},
-			{
-				Version:        3,
-				Type:           2,
-				BubbleID:       "t2",
-				Text:           "",
-				CreatedAt:      "2026-05-20T10:03:00.000Z",
-				ToolFormerData: toolFormer("call_b"),
-			},
-		},
-		[]userBoundaryBubble{
-			{
-				Version:        3,
-				Type:           2,
-				BubbleID:       "copy",
-				Text:           correctionReply,
-				CreatedAt:      "2026-05-20T12:00:00.000Z",
-				ToolFormerData: nil,
-			},
-		},
-	)
+	writeNativeComposerStoreOmitting(t, dataRoot, correctionComposerID, []userBoundaryNativeMessage{
+		{Role: "user", Content: []userBoundaryNativePart{{Type: "text", Text: correctionQuestion, ToolCallID: "", ToolName: "", Args: nil}}},
+		{Role: "assistant", Content: []userBoundaryNativePart{{Type: "tool-call", Text: "", ToolCallID: "call_a", ToolName: "Shell", Args: commandArgs(userBoundaryGit)}}},
+		{Role: "assistant", Content: []userBoundaryNativePart{{Type: "text", Text: correctionReply, ToolCallID: "", ToolName: "", Args: nil}}},
+		{Role: "assistant", Content: []userBoundaryNativePart{{Type: "tool-call", Text: "", ToolCallID: "call_b", ToolName: "Shell", Args: commandArgs(userBoundaryTest)}}},
+	}, omitted, []userBoundaryBubble{
+		{Version: 3, Type: 1, BubbleID: "u1", Text: correctionQuestion, CreatedAt: "2026-05-20T10:00:00.000Z", ToolFormerData: nil},
+		{Version: 3, Type: 2, BubbleID: "t1", Text: "", CreatedAt: "2026-05-20T10:01:00.000Z", ToolFormerData: toolFormer("call_a")},
+		{Version: 3, Type: 2, BubbleID: "a1", Text: correctionReply, CreatedAt: "2026-05-20T10:02:00.000Z", ToolFormerData: nil},
+		{Version: 3, Type: 2, BubbleID: "t2", Text: "", CreatedAt: "2026-05-20T10:03:00.000Z", ToolFormerData: toolFormer("call_b")},
+	}, []userBoundaryBubble{
+		{Version: 3, Type: 2, BubbleID: "copy", Text: correctionReply, CreatedAt: "2026-05-20T12:00:00.000Z", ToolFormerData: nil},
+	})
 	textLine := func(role string, text string) string {
 		var line userBoundaryLine
 		line.Role = role
-		line.Message.Content = []userBoundaryLinePart{
-			{Type: "text", Text: text, Name: "", Input: nil},
-		}
+		line.Message.Content = []userBoundaryLinePart{{Type: "text", Text: text, Name: "", Input: nil}}
 		return marshal(json.Marshal(line))
 	}
 	toolLine := func(command string) string {
 		var line userBoundaryLine
 		line.Role = "assistant"
-		line.Message.Content = []userBoundaryLinePart{
-			{Type: "tool_use", Text: "", Name: "Shell", Input: commandArgs(command)},
-		}
+		line.Message.Content = []userBoundaryLinePart{{Type: "tool_use", Text: "", Name: "Shell", Input: commandArgs(command)}}
 		return marshal(json.Marshal(line))
 	}
-	lines := []string{
-		textLine("user", correctionQuestion),
-		toolLine(userBoundaryGit),
-		textLine("assistant", correctionReply),
-		toolLine(userBoundaryTest),
-	}
-	transcriptPath := filepath.Join(
-		projects,
-		repairProjectKey,
-		"agent-transcripts",
-		correctionComposerID,
-		correctionComposerID+".jsonl",
-	)
+	lines := []string{textLine("user", correctionQuestion), toolLine(userBoundaryGit), textLine("assistant", correctionReply), toolLine(userBoundaryTest)}
+	transcriptPath := filepath.Join(projects, repairProjectKey, "agent-transcripts", correctionComposerID, correctionComposerID+".jsonl")
 	if err := os.MkdirAll(filepath.Dir(transcriptPath), 0o755); err != nil {
 		t.Fatalf("cannot write correction transcript: %v", err)
 	}
-	if err := os.WriteFile(
-		transcriptPath,
-		[]byte(strings.Join(lines, "\n")+"\n"),
-		0o600,
-	); err != nil {
+	if err := os.WriteFile(transcriptPath, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatalf("cannot write correction transcript: %v", err)
 	}
 }
 
-func correctionManifestEntry(
-	t *testing.T,
-	id string,
-	conversationID string,
-	row sharedStoredRow,
-) correctionManifestRow {
+func correctionManifestEntry(t *testing.T, id string, conversationID string, row sharedStoredRow) correctionManifestRow {
 	t.Helper()
 	var metadata struct {
 		TimestampUnix *int64 `json:"timestamp_unix"`
@@ -215,12 +100,8 @@ func correctionManifestEntry(
 	sum := sha256.Sum256([]byte(row.metadata))
 	stamp := row.timestampUnix
 	return correctionManifestRow{
-		RowID:                         id,
-		ConversationID:                conversationID,
-		ExpectedTimestampUnix:         &stamp,
-		ExpectedMetadataTimestampUnix: &metadataStamp,
-		ExpectedMetadataHash:          hex.EncodeToString(sum[:]),
-		ExpectedVectorKey:             row.vectorKey,
+		RowID: id, ConversationID: conversationID, ExpectedTimestampUnix: &stamp, ExpectedMetadataTimestampUnix: &metadataStamp,
+		ExpectedMetadataHash: hex.EncodeToString(sum[:]), ExpectedVectorKey: row.vectorKey,
 	}
 }
 
@@ -237,12 +118,7 @@ func writeCorrectionManifestEntries(t *testing.T, path string, entries []correct
 	}
 }
 
-func writeCorrectionManifest(
-	t *testing.T,
-	path string,
-	conversationID string,
-	rows map[string]sharedStoredRow,
-) {
+func writeCorrectionManifest(t *testing.T, path string, conversationID string, rows map[string]sharedStoredRow) {
 	t.Helper()
 	entries := make([]correctionManifestRow, 0, len(rows))
 	for id, row := range rows {
@@ -267,11 +143,7 @@ func correctionRowByContent(t *testing.T, rows map[string]sharedStoredRow, conte
 func correctionEnvironment(t *testing.T) (string, string) {
 	t.Helper()
 	address, home := correctionHome(t)
-	writeCorrectionSources(
-		t,
-		filepath.Join(home, "cursor-data"),
-		filepath.Join(home, "cursor-projects"),
-	)
+	writeCorrectionSources(t, filepath.Join(home, "cursor-data"), filepath.Join(home, "cursor-projects"))
 	return address, home
 }
 
@@ -305,22 +177,15 @@ func correctionDocuments(t *testing.T, ctx context.Context) (string, []semsearch
 	}
 	var record conversation.Record
 	for _, entry := range stamped {
-		if entry.Record.NativeID == correctionComposerID &&
-			strings.HasSuffix(entry.Record.ArtifactPath, ".jsonl") {
+		if entry.Record.NativeID == correctionComposerID && strings.HasSuffix(entry.Record.ArtifactPath, ".jsonl") {
 			record = entry.Record
 		}
 	}
 	if record.ID == "" {
-		t.Fatalf(
-			"cannot find the correction transcript among indexed conversation records; record count: %d",
-			len(stamped),
-		)
+		t.Fatalf("cannot find the correction transcript among indexed conversation records; record count: %d", len(stamped))
 	}
 	kinds := backfillTestContentKinds(t)
-	messages, err := index.LoadMessagesWithOptions(
-		record,
-		daemonsvc.SemanticConversationLoadOptions(kinds),
-	)
+	messages, err := index.LoadMessagesWithOptions(record, daemonsvc.SemanticConversationLoadOptions(kinds))
 	if err != nil {
 		t.Fatalf("cannot load correction transcript messages: %v", err)
 	}
@@ -331,32 +196,16 @@ func correctionDocuments(t *testing.T, ctx context.Context) (string, []semsearch
 	return record.ID, built.Docs
 }
 
-func seedCorrectionDocuments(
-	t *testing.T,
-	ctx context.Context,
-	address string,
-	conversationID string,
-	docs []semsearch.SemDoc,
-) {
+func seedCorrectionDocuments(t *testing.T, ctx context.Context, address string, conversationID string, docs []semsearch.SemDoc) {
 	t.Helper()
 	client := openRepairClient(t, address, vectorsearch.LayoutShared)
-	if _, err := client.UpsertConversationDocuments(
-		ctx,
-		repairCollectionID,
-		docs,
-		[]semsearch.Fingerprint{{ConversationID: conversationID, Value: "correction"}},
-	); err != nil {
+	if _, err := client.UpsertConversationDocuments(ctx, repairCollectionID, docs, []semsearch.Fingerprint{{ConversationID: conversationID, Value: "correction"}}); err != nil {
 		t.Fatalf("cannot insert initial correction documents into Milvus: %v", err)
 	}
 	time.Sleep(repairVisibilityWait)
 }
 
-func runCorrectionCommand(
-	t *testing.T,
-	ctx context.Context,
-	address string,
-	arguments ...string,
-) (string, error) {
+func runCorrectionCommand(t *testing.T, ctx context.Context, address string, arguments ...string) (string, error) {
 	t.Helper()
 	baseURL := os.Getenv(repairEmbeddingBaseURLEnv)
 	if baseURL == "" {
@@ -387,12 +236,7 @@ func runCorrectionCommand(
 // TestTimestampCorrectionReportsAMissingNativeRecordAsALoadFailure checks that timestamp correction reports a source load failure when the native store does not contain a required record.
 func TestTimestampCorrectionReportsAMissingNativeRecordAsALoadFailure(t *testing.T) {
 	address, home := correctionHome(t)
-	writeCorrectionSourcesOmitting(
-		t,
-		filepath.Join(home, "cursor-data"),
-		filepath.Join(home, "cursor-projects"),
-		map[int]bool{3: true},
-	)
+	writeCorrectionSourcesOmitting(t, filepath.Join(home, "cursor-data"), filepath.Join(home, "cursor-projects"), map[int]bool{3: true})
 	ctx := context.Background()
 	conversationID, built := correctionDocuments(t, ctx)
 	seedCorrectionDocuments(t, ctx, address, conversationID, wrongDateDocuments(built))
@@ -401,39 +245,14 @@ func TestTimestampCorrectionReportsAMissingNativeRecordAsALoadFailure(t *testing
 	writeCorrectionManifest(t, manifestPath, conversationID, seeded)
 	evidencePath := filepath.Join(home, "evidence.jsonl")
 	progressPath := filepath.Join(home, "progress.json")
-	output, err := runCorrectionCommand(
-		t,
-		ctx,
-		address,
-		"--correction-manifest",
-		manifestPath,
-		"--evidence-file",
-		evidencePath,
-		"--execute",
-		"--limit",
-		"1",
-		"--progress-file",
-		progressPath,
-	)
+	output, err := runCorrectionCommand(t, ctx, address, "--correction-manifest", manifestPath, "--evidence-file", evidencePath, "--execute", "--limit", "1", "--progress-file", progressPath)
 	if err != nil {
-		t.Fatalf(
-			"timestamp correction command failed while checking a missing native record: %v",
-			err,
-		)
+		t.Fatalf("timestamp correction command failed while checking a missing native record: %v", err)
 	}
-	requireCommandOutput(
-		t,
-		output,
-		"1 conversations that failed to load",
-		vectorsearch.CorrectionSourceLoadFailed+"=",
-		"written=0",
-	)
+	requireCommandOutput(t, output, "1 conversations that failed to load", vectorsearch.CorrectionSourceLoadFailed+"=", "written=0")
 	progress := readProgress(t, progressPath)
 	if progress.Complete || !slices.Equal(progress.Failed, []string{conversationID}) {
-		t.Fatalf(
-			"progress must remain incomplete and record only the conversation that failed to load; progress: %+v",
-			progress,
-		)
+		t.Fatalf("progress must remain incomplete and record only the conversation that failed to load; progress: %+v", progress)
 	}
 	evidence, err := os.ReadFile(evidencePath)
 	if err != nil {
@@ -444,22 +263,14 @@ func TestTimestampCorrectionReportsAMissingNativeRecordAsALoadFailure(t *testing
 		if err := json.Unmarshal([]byte(line), &entry); err != nil {
 			t.Fatalf("cannot decode correction evidence %q: %v", line, err)
 		}
-		if entry.SourceOutcome != vectorsearch.CorrectionSourceLoadFailed ||
-			entry.Correction != vectorsearch.CorrectionNotEvaluated ||
-			entry.Written {
-			t.Fatalf(
-				"correction evidence must report a source load failure and indicate that correction did not evaluate or write the row; evidence: %+v",
-				entry,
-			)
+		if entry.SourceOutcome != vectorsearch.CorrectionSourceLoadFailed || entry.Correction != vectorsearch.CorrectionNotEvaluated || entry.Written {
+			t.Fatalf("correction evidence must report a source load failure and indicate that correction did not evaluate or write the row; evidence: %+v", entry)
 		}
 	}
 	time.Sleep(repairVisibilityWait)
 	after, afterVectors := sharedSnapshot(t, address)
-	if !maps.Equal(seeded, after) ||
-		!maps.EqualFunc(seededVectors, afterVectors, slices.Equal[[]uint32]) {
-		t.Fatal(
-			"timestamp correction changed stored rows or vector bytes after a source load failure",
-		)
+	if !maps.Equal(seeded, after) || !maps.EqualFunc(seededVectors, afterVectors, slices.Equal[[]uint32]) {
+		t.Fatal("timestamp correction changed stored rows or vector bytes after a source load failure")
 	}
 }
 
@@ -467,11 +278,7 @@ func requireCommandOutput(t *testing.T, output string, wants ...string) {
 	t.Helper()
 	for _, want := range wants {
 		if !strings.Contains(output, want) {
-			t.Fatalf(
-				"command output does not contain the expected text; expected text and output: %q, %q",
-				want,
-				output,
-			)
+			t.Fatalf("command output does not contain the expected text; expected text and output: %q, %q", want, output)
 		}
 	}
 }
@@ -504,12 +311,7 @@ func TestTimestampCorrectionRewritesManifestRowsAndKeepsGuardsSafe(t *testing.T)
 	manifestPath := filepath.Join(home, "manifest.jsonl")
 	writeCorrectionManifest(t, manifestPath, conversationID, seeded)
 	otherManifestPath := filepath.Join(home, "other-manifest.jsonl")
-	writeCorrectionManifest(
-		t,
-		otherManifestPath,
-		conversationID,
-		map[string]sharedStoredRow{replyID: seeded[replyID]},
-	)
+	writeCorrectionManifest(t, otherManifestPath, conversationID, map[string]sharedStoredRow{replyID: seeded[replyID]})
 	progressPath := filepath.Join(home, "progress.json")
 	listed := 0
 	for _, row := range seeded {
@@ -523,212 +325,94 @@ func TestTimestampCorrectionRewritesManifestRowsAndKeepsGuardsSafe(t *testing.T)
 	if err != nil {
 		t.Fatalf("timestamp correction dry run failed: %v", err)
 	}
-	requireCommandOutput(
-		t,
-		output,
-		counted("rows_listed", listed),
-		counted("planned", listed),
-		counted("written", 0),
-	)
+	requireCommandOutput(t, output, counted("rows_listed", listed), counted("planned", listed), counted("written", 0))
 	if after, _ := sharedSnapshot(t, address); !sharedRowsEqual(seeded, after) {
 		t.Fatal("timestamp correction dry run changed stored rows")
 	}
 
-	changedMetadata := strings.Replace(
-		seeded[replyID].metadata,
-		strconv.FormatInt(correctionWrongDate, 10),
-		strconv.FormatInt(correctionWrongDate+1, 10),
-		1,
-	)
+	changedMetadata := strings.Replace(seeded[replyID].metadata, strconv.FormatInt(correctionWrongDate, 10), strconv.FormatInt(correctionWrongDate+1, 10), 1)
 	setRowMetadata(t, ctx, address, replyID, changedMetadata)
 	time.Sleep(repairVisibilityWait)
 	changed, _ := sharedSnapshot(t, address)
-	output, err = runCorrectionCommand(
-		t,
-		ctx,
-		address,
-		"--correction-manifest",
-		manifestPath,
-		"--execute",
-		"--limit",
-		"1",
-		"--progress-file",
-		progressPath,
-	)
+	output, err = runCorrectionCommand(t, ctx, address, "--correction-manifest", manifestPath, "--execute", "--limit", "1", "--progress-file", progressPath)
 	if err != nil {
-		t.Fatalf(
-			"timestamp correction command failed while checking a metadata hash mismatch: %v",
-			err,
-		)
+		t.Fatalf("timestamp correction command failed while checking a metadata hash mismatch: %v", err)
 	}
 	requireCommandOutput(t, output, counted("guard_mismatch", 1), counted("written", 0))
 	time.Sleep(repairVisibilityWait)
 	if after, _ := sharedSnapshot(t, address); !sharedRowsEqual(changed, after) {
 		t.Fatal("timestamp correction changed stored rows despite a metadata hash mismatch")
 	}
-	if progress := readProgress(t, progressPath); progress.Complete ||
-		!slices.Contains(progress.Failed, conversationID) {
-		t.Fatalf(
-			"progress must remain incomplete and retain the conversation for retry; progress: %+v",
-			progress,
-		)
+	if progress := readProgress(t, progressPath); progress.Complete || !slices.Contains(progress.Failed, conversationID) {
+		t.Fatalf("progress must remain incomplete and retain the conversation for retry; progress: %+v", progress)
 	}
-	if _, err := runCorrectionCommand(
-		t,
-		ctx,
-		address,
-		"--correction-manifest",
-		otherManifestPath,
-		"--execute",
-		"--limit",
-		"1",
-		"--resume",
-		"--progress-file",
-		progressPath,
-	); err == nil {
+	if _, err := runCorrectionCommand(t, ctx, address, "--correction-manifest", otherManifestPath, "--execute", "--limit", "1", "--resume", "--progress-file", progressPath); err == nil {
 		t.Fatal("--resume accepted a different correction manifest")
 	}
 
 	setRowMetadata(t, ctx, address, replyID, seeded[replyID].metadata)
 	time.Sleep(repairVisibilityWait)
-	output, err = runCorrectionCommand(
-		t,
-		ctx,
-		address,
-		"--correction-manifest",
-		manifestPath,
-		"--execute",
-		"--limit",
-		"1",
-		"--resume",
-		"--progress-file",
-		progressPath,
-	)
+	output, err = runCorrectionCommand(t, ctx, address, "--correction-manifest", manifestPath, "--execute", "--limit", "1", "--resume", "--progress-file", progressPath)
 	if err != nil {
 		t.Fatalf("timestamp correction failed during --resume: %v", err)
 	}
 	requireCommandOutput(t, output, counted("written", listed))
 	if progress := readProgress(t, progressPath); !progress.Complete || len(progress.Failed) != 0 {
-		t.Fatalf(
-			"--resume did not complete correction and clear failed conversations; progress: %+v",
-			progress,
-		)
+		t.Fatalf("--resume did not complete correction and clear failed conversations; progress: %+v", progress)
 	}
 	time.Sleep(repairVisibilityWait)
 	corrected, correctedVectors := sharedSnapshot(t, address)
 	if len(corrected) != len(seeded) || len(correctedVectors) != len(seededVectors) {
-		t.Fatalf(
-			"row or vector counts changed; corrected rows, initial rows, corrected vectors, initial vectors: %d, %d, %d, %d",
-			len(corrected),
-			len(seeded),
-			len(correctedVectors),
-			len(seededVectors),
-		)
+		t.Fatalf("row or vector counts changed; corrected rows, initial rows, corrected vectors, initial vectors: %d, %d, %d, %d", len(corrected), len(seeded), len(correctedVectors), len(seededVectors))
 	}
 	for key, bits := range seededVectors {
 		if !slices.Equal(bits, correctedVectors[key]) {
 			t.Fatalf("timestamp correction changed vector bytes for key %s", key)
 		}
 	}
-	wantTimes := map[string]int64{
-		replyID: time.Date(2026, time.May, 20, 10, 2, 0, 0, time.UTC).Unix(),
-	}
-	toolTimes := []int64{
-		time.Date(2026, time.May, 20, 10, 1, 0, 0, time.UTC).Unix(),
-		time.Date(2026, time.May, 20, 10, 3, 0, 0, time.UTC).Unix(),
-	}
+	wantTimes := map[string]int64{replyID: time.Date(2026, time.May, 20, 10, 2, 0, 0, time.UTC).Unix()}
+	toolTimes := []int64{time.Date(2026, time.May, 20, 10, 1, 0, 0, time.UTC).Unix(), time.Date(2026, time.May, 20, 10, 3, 0, 0, time.UTC).Unix()}
 	toolIDs := make([]string, 0, len(toolTimes))
 	for id, row := range corrected {
 		if strings.HasPrefix(row.relativePath, "convtool/") {
 			toolIDs = append(toolIDs, id)
 		}
 	}
-	slices.SortFunc(
-		toolIDs,
-		func(left string, right string) int {
-			return strings.Compare(corrected[left].relativePath, corrected[right].relativePath)
-		},
-	)
+	slices.SortFunc(toolIDs, func(left string, right string) int {
+		return strings.Compare(corrected[left].relativePath, corrected[right].relativePath)
+	})
 	if len(toolIDs) != len(toolTimes) {
-		t.Fatalf(
-			"timestamp correction must preserve two tool rows; tool row count: %d",
-			len(toolIDs),
-		)
+		t.Fatalf("timestamp correction must preserve two tool rows; tool row count: %d", len(toolIDs))
 	}
 	for position, id := range toolIDs {
 		wantTimes[id] = toolTimes[position]
 	}
 	for id, after := range corrected {
 		before := seeded[id]
-		if after.relativePath != before.relativePath || after.content != before.content ||
-			after.vectorKey != before.vectorKey ||
-			after.others != before.others {
-			t.Fatalf(
-				"timestamp correction changed the path, content, vector key, or other fields of row %s; before and after: %+v, %+v",
-				id,
-				before,
-				after,
-			)
+		if after.relativePath != before.relativePath || after.content != before.content || after.vectorKey != before.vectorKey || after.others != before.others {
+			t.Fatalf("timestamp correction changed the path, content, vector key, or other fields of row %s; before and after: %+v, %+v", id, before, after)
 		}
 		want, known := wantTimes[id]
 		switch {
 		case id == questionID:
 			if !after.timestampNull || !strings.Contains(after.metadata, `"timestamp_unix":null`) {
-				t.Fatalf(
-					"the first user timestamp must be null in the scalar column and metadata; timestamp and metadata: %d, %q",
-					after.timestampUnix,
-					after.metadata,
-				)
+				t.Fatalf("the first user timestamp must be null in the scalar column and metadata; timestamp and metadata: %d, %q", after.timestampUnix, after.metadata)
 			}
 		case known:
-			wantMetadata := strings.Replace(
-				before.metadata,
-				fmt.Sprintf(`"timestamp_unix":%d`, correctionWrongDate),
-				fmt.Sprintf(`"timestamp_unix":%d`, want),
-				1,
-			)
+			wantMetadata := strings.Replace(before.metadata, fmt.Sprintf(`"timestamp_unix":%d`, correctionWrongDate), fmt.Sprintf(`"timestamp_unix":%d`, want), 1)
 			if after.timestampUnix != want || after.metadata != wantMetadata {
-				t.Fatalf(
-					"row %s does not match the expected correction; actual timestamp, expected timestamp, actual metadata, expected metadata: %d, %d, %q, %q",
-					id,
-					after.timestampUnix,
-					want,
-					after.metadata,
-					wantMetadata,
-				)
+				t.Fatalf("row %s does not match the expected correction; actual timestamp, expected timestamp, actual metadata, expected metadata: %d, %d, %q, %q", id, after.timestampUnix, want, after.metadata, wantMetadata)
 			}
 		case after != before:
-			t.Fatalf(
-				"timestamp correction changed unlisted row %s; before and after: %+v, %+v",
-				id,
-				before,
-				after,
-			)
+			t.Fatalf("timestamp correction changed unlisted row %s; before and after: %+v, %+v", id, before, after)
 		}
 	}
 
-	output, err = runCorrectionCommand(
-		t,
-		ctx,
-		address,
-		"--correction-manifest",
-		manifestPath,
-		"--execute",
-		"--limit",
-		"1",
-		"--progress-file",
-		filepath.Join(home, "repeat-progress.json"),
-	)
+	output, err = runCorrectionCommand(t, ctx, address, "--correction-manifest", manifestPath, "--execute", "--limit", "1", "--progress-file", filepath.Join(home, "repeat-progress.json"))
 	if err != nil {
 		t.Fatalf("repeated timestamp correction failed: %v", err)
 	}
-	requireCommandOutput(
-		t,
-		output,
-		counted("current", listed),
-		counted("written", 0),
-		counted("guard_mismatch", 0),
-	)
+	requireCommandOutput(t, output, counted("current", listed), counted("written", 0), counted("guard_mismatch", 0))
 	time.Sleep(repairVisibilityWait)
 	if after, _ := sharedSnapshot(t, address); !sharedRowsEqual(corrected, after) {
 		t.Fatal("repeated timestamp correction changed stored rows")
@@ -751,59 +435,26 @@ func TestTimestampCorrectionTreatsAMarkerRowAsCurrentAfterAPartialRun(t *testing
 	seedCorrectionDocuments(t, ctx, address, conversationID, docs)
 	seeded, _ := sharedSnapshot(t, address)
 	replyID := correctionRowByContent(t, seeded, correctionReply)
-	markerMetadata := strings.Replace(
-		seeded[replyID].metadata,
-		`"timestamp_unix":null`,
-		fmt.Sprintf(`"timestamp_unix":%d`, unknown),
-		1,
-	)
+	markerMetadata := strings.Replace(seeded[replyID].metadata, `"timestamp_unix":null`, fmt.Sprintf(`"timestamp_unix":%d`, unknown), 1)
 	if markerMetadata == seeded[replyID].metadata {
-		t.Fatalf(
-			"cannot replace the null timestamp with the numeric unknown timestamp marker; initial metadata: %q",
-			seeded[replyID].metadata,
-		)
+		t.Fatalf("cannot replace the null timestamp with the numeric unknown timestamp marker; initial metadata: %q", seeded[replyID].metadata)
 	}
 	setRowMetadata(t, ctx, address, replyID, markerMetadata)
 	time.Sleep(repairVisibilityWait)
 	marked, _ := sharedSnapshot(t, address)
 	manifestPath := filepath.Join(home, "manifest.jsonl")
-	writeCorrectionManifest(
-		t,
-		manifestPath,
-		conversationID,
-		map[string]sharedStoredRow{replyID: marked[replyID]},
-	)
+	writeCorrectionManifest(t, manifestPath, conversationID, map[string]sharedStoredRow{replyID: marked[replyID]})
 	want := time.Date(2026, time.May, 20, 10, 2, 0, 0, time.UTC).Unix()
 	for attempt, wantOutput := range []string{"written=1", "written=0"} {
-		output, err := runCorrectionCommand(
-			t,
-			ctx,
-			address,
-			"--correction-manifest",
-			manifestPath,
-			"--execute",
-			"--limit",
-			"1",
-			"--progress-file",
-			filepath.Join(home, fmt.Sprintf("progress-%d.json", attempt)),
-		)
+		output, err := runCorrectionCommand(t, ctx, address, "--correction-manifest", manifestPath, "--execute", "--limit", "1", "--progress-file", filepath.Join(home, fmt.Sprintf("progress-%d.json", attempt)))
 		if err != nil {
-			t.Fatalf(
-				"timestamp correction failed for the numeric unknown timestamp marker on attempt %d: %v",
-				attempt,
-				err,
-			)
+			t.Fatalf("timestamp correction failed for the numeric unknown timestamp marker on attempt %d: %v", attempt, err)
 		}
 		requireCommandOutput(t, output, wantOutput, "guard_mismatch=0")
 		time.Sleep(repairVisibilityWait)
 		after, _ := sharedSnapshot(t, address)
 		if after[replyID].timestampUnix != want {
-			t.Fatalf(
-				"timestamp correction produced an unexpected timestamp on attempt %d; actual and expected timestamps: %d, %d",
-				attempt,
-				after[replyID].timestampUnix,
-				want,
-			)
+			t.Fatalf("timestamp correction produced an unexpected timestamp on attempt %d; actual and expected timestamps: %d, %d", attempt, after[replyID].timestampUnix, want)
 		}
 	}
 }
@@ -816,20 +467,7 @@ func TestTimestampCorrectionSkipsManifestRowsOutsideTheSelectedProvider(t *testi
 	seeded, _ := sharedSnapshot(t, address)
 	manifestPath := filepath.Join(home, "manifest.jsonl")
 	writeCorrectionManifest(t, manifestPath, conversationID, seeded)
-	output, err := runCorrectionCommand(
-		t,
-		ctx,
-		address,
-		"--provider",
-		"codex",
-		"--correction-manifest",
-		manifestPath,
-		"--execute",
-		"--limit",
-		"1",
-		"--progress-file",
-		filepath.Join(home, "codex-progress.json"),
-	)
+	output, err := runCorrectionCommand(t, ctx, address, "--provider", "codex", "--correction-manifest", manifestPath, "--execute", "--limit", "1", "--progress-file", filepath.Join(home, "codex-progress.json"))
 	if err != nil {
 		t.Fatalf("timestamp correction failed with --provider codex: %v", err)
 	}
@@ -838,29 +476,13 @@ func TestTimestampCorrectionSkipsManifestRowsOutsideTheSelectedProvider(t *testi
 	if after, _ := sharedSnapshot(t, address); !sharedRowsEqual(seeded, after) {
 		t.Fatal("timestamp correction with --provider codex changed stored Cursor rows")
 	}
-	output, err = runCorrectionCommand(
-		t,
-		ctx,
-		address,
-		"--provider",
-		"cursor",
-		"--correction-manifest",
-		manifestPath,
-		"--execute",
-		"--limit",
-		"1",
-		"--progress-file",
-		filepath.Join(home, "cursor-progress.json"),
-	)
+	output, err = runCorrectionCommand(t, ctx, address, "--provider", "cursor", "--correction-manifest", manifestPath, "--execute", "--limit", "1", "--progress-file", filepath.Join(home, "cursor-progress.json"))
 	if err != nil {
 		t.Fatalf("timestamp correction failed with --provider cursor: %v", err)
 	}
 	requireCommandOutput(t, output, "guard_mismatch=0")
 	if strings.Contains(output, "written=0") {
-		t.Fatalf(
-			"timestamp correction reported written=0 with --provider cursor; output: %q",
-			output,
-		)
+		t.Fatalf("timestamp correction reported written=0 with --provider cursor; output: %q", output)
 	}
 }
 
@@ -882,17 +504,9 @@ func TestTimestampCorrectionRepeatsAMetadataOnlyChange(t *testing.T) {
 	initial, _ := sharedSnapshot(t, address)
 	replyID := correctionRowByContent(t, initial, correctionReply)
 	correctedMetadata := initial[replyID].metadata
-	staleMetadata := strings.Replace(
-		correctedMetadata,
-		fmt.Sprintf(`"timestamp_unix":%d`, sourceDate),
-		fmt.Sprintf(`"timestamp_unix":%d`, staleDate),
-		1,
-	)
+	staleMetadata := strings.Replace(correctedMetadata, fmt.Sprintf(`"timestamp_unix":%d`, sourceDate), fmt.Sprintf(`"timestamp_unix":%d`, staleDate), 1)
 	if staleMetadata == correctedMetadata {
-		t.Fatalf(
-			"test setup could not replace timestamp_unix with the stale timestamp; initial metadata: %q",
-			correctedMetadata,
-		)
+		t.Fatalf("test setup could not replace timestamp_unix with the stale timestamp; initial metadata: %q", correctedMetadata)
 	}
 	setRowMetadata(t, ctx, address, replyID, staleMetadata)
 	time.Sleep(repairVisibilityWait)
@@ -903,55 +517,24 @@ func TestTimestampCorrectionRepeatsAMetadataOnlyChange(t *testing.T) {
 	wrongMetadataTime.ExpectedMetadataTimestampUnix = &sourceDate
 	wrongTimePath := filepath.Join(home, "wrong-time-manifest.jsonl")
 	writeCorrectionManifestEntries(t, wrongTimePath, []correctionManifestRow{wrongMetadataTime})
-	output, err := runCorrectionCommand(
-		t,
-		ctx,
-		address,
-		"--correction-manifest",
-		wrongTimePath,
-		"--execute",
-		"--limit",
-		"1",
-		"--progress-file",
-		filepath.Join(home, "wrong-time-progress.json"),
-	)
+	output, err := runCorrectionCommand(t, ctx, address, "--correction-manifest", wrongTimePath, "--execute", "--limit", "1", "--progress-file", filepath.Join(home, "wrong-time-progress.json"))
 	if err != nil {
-		t.Fatalf(
-			"timestamp correction failed while checking an expected metadata timestamp mismatch: %v",
-			err,
-		)
+		t.Fatalf("timestamp correction failed while checking an expected metadata timestamp mismatch: %v", err)
 	}
 	requireCommandOutput(t, output, "guard_mismatch=1", "written=0")
 
 	manifestPath := filepath.Join(home, "manifest.jsonl")
 	writeCorrectionManifestEntries(t, manifestPath, []correctionManifestRow{entry})
 	for attempt, wantOutput := range []string{"written=1", "current=1"} {
-		output, err := runCorrectionCommand(
-			t,
-			ctx,
-			address,
-			"--correction-manifest",
-			manifestPath,
-			"--execute",
-			"--limit",
-			"1",
-			"--progress-file",
-			filepath.Join(home, fmt.Sprintf("progress-%d.json", attempt)),
-		)
+		output, err := runCorrectionCommand(t, ctx, address, "--correction-manifest", manifestPath, "--execute", "--limit", "1", "--progress-file", filepath.Join(home, fmt.Sprintf("progress-%d.json", attempt)))
 		if err != nil {
 			t.Fatalf("metadata timestamp correction failed on attempt %d: %v", attempt, err)
 		}
 		requireCommandOutput(t, output, wantOutput, "guard_mismatch=0")
 		time.Sleep(repairVisibilityWait)
 		after, _ := sharedSnapshot(t, address)
-		if after[replyID].timestampUnix != sourceDate ||
-			after[replyID].metadata != correctedMetadata {
-			t.Fatalf(
-				"timestamp correction did not match the source timestamp and expected metadata on attempt %d: %d, %q",
-				attempt,
-				after[replyID].timestampUnix,
-				after[replyID].metadata,
-			)
+		if after[replyID].timestampUnix != sourceDate || after[replyID].metadata != correctedMetadata {
+			t.Fatalf("timestamp correction did not match the source timestamp and expected metadata on attempt %d: %d, %q", attempt, after[replyID].timestampUnix, after[replyID].metadata)
 		}
 	}
 
@@ -959,18 +542,7 @@ func TestTimestampCorrectionRepeatsAMetadataOnlyChange(t *testing.T) {
 	otherVector.ExpectedVectorKey = "other-vector-key"
 	otherVectorPath := filepath.Join(home, "other-vector-manifest.jsonl")
 	writeCorrectionManifestEntries(t, otherVectorPath, []correctionManifestRow{otherVector})
-	output, err = runCorrectionCommand(
-		t,
-		ctx,
-		address,
-		"--correction-manifest",
-		otherVectorPath,
-		"--execute",
-		"--limit",
-		"1",
-		"--progress-file",
-		filepath.Join(home, "other-vector-progress.json"),
-	)
+	output, err = runCorrectionCommand(t, ctx, address, "--correction-manifest", otherVectorPath, "--execute", "--limit", "1", "--progress-file", filepath.Join(home, "other-vector-progress.json"))
 	if err != nil {
 		t.Fatalf("timestamp correction failed while checking a vector key mismatch: %v", err)
 	}
@@ -979,31 +551,14 @@ func TestTimestampCorrectionRepeatsAMetadataOnlyChange(t *testing.T) {
 	changedMetadata := strings.Replace(correctedMetadata, "{", `{"changed":true,`, 1)
 	setRowMetadata(t, ctx, address, replyID, changedMetadata)
 	time.Sleep(repairVisibilityWait)
-	output, err = runCorrectionCommand(
-		t,
-		ctx,
-		address,
-		"--correction-manifest",
-		manifestPath,
-		"--execute",
-		"--limit",
-		"1",
-		"--progress-file",
-		filepath.Join(home, "changed-progress.json"),
-	)
+	output, err = runCorrectionCommand(t, ctx, address, "--correction-manifest", manifestPath, "--execute", "--limit", "1", "--progress-file", filepath.Join(home, "changed-progress.json"))
 	if err != nil {
-		t.Fatalf(
-			"timestamp correction failed while checking a metadata change outside timestamp_unix: %v",
-			err,
-		)
+		t.Fatalf("timestamp correction failed while checking a metadata change outside timestamp_unix: %v", err)
 	}
 	requireCommandOutput(t, output, "guard_mismatch=1", "written=0")
 	time.Sleep(repairVisibilityWait)
 	if after, _ := sharedSnapshot(t, address); after[replyID].metadata != changedMetadata {
-		t.Fatalf(
-			"timestamp correction changed metadata despite a guard mismatch; actual metadata: %q",
-			after[replyID].metadata,
-		)
+		t.Fatalf("timestamp correction changed metadata despite a guard mismatch; actual metadata: %q", after[replyID].metadata)
 	}
 }
 
@@ -1011,37 +566,15 @@ func TestTimestampCorrectionEvidenceKeepsAMissingSourceOutcome(t *testing.T) {
 	address, home := correctionEnvironment(t)
 	ctx := context.Background()
 	conversationID := "cursor:cdcdcdcd-0000-4000-8000-000000000001"
-	seedCorrectionDocuments(
-		t,
-		ctx,
-		address,
-		conversationID,
-		[]semsearch.SemDoc{repairDoc(conversationID, correctionReply, correctionWrongDate)},
-	)
+	seedCorrectionDocuments(t, ctx, address, conversationID, []semsearch.SemDoc{repairDoc(conversationID, correctionReply, correctionWrongDate)})
 	seeded, _ := sharedSnapshot(t, address)
 	rowID := correctionRowByContent(t, seeded, correctionReply)
 	manifestPath := filepath.Join(home, "manifest.jsonl")
 	writeCorrectionManifest(t, manifestPath, conversationID, seeded)
 	evidencePath := filepath.Join(home, "evidence.jsonl")
-	output, err := runCorrectionCommand(
-		t,
-		ctx,
-		address,
-		"--correction-manifest",
-		manifestPath,
-		"--evidence-file",
-		evidencePath,
-		"--execute",
-		"--limit",
-		"1",
-		"--progress-file",
-		filepath.Join(home, "progress.json"),
-	)
+	output, err := runCorrectionCommand(t, ctx, address, "--correction-manifest", manifestPath, "--evidence-file", evidencePath, "--execute", "--limit", "1", "--progress-file", filepath.Join(home, "progress.json"))
 	if err != nil {
-		t.Fatalf(
-			"timestamp correction command failed for a conversation without source messages: %v",
-			err,
-		)
+		t.Fatalf("timestamp correction command failed for a conversation without source messages: %v", err)
 	}
 	evidence, err := os.ReadFile(evidencePath)
 	if err != nil {
@@ -1051,16 +584,8 @@ func TestTimestampCorrectionEvidenceKeepsAMissingSourceOutcome(t *testing.T) {
 	if err := json.Unmarshal(evidence, &entry); err != nil {
 		t.Fatalf("cannot decode correction evidence %q: %v", evidence, err)
 	}
-	if entry.RowID != rowID || entry.ConversationID != conversationID || entry.Family == "" ||
-		entry.SourceOutcome != vectorsearch.SourceOutcomeMissingSource ||
-		entry.Correction != vectorsearch.CorrectionNotEvaluated ||
-		entry.FromUnix != correctionWrongDate ||
-		entry.ToUnix != correctionWrongDate ||
-		entry.Written {
-		t.Fatalf(
-			"correction evidence must identify the row and conversation, record a missing source, preserve the timestamp, and report that correction did not evaluate or write the row; evidence: %+v",
-			entry,
-		)
+	if entry.RowID != rowID || entry.ConversationID != conversationID || entry.Family == "" || entry.SourceOutcome != vectorsearch.SourceOutcomeMissingSource || entry.Correction != vectorsearch.CorrectionNotEvaluated || entry.FromUnix != correctionWrongDate || entry.ToUnix != correctionWrongDate || entry.Written {
+		t.Fatalf("correction evidence must identify the row and conversation, record a missing source, preserve the timestamp, and report that correction did not evaluate or write the row; evidence: %+v", entry)
 	}
 	requireCommandOutput(t, output, "not_evaluated=1", vectorsearch.SourceOutcomeMissingSource+"=1")
 	time.Sleep(repairVisibilityWait)

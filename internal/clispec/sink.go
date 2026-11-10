@@ -40,57 +40,27 @@ func NewCLISink(out io.Writer) *CLISink {
 // Text writes a text response to the terminal stream.
 func (s *CLISink) Text(text string) error {
 	if _, err := io.WriteString(s.out, text); err != nil {
-		slog.Warn(
-			"clispec.sink.write_text_response_failed",
-			"concern",
-			"cli.conversation",
-			"component",
-			"cli",
-			"err",
-			err,
-		)
-
+		slog.Warn("clispec.sink.write_text_response_failed", "concern", "cli.conversation", "component", "cli", "err", err)
 		return fmt.Errorf("clispec: write text response: %w", err)
 	}
-
 	return nil
 }
 
 // Bytes writes raw bytes to stdout.
 func (s *CLISink) Bytes(body []byte) error {
 	if _, err := s.out.Write(body); err != nil {
-		slog.Warn(
-			"clispec.sink.write_byte_response_failed",
-			"concern",
-			"cli.conversation",
-			"component",
-			"cli",
-			"err",
-			err,
-		)
-
+		slog.Warn("clispec.sink.write_byte_response_failed", "concern", "cli.conversation", "component", "cli", "err", err)
 		return fmt.Errorf("clispec: write byte response: %w", err)
 	}
-
 	return nil
 }
 
 // RawBytes writes exact bytes to stdout.
 func (s *CLISink) RawBytes(body []byte) error {
 	if _, err := s.out.Write(body); err != nil {
-		slog.Warn(
-			"clispec.sink.write_raw_byte_response_failed",
-			"concern",
-			"cli.conversation",
-			"component",
-			"cli",
-			"err",
-			err,
-		)
-
+		slog.Warn("clispec.sink.write_raw_byte_response_failed", "concern", "cli.conversation", "component", "cli", "err", err)
 		return fmt.Errorf("clispec: write raw byte response: %w", err)
 	}
-
 	return nil
 }
 
@@ -98,33 +68,10 @@ func (s *CLISink) RawBytes(body []byte) error {
 // the outcome.
 func (s *CLISink) WriteFile(path string, body []byte) error {
 	if err := os.WriteFile(path, body, 0o600); err != nil {
-		slog.Warn(
-			"clispec.sink.write_file_failed",
-			"concern",
-			"cli.conversation",
-			"component",
-			"cli",
-			"path",
-			path,
-			"err",
-			err,
-		)
-
+		slog.Warn("clispec.sink.write_file_failed", "concern", "cli.conversation", "component", "cli", "path", path, "err", err)
 		return fmt.Errorf("clispec: write file %s: %w", path, err)
 	}
-
-	slog.Debug(
-		"clispec.sink.write_file",
-		"concern",
-		"cli.conversation",
-		"component",
-		"cli",
-		"path",
-		path,
-		"bytes",
-		len(body),
-	)
-
+	slog.Debug("clispec.sink.write_file", "concern", "cli.conversation", "component", "cli", "path", path, "bytes", len(body))
 	return nil
 }
 

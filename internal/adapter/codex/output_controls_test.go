@@ -41,9 +41,7 @@ func TestBuildOutputControlsDropsNonCodexCLIBudgetHints(t *testing.T) {
 }
 
 func TestServiceTierFromMetadataMapsFastToPriority(t *testing.T) {
-	if got := ServiceTierFromMetadata(
-		json.RawMessage(`{"service_tier":"fast"}`),
-	); got != "priority" {
+	if got := ServiceTierFromMetadata(json.RawMessage(`{"service_tier":"fast"}`)); got != "priority" {
 		t.Fatalf("service_tier=%q want priority", got)
 	}
 }
@@ -83,27 +81,21 @@ func TestBuildResponsesWebsocketHeadersIncludesCurrentParityHeaders(t *testing.T
 	if got := header.Get("Authorization"); got != "Bearer token-abc" {
 		t.Fatalf("Authorization=%q", got)
 	}
-
 	if got := header.Get("x-client-request-id"); got != "cursor:conv-123" {
 		t.Fatalf("x-client-request-id=%q", got)
 	}
-
 	if got := header.Get("session_id"); got != "cursor:conv-123" {
 		t.Fatalf("session_id=%q", got)
 	}
-
 	if got := header.Get(CodexInstallationIDHeader); got != "acct-123" {
 		t.Fatalf("%s=%q", CodexInstallationIDHeader, got)
 	}
-
 	if got := header.Get(WindowIDHeader); got != "cursor:conv-123:0" {
 		t.Fatalf("%s=%q", WindowIDHeader, got)
 	}
-
 	if got := header.Get(CodexTurnStateHeader); got != "turn-123" {
 		t.Fatalf("%s=%q", CodexTurnStateHeader, got)
 	}
-
 	if got := header.Get("OpenAI-Beta"); got != "responses_websockets=2026-02-06" {
 		t.Fatalf("OpenAI-Beta=%q", got)
 	}
@@ -125,20 +117,13 @@ func TestBuildResponsesWebsocketHeadersSpoofsCodexCLIIdentity(t *testing.T) {
 	if got := header.Get("Originator"); got != "codex_cli_rs" {
 		t.Fatalf("originator=%q want codex_cli_rs", got)
 	}
-
 	ua := header.Get("User-Agent")
 	if !strings.HasPrefix(ua, "codex_cli_rs/") {
 		t.Fatalf("User-Agent=%q want codex_cli_rs/<version> prefix", ua)
 	}
-
 	if !strings.Contains(ua, "/"+CodexCLIVersion+" (") {
-		t.Fatalf(
-			"User-Agent=%q want pinned version %q and ( os arch ) segment",
-			ua,
-			CodexCLIVersion,
-		)
+		t.Fatalf("User-Agent=%q want pinned version %q and ( os arch ) segment", ua, CodexCLIVersion)
 	}
-
 	if !strings.Contains(ua, ";") || !strings.HasSuffix(ua, ")") && !strings.Contains(ua, ") ") {
 		t.Fatalf("User-Agent=%q missing (os version; arch) terminal shape", ua)
 	}
@@ -147,6 +132,5 @@ func TestBuildResponsesWebsocketHeadersSpoofsCodexCLIIdentity(t *testing.T) {
 func mapHeader(key, value string) http.Header {
 	h := http.Header{}
 	h.Set(key, value)
-
 	return h
 }

@@ -37,18 +37,15 @@ func writeCursorProject(t *testing.T, files map[string]string) string {
 	// Point the SQLite side at an empty root too, so discovery sees only these
 	// fixtures rather than this machine's real Cursor composers.
 	t.Setenv("CLYDE_CURSOR_DATA_DIRS", t.TempDir())
-
 	for relative, body := range files {
 		path := filepath.Join(root, filepath.FromSlash(relative))
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatalf("create dir for %s: %v", relative, err)
 		}
-
 		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 			t.Fatalf("write %s: %v", relative, err)
 		}
 	}
-
 	return root
 }
 
@@ -61,17 +58,14 @@ func scanCursorRecords(t *testing.T) map[string]conversation.Record {
 	if err != nil {
 		t.Fatalf("Discover returned error: %v", err)
 	}
-
 	records := make(map[string]conversation.Record, len(candidates))
 	for _, candidate := range candidates {
 		record, ok := parser.ScanRecord(candidate.Path, candidate.Stamp)
 		if !ok {
 			continue
 		}
-
 		records[record.NativeID] = record
 	}
-
 	return records
 }
 
@@ -79,17 +73,10 @@ func scanCursorRecords(t *testing.T) map[string]conversation.Record {
 // the path rule, which is the classifier for effectively every Cursor subagent
 // transcript. The containing directory is literally the parent conversation id.
 func TestSubagentTranscriptUnderSubagentsDirIsClassifiedAndCarriesItsParent(t *testing.T) {
-	writeCursorProject(
-		t,
-		map[string]string{
-			"proj/agent-transcripts/" + cursorParentConversationID + "/" + cursorParentConversationID + ".jsonl": cursorTranscriptBody(
-				"the user's own work",
-			),
-			"proj/agent-transcripts/" + cursorParentConversationID + "/subagents/" + cursorSubagentConversationID + ".jsonl": cursorTranscriptBody(
-				"dispatched work",
-			),
-		},
-	)
+	writeCursorProject(t, map[string]string{
+		"proj/agent-transcripts/" + cursorParentConversationID + "/" + cursorParentConversationID + ".jsonl":             cursorTranscriptBody("the user's own work"),
+		"proj/agent-transcripts/" + cursorParentConversationID + "/subagents/" + cursorSubagentConversationID + ".jsonl": cursorTranscriptBody("dispatched work"),
+	})
 
 	records := scanCursorRecords(t)
 
@@ -97,7 +84,6 @@ func TestSubagentTranscriptUnderSubagentsDirIsClassifiedAndCarriesItsParent(t *t
 	if !ok {
 		t.Fatalf("parent conversation missing from %v", cursorRecordIDs(records))
 	}
-
 	if parent.Origin != conversation.OriginUser {
 		t.Fatalf("parent origin = %q, want %q", parent.Origin, conversation.OriginUser)
 	}
@@ -106,22 +92,16 @@ func TestSubagentTranscriptUnderSubagentsDirIsClassifiedAndCarriesItsParent(t *t
 	if !ok {
 		t.Fatalf("subagent conversation missing from %v", cursorRecordIDs(records))
 	}
-
 	if subagent.Origin != conversation.OriginSubagent {
 		t.Fatalf("subagent origin = %q, want %q", subagent.Origin, conversation.OriginSubagent)
 	}
-
 	// The subagent file is named with its own uuid, so unlike Claude there is no
 	// collision with the parent's derived id.
 	if subagent.ID == parent.ID {
 		t.Fatalf("subagent id %q collides with the parent conversation", subagent.ID)
 	}
-
 	if subagent.Lineage == nil || subagent.Lineage.ParentNativeID != cursorParentConversationID {
-		t.Fatalf(
-			"subagent lineage = %#v, want the containing directory as the parent",
-			subagent.Lineage,
-		)
+		t.Fatalf("subagent lineage = %#v, want the containing directory as the parent", subagent.Lineage)
 	}
 }
 
@@ -133,17 +113,10 @@ func TestSubagentTranscriptUnderSubagentsDirIsClassifiedAndCarriesItsParent(t *t
 // The live corpus carries exactly this shape: a top-level transcript whose first
 // record is a person's typed prompt, resumed later by another conversation.
 func TestResumeLinkDoesNotReclassifyATopLevelConversation(t *testing.T) {
-	writeCursorProject(
-		t,
-		map[string]string{
-			"proj/agent-transcripts/" + cursorParentConversationID + "/" + cursorParentConversationID + ".jsonl": cursorSpawnTranscriptBody(
-				cursorLooseConversationID,
-			),
-			"proj/agent-transcripts/" + cursorLooseConversationID + "/" + cursorLooseConversationID + ".jsonl": cursorTranscriptBody(
-				"Implement the cell tunnel half of the plan",
-			),
-		},
-	)
+	writeCursorProject(t, map[string]string{
+		"proj/agent-transcripts/" + cursorParentConversationID + "/" + cursorParentConversationID + ".jsonl": cursorSpawnTranscriptBody(cursorLooseConversationID),
+		"proj/agent-transcripts/" + cursorLooseConversationID + "/" + cursorLooseConversationID + ".jsonl":   cursorTranscriptBody("Implement the cell tunnel half of the plan"),
+	})
 
 	records := scanCursorRecords(t)
 
@@ -151,34 +124,17 @@ func TestResumeLinkDoesNotReclassifyATopLevelConversation(t *testing.T) {
 	if !ok {
 		t.Fatalf("resumed conversation missing from %v", cursorRecordIDs(records))
 	}
-
 	if resumed.Origin != conversation.OriginUser {
-		t.Fatalf(
-			"resumed origin = %q, want %q; a resume link alone must not hide a real conversation",
-			resumed.Origin,
-			conversation.OriginUser,
-		)
+		t.Fatalf("resumed origin = %q, want %q; a resume link alone must not hide a real conversation", resumed.Origin, conversation.OriginUser)
 	}
-
 	if resumed.Lineage != nil {
-		t.Fatalf(
-			"resumed lineage = %#v, want nil; the path shape says this is the user's own conversation",
-			resumed.Lineage,
-		)
+		t.Fatalf("resumed lineage = %#v, want nil; the path shape says this is the user's own conversation", resumed.Lineage)
 	}
-
 	if resumed.IsSubagent() {
-		t.Fatalf(
-			"IsSubagent = true for a top-level transcript, which would hide it on the default setting",
-		)
+		t.Fatalf("IsSubagent = true for a top-level transcript, which would hide it on the default setting")
 	}
-
 	if parent := records[cursorParentConversationID]; parent.Origin != conversation.OriginUser {
-		t.Fatalf(
-			"resuming conversation origin = %q, want %q",
-			parent.Origin,
-			conversation.OriginUser,
-		)
+		t.Fatalf("resuming conversation origin = %q, want %q", parent.Origin, conversation.OriginUser)
 	}
 }
 
@@ -187,20 +143,11 @@ func TestResumeLinkDoesNotReclassifyATopLevelConversation(t *testing.T) {
 // subagent, the resume link is preferred for the parent reference because the
 // provider stated that link outright.
 func TestResumeLinkSuppliesTheParentReferenceForASubagentTranscript(t *testing.T) {
-	writeCursorProject(
-		t,
-		map[string]string{
-			"proj/agent-transcripts/" + cursorParentConversationID + "/" + cursorParentConversationID + ".jsonl": cursorTranscriptBody(
-				"the user's own work",
-			),
-			"proj/agent-transcripts/" + cursorLooseConversationID + "/" + cursorLooseConversationID + ".jsonl": cursorSpawnTranscriptBody(
-				cursorSubagentConversationID,
-			),
-			"proj/agent-transcripts/" + cursorParentConversationID + "/subagents/" + cursorSubagentConversationID + ".jsonl": cursorTranscriptBody(
-				"dispatched work",
-			),
-		},
-	)
+	writeCursorProject(t, map[string]string{
+		"proj/agent-transcripts/" + cursorParentConversationID + "/" + cursorParentConversationID + ".jsonl":             cursorTranscriptBody("the user's own work"),
+		"proj/agent-transcripts/" + cursorLooseConversationID + "/" + cursorLooseConversationID + ".jsonl":               cursorSpawnTranscriptBody(cursorSubagentConversationID),
+		"proj/agent-transcripts/" + cursorParentConversationID + "/subagents/" + cursorSubagentConversationID + ".jsonl": cursorTranscriptBody("dispatched work"),
+	})
 
 	records := scanCursorRecords(t)
 
@@ -208,16 +155,11 @@ func TestResumeLinkSuppliesTheParentReferenceForASubagentTranscript(t *testing.T
 	if !ok {
 		t.Fatalf("subagent conversation missing from %v", cursorRecordIDs(records))
 	}
-
 	if subagent.Origin != conversation.OriginSubagent {
 		t.Fatalf("subagent origin = %q, want %q", subagent.Origin, conversation.OriginSubagent)
 	}
-
 	if subagent.Lineage == nil || subagent.Lineage.ParentNativeID != cursorLooseConversationID {
-		t.Fatalf(
-			"subagent lineage = %#v, want the resuming conversation as the parent",
-			subagent.Lineage,
-		)
+		t.Fatalf("subagent lineage = %#v, want the resuming conversation as the parent", subagent.Lineage)
 	}
 }
 
@@ -226,17 +168,10 @@ func TestResumeLinkSuppliesTheParentReferenceForASubagentTranscript(t *testing.T
 // conversation, because a false positive here drops a real user conversation from
 // the index.
 func TestResumeLinkMatchesExactlyAndNotBySubstring(t *testing.T) {
-	writeCursorProject(
-		t,
-		map[string]string{
-			"proj/agent-transcripts/" + cursorParentConversationID + "/" + cursorParentConversationID + ".jsonl": cursorSpawnTranscriptBody(
-				cursorLooseConversationID + "-extra-suffix",
-			),
-			"proj/agent-transcripts/" + cursorLooseConversationID + "/" + cursorLooseConversationID + ".jsonl": cursorTranscriptBody(
-				"a real user conversation",
-			),
-		},
-	)
+	writeCursorProject(t, map[string]string{
+		"proj/agent-transcripts/" + cursorParentConversationID + "/" + cursorParentConversationID + ".jsonl": cursorSpawnTranscriptBody(cursorLooseConversationID + "-extra-suffix"),
+		"proj/agent-transcripts/" + cursorLooseConversationID + "/" + cursorLooseConversationID + ".jsonl":   cursorTranscriptBody("a real user conversation"),
+	})
 
 	records := scanCursorRecords(t)
 
@@ -244,20 +179,11 @@ func TestResumeLinkMatchesExactlyAndNotBySubstring(t *testing.T) {
 	if !ok {
 		t.Fatalf("conversation missing from %v", cursorRecordIDs(records))
 	}
-
 	if nearMiss.Origin != conversation.OriginUser {
-		t.Fatalf(
-			"origin = %q, want %q; a substring resume value must not classify a conversation",
-			nearMiss.Origin,
-			conversation.OriginUser,
-		)
+		t.Fatalf("origin = %q, want %q; a substring resume value must not classify a conversation", nearMiss.Origin, conversation.OriginUser)
 	}
-
 	if nearMiss.Lineage != nil {
-		t.Fatalf(
-			"lineage = %#v, want nil for a conversation nothing actually resumed",
-			nearMiss.Lineage,
-		)
+		t.Fatalf("lineage = %#v, want nil for a conversation nothing actually resumed", nearMiss.Lineage)
 	}
 }
 
@@ -267,24 +193,15 @@ func TestResumeLinkMatchesExactlyAndNotBySubstring(t *testing.T) {
 func TestResumeLinkIgnoresNonSpawnToolCalls(t *testing.T) {
 	readToolBody := cursorTranscriptBody("start") +
 		`{"role":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Read","input":{"resume":"` + cursorLooseConversationID + `"}}]}}` + "\n"
-	writeCursorProject(
-		t,
-		map[string]string{
-			"proj/agent-transcripts/" + cursorParentConversationID + "/" + cursorParentConversationID + ".jsonl": readToolBody,
-			"proj/agent-transcripts/" + cursorLooseConversationID + "/" + cursorLooseConversationID + ".jsonl": cursorTranscriptBody(
-				"a real user conversation",
-			),
-		},
-	)
+	writeCursorProject(t, map[string]string{
+		"proj/agent-transcripts/" + cursorParentConversationID + "/" + cursorParentConversationID + ".jsonl": readToolBody,
+		"proj/agent-transcripts/" + cursorLooseConversationID + "/" + cursorLooseConversationID + ".jsonl":   cursorTranscriptBody("a real user conversation"),
+	})
 
 	records := scanCursorRecords(t)
 
 	if origin := records[cursorLooseConversationID].Origin; origin != conversation.OriginUser {
-		t.Fatalf(
-			"origin = %q, want %q; only Task and Subagent calls name a spawn",
-			origin,
-			conversation.OriginUser,
-		)
+		t.Fatalf("origin = %q, want %q; only Task and Subagent calls name a spawn", origin, conversation.OriginUser)
 	}
 }
 
@@ -292,40 +209,22 @@ func TestResumeLinkIgnoresNonSpawnToolCalls(t *testing.T) {
 // admits the subagents/ shape and nothing else that happens to sit under
 // agent-transcripts/.
 func TestDiscoverIgnoresOtherFilesUnderAgentTranscripts(t *testing.T) {
-	writeCursorProject(
-		t,
-		map[string]string{
-			"proj/agent-transcripts/" + cursorParentConversationID + "/" + cursorParentConversationID + ".jsonl": cursorTranscriptBody(
-				"the user's own work",
-			),
-			"proj/agent-transcripts/" + cursorParentConversationID + "/notes.jsonl": cursorTranscriptBody(
-				"a sidecar file",
-			),
-			"proj/agent-transcripts/" + cursorParentConversationID + "/attachments/blob.jsonl": cursorTranscriptBody(
-				"not a conversation",
-			),
-			"proj/agent-transcripts/" + cursorParentConversationID + "/subagents/nested/deeper.jsonl": cursorTranscriptBody(
-				"too deep",
-			),
-			"proj/agent-transcripts/" + cursorParentConversationID + "/subagents/" + cursorSubagentConversationID + ".jsonl": cursorTranscriptBody(
-				"dispatched work",
-			),
-		},
-	)
+	writeCursorProject(t, map[string]string{
+		"proj/agent-transcripts/" + cursorParentConversationID + "/" + cursorParentConversationID + ".jsonl":             cursorTranscriptBody("the user's own work"),
+		"proj/agent-transcripts/" + cursorParentConversationID + "/notes.jsonl":                                          cursorTranscriptBody("a sidecar file"),
+		"proj/agent-transcripts/" + cursorParentConversationID + "/attachments/blob.jsonl":                               cursorTranscriptBody("not a conversation"),
+		"proj/agent-transcripts/" + cursorParentConversationID + "/subagents/nested/deeper.jsonl":                        cursorTranscriptBody("too deep"),
+		"proj/agent-transcripts/" + cursorParentConversationID + "/subagents/" + cursorSubagentConversationID + ".jsonl": cursorTranscriptBody("dispatched work"),
+	})
 
 	records := scanCursorRecords(t)
 
 	if len(records) != 2 {
-		t.Fatalf(
-			"records = %v, want only the conversation and its subagent transcript",
-			cursorRecordIDs(records),
-		)
+		t.Fatalf("records = %v, want only the conversation and its subagent transcript", cursorRecordIDs(records))
 	}
-
 	if _, ok := records[cursorParentConversationID]; !ok {
 		t.Fatalf("records = %v, want the conversation transcript", cursorRecordIDs(records))
 	}
-
 	if _, ok := records[cursorSubagentConversationID]; !ok {
 		t.Fatalf("records = %v, want the subagent transcript", cursorRecordIDs(records))
 	}
@@ -344,20 +243,11 @@ func TestDiscoverIgnoresOtherFilesUnderAgentTranscripts(t *testing.T) {
 // cache keeps the earlier answer.
 func TestResumeLinksAreNotRereadWhenAParentIsUnchanged(t *testing.T) {
 	resumerRelative := "proj/agent-transcripts/" + cursorLooseConversationID + "/" + cursorLooseConversationID + ".jsonl"
-	root := writeCursorProject(
-		t,
-		map[string]string{
-			"proj/agent-transcripts/" + cursorParentConversationID + "/" + cursorParentConversationID + ".jsonl": cursorTranscriptBody(
-				"the user's own work",
-			),
-			"proj/agent-transcripts/" + cursorParentConversationID + "/subagents/" + cursorSubagentConversationID + ".jsonl": cursorTranscriptBody(
-				"dispatched work",
-			),
-			resumerRelative: cursorSpawnTranscriptBody(
-				cursorSubagentConversationID,
-			),
-		},
-	)
+	root := writeCursorProject(t, map[string]string{
+		"proj/agent-transcripts/" + cursorParentConversationID + "/" + cursorParentConversationID + ".jsonl":             cursorTranscriptBody("the user's own work"),
+		"proj/agent-transcripts/" + cursorParentConversationID + "/subagents/" + cursorSubagentConversationID + ".jsonl": cursorTranscriptBody("dispatched work"),
+		resumerRelative: cursorSpawnTranscriptBody(cursorSubagentConversationID),
+	})
 	resumerPath := filepath.Join(root, filepath.FromSlash(resumerRelative))
 
 	parser := New()
@@ -369,25 +259,13 @@ func TestResumeLinksAreNotRereadWhenAParentIsUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat resuming transcript: %v", err)
 	}
-
-	rewritten := strings.Replace(
-		cursorSpawnTranscriptBody(cursorSubagentConversationID),
-		`"name":"Task"`,
-		`"name":"Read"`,
-		1,
-	)
+	rewritten := strings.Replace(cursorSpawnTranscriptBody(cursorSubagentConversationID), `"name":"Task"`, `"name":"Read"`, 1)
 	if len(rewritten) != int(before.Size()) {
-		t.Fatalf(
-			"rewritten body is %d bytes, want %d so the file looks unchanged",
-			len(rewritten),
-			before.Size(),
-		)
+		t.Fatalf("rewritten body is %d bytes, want %d so the file looks unchanged", len(rewritten), before.Size())
 	}
-
 	if err := os.WriteFile(resumerPath, []byte(rewritten), 0o600); err != nil {
 		t.Fatalf("rewrite resuming transcript: %v", err)
 	}
-
 	if err := os.Chtimes(resumerPath, before.ModTime(), before.ModTime()); err != nil {
 		t.Fatalf("restore resuming transcript mtime: %v", err)
 	}
@@ -396,23 +274,16 @@ func TestResumeLinksAreNotRereadWhenAParentIsUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second Discover returned error: %v", err)
 	}
-
 	for _, candidate := range candidates {
 		record, ok := parser.ScanRecord(candidate.Path, candidate.Stamp)
 		if !ok || record.NativeID != cursorSubagentConversationID {
 			continue
 		}
-
 		if record.Lineage == nil || record.Lineage.ParentNativeID != cursorLooseConversationID {
-			t.Fatalf(
-				"lineage = %#v, want the resuming conversation; an unchanged parent must be served from the cache rather than re-read",
-				record.Lineage,
-			)
+			t.Fatalf("lineage = %#v, want the resuming conversation; an unchanged parent must be served from the cache rather than re-read", record.Lineage)
 		}
-
 		return
 	}
-
 	t.Fatalf("subagent conversation was not discovered on the second pass")
 }
 
@@ -424,39 +295,24 @@ func TestResumeLinksAreNotRereadWhenAParentIsUnchanged(t *testing.T) {
 // routes an ingestion or visibility decision through this resolve.
 func TestScanRecordWithoutDiscoverStillClassifiesBySubagentPath(t *testing.T) {
 	relative := "proj/agent-transcripts/" + cursorParentConversationID + "/subagents/" + cursorSubagentConversationID + ".jsonl"
-	root := writeCursorProject(
-		t,
-		map[string]string{
-			"proj/agent-transcripts/" + cursorParentConversationID + "/" + cursorParentConversationID + ".jsonl": cursorTranscriptBody(
-				"the user's own work",
-			),
-			relative: cursorTranscriptBody(
-				"dispatched work",
-			),
-		},
-	)
+	root := writeCursorProject(t, map[string]string{
+		"proj/agent-transcripts/" + cursorParentConversationID + "/" + cursorParentConversationID + ".jsonl": cursorTranscriptBody("the user's own work"),
+		relative: cursorTranscriptBody("dispatched work"),
+	})
 	path := filepath.Join(root, filepath.FromSlash(relative))
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("stat subagent transcript: %v", err)
 	}
 
-	record, ok := New().ScanRecord(
-		path,
-		conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()},
-	)
+	record, ok := New().ScanRecord(path, conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()})
 	if !ok {
 		t.Fatalf("ScanRecord returned ok=false for %s", path)
 	}
 
 	if record.Origin != conversation.OriginSubagent {
-		t.Fatalf(
-			"origin = %q, want %q from the path shape alone",
-			record.Origin,
-			conversation.OriginSubagent,
-		)
+		t.Fatalf("origin = %q, want %q from the path shape alone", record.Origin, conversation.OriginSubagent)
 	}
-
 	if record.Lineage == nil || record.Lineage.ParentNativeID != cursorParentConversationID {
 		t.Fatalf("lineage = %#v, want the containing directory as the parent", record.Lineage)
 	}
@@ -467,7 +323,6 @@ func cursorRecordIDs(records map[string]conversation.Record) []string {
 	for nativeID := range records {
 		out = append(out, nativeID)
 	}
-
 	return out
 }
 
@@ -481,17 +336,14 @@ func scanCursorRecordsByPath(t *testing.T) map[string]conversation.Record {
 	if err != nil {
 		t.Fatalf("Discover returned error: %v", err)
 	}
-
 	records := make(map[string]conversation.Record, len(candidates))
 	for _, candidate := range candidates {
 		record, ok := parser.ScanRecord(candidate.Path, candidate.Stamp)
 		if !ok {
 			continue
 		}
-
 		records[candidate.Path] = record
 	}
-
 	return records
 }
 
@@ -501,61 +353,30 @@ func scanCursorRecordsByPath(t *testing.T) map[string]conversation.Record {
 // says the uuid was dispatched. Both copies must classify as the subagent
 // conversation, or the twin is listed and fed as the person's own work.
 func TestTopLevelTwinOfASubagentTranscriptClassifiesSubagent(t *testing.T) {
-	root := writeCursorProject(
-		t,
-		map[string]string{
-			"proj/agent-transcripts/" + cursorParentConversationID + "/" + cursorParentConversationID + ".jsonl": cursorTranscriptBody(
-				"the user's own work",
-			),
-			"proj/agent-transcripts/" + cursorParentConversationID + "/subagents/" + cursorSubagentConversationID + ".jsonl": cursorTranscriptBody(
-				"dispatched work",
-			),
-			"proj/agent-transcripts/" + cursorSubagentConversationID + "/" + cursorSubagentConversationID + ".jsonl": cursorTranscriptBody(
-				"dispatched work",
-			),
-		},
-	)
+	root := writeCursorProject(t, map[string]string{
+		"proj/agent-transcripts/" + cursorParentConversationID + "/" + cursorParentConversationID + ".jsonl":             cursorTranscriptBody("the user's own work"),
+		"proj/agent-transcripts/" + cursorParentConversationID + "/subagents/" + cursorSubagentConversationID + ".jsonl": cursorTranscriptBody("dispatched work"),
+		"proj/agent-transcripts/" + cursorSubagentConversationID + "/" + cursorSubagentConversationID + ".jsonl":         cursorTranscriptBody("dispatched work"),
+	})
 
 	records := scanCursorRecordsByPath(t)
 
-	twinPath := filepath.Join(
-		root,
-		filepath.FromSlash(
-			"proj/agent-transcripts/"+cursorSubagentConversationID+"/"+cursorSubagentConversationID+".jsonl",
-		),
-	)
+	twinPath := filepath.Join(root, filepath.FromSlash(
+		"proj/agent-transcripts/"+cursorSubagentConversationID+"/"+cursorSubagentConversationID+".jsonl"))
 	twin, ok := records[twinPath]
 	if !ok {
 		t.Fatalf("twin transcript missing from scanned records")
 	}
-
 	if twin.Origin != conversation.OriginSubagent {
-		t.Fatalf(
-			"twin origin = %q, want %q; the subagents/ copy says this uuid was dispatched",
-			twin.Origin,
-			conversation.OriginSubagent,
-		)
+		t.Fatalf("twin origin = %q, want %q; the subagents/ copy says this uuid was dispatched", twin.Origin, conversation.OriginSubagent)
 	}
-
 	if twin.Lineage == nil || twin.Lineage.ParentNativeID != cursorParentConversationID {
-		t.Fatalf(
-			"twin lineage = %#v, want the dispatching conversation as the parent",
-			twin.Lineage,
-		)
+		t.Fatalf("twin lineage = %#v, want the dispatching conversation as the parent", twin.Lineage)
 	}
-
-	parentPath := filepath.Join(
-		root,
-		filepath.FromSlash(
-			"proj/agent-transcripts/"+cursorParentConversationID+"/"+cursorParentConversationID+".jsonl",
-		),
-	)
+	parentPath := filepath.Join(root, filepath.FromSlash(
+		"proj/agent-transcripts/"+cursorParentConversationID+"/"+cursorParentConversationID+".jsonl"))
 	if parent := records[parentPath]; parent.Origin != conversation.OriginUser {
-		t.Fatalf(
-			"parent origin = %q, want %q; the twin rule must not reach the dispatching conversation",
-			parent.Origin,
-			conversation.OriginUser,
-		)
+		t.Fatalf("parent origin = %q, want %q; the twin rule must not reach the dispatching conversation", parent.Origin, conversation.OriginUser)
 	}
 }
 
@@ -563,40 +384,22 @@ func TestTopLevelTwinOfASubagentTranscriptClassifiesSubagent(t *testing.T) {
 // projects must not reclassify an unrelated conversation, because the
 // subagents/ copy and its twin always sit in the same project directory.
 func TestTwinRuleIsScopedToOneProject(t *testing.T) {
-	root := writeCursorProject(
-		t,
-		map[string]string{
-			"projA/agent-transcripts/" + cursorParentConversationID + "/" + cursorParentConversationID + ".jsonl": cursorTranscriptBody(
-				"the user's own work",
-			),
-			"projA/agent-transcripts/" + cursorParentConversationID + "/subagents/" + cursorSubagentConversationID + ".jsonl": cursorTranscriptBody(
-				"dispatched work",
-			),
-			"projB/agent-transcripts/" + cursorSubagentConversationID + "/" + cursorSubagentConversationID + ".jsonl": cursorTranscriptBody(
-				"an unrelated conversation",
-			),
-		},
-	)
+	root := writeCursorProject(t, map[string]string{
+		"projA/agent-transcripts/" + cursorParentConversationID + "/" + cursorParentConversationID + ".jsonl":             cursorTranscriptBody("the user's own work"),
+		"projA/agent-transcripts/" + cursorParentConversationID + "/subagents/" + cursorSubagentConversationID + ".jsonl": cursorTranscriptBody("dispatched work"),
+		"projB/agent-transcripts/" + cursorSubagentConversationID + "/" + cursorSubagentConversationID + ".jsonl":         cursorTranscriptBody("an unrelated conversation"),
+	})
 
 	records := scanCursorRecordsByPath(t)
 
-	otherProjectPath := filepath.Join(
-		root,
-		filepath.FromSlash(
-			"projB/agent-transcripts/"+cursorSubagentConversationID+"/"+cursorSubagentConversationID+".jsonl",
-		),
-	)
+	otherProjectPath := filepath.Join(root, filepath.FromSlash(
+		"projB/agent-transcripts/"+cursorSubagentConversationID+"/"+cursorSubagentConversationID+".jsonl"))
 	other, ok := records[otherProjectPath]
 	if !ok {
 		t.Fatalf("other-project transcript missing from scanned records")
 	}
-
 	if other.Origin != conversation.OriginUser {
-		t.Fatalf(
-			"other-project origin = %q, want %q; a twin in another project proves nothing about this uuid",
-			other.Origin,
-			conversation.OriginUser,
-		)
+		t.Fatalf("other-project origin = %q, want %q; a twin in another project proves nothing about this uuid", other.Origin, conversation.OriginUser)
 	}
 }
 
@@ -606,42 +409,25 @@ func TestTwinRuleIsScopedToOneProject(t *testing.T) {
 // as the person's own conversation.
 func TestScanRecordWithoutDiscoverClassifiesTheTwinBySubagentSibling(t *testing.T) {
 	relative := "proj/agent-transcripts/" + cursorSubagentConversationID + "/" + cursorSubagentConversationID + ".jsonl"
-	root := writeCursorProject(
-		t,
-		map[string]string{
-			"proj/agent-transcripts/" + cursorParentConversationID + "/" + cursorParentConversationID + ".jsonl": cursorTranscriptBody(
-				"the user's own work",
-			),
-			"proj/agent-transcripts/" + cursorParentConversationID + "/subagents/" + cursorSubagentConversationID + ".jsonl": cursorTranscriptBody(
-				"dispatched work",
-			),
-			relative: cursorTranscriptBody(
-				"dispatched work",
-			),
-		},
-	)
+	root := writeCursorProject(t, map[string]string{
+		"proj/agent-transcripts/" + cursorParentConversationID + "/" + cursorParentConversationID + ".jsonl":             cursorTranscriptBody("the user's own work"),
+		"proj/agent-transcripts/" + cursorParentConversationID + "/subagents/" + cursorSubagentConversationID + ".jsonl": cursorTranscriptBody("dispatched work"),
+		relative: cursorTranscriptBody("dispatched work"),
+	})
 	path := filepath.Join(root, filepath.FromSlash(relative))
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("stat twin transcript: %v", err)
 	}
 
-	record, ok := New().ScanRecord(
-		path,
-		conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()},
-	)
+	record, ok := New().ScanRecord(path, conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()})
 	if !ok {
 		t.Fatalf("ScanRecord returned ok=false for %s", path)
 	}
 
 	if record.Origin != conversation.OriginSubagent {
-		t.Fatalf(
-			"origin = %q, want %q from the subagents/ twin",
-			record.Origin,
-			conversation.OriginSubagent,
-		)
+		t.Fatalf("origin = %q, want %q from the subagents/ twin", record.Origin, conversation.OriginSubagent)
 	}
-
 	if record.Lineage == nil || record.Lineage.ParentNativeID != cursorParentConversationID {
 		t.Fatalf("lineage = %#v, want the dispatching conversation as the parent", record.Lineage)
 	}

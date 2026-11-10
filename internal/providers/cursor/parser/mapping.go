@@ -30,7 +30,6 @@ func mapJSONLMessage(
 	tools := make([]transcript.ToolCall, 0)
 	stamped := time.Time{}
 	injected := false
-
 	for _, part := range message.Parts {
 		switch part.Type {
 		case cursorjsonl.PartTypeText:
@@ -43,7 +42,6 @@ func mapJSONLMessage(
 			if message.Role == cursorjsonl.RoleAssistant {
 				text = stripClydeSyntheticEnvelopes(text)
 			}
-
 			// Cursor frames a user turn in its own envelope, so the stored
 			// text holds markup the user never wrote and never saw. Lifting
 			// the turn's time out of that markup is what lets two identical
@@ -55,7 +53,6 @@ func mapJSONLMessage(
 				if stamped.IsZero() {
 					stamped = partStamp
 				}
-
 				// Cursor writes prompts of its own into the user role. The
 				// text stays, so a transcript still shows what the model was
 				// answering, and the visibility below is what keeps it out of
@@ -64,31 +61,26 @@ func mapJSONLMessage(
 					injected = true
 				}
 			}
-
 			if strings.TrimSpace(text) != "" {
 				textParts = append(textParts, text)
 			}
 		case cursorjsonl.PartTypeToolUse:
 			input := transcript.ToolInputJSON{Raw: cloneRaw(part.ToolInput)}
 			display, displayLang := toolDisplayText(part.ToolName, input)
-			tools = append(
-				tools,
-				transcript.ToolCall{
-					ID:               "",
-					Name:             part.ToolName,
-					Input:            input,
-					Display:          display,
-					DisplayLang:      displayLang,
-					Output:           "",
-					IsError:          false,
-					Attachments:      nil,
-					Timestamp:        nil,
-					TimestampUnknown: true,
-				},
-			)
+			tools = append(tools, transcript.ToolCall{
+				ID:               "",
+				Name:             part.ToolName,
+				Input:            input,
+				Display:          display,
+				DisplayLang:      displayLang,
+				Output:           "",
+				IsError:          false,
+				Attachments:      nil,
+				Timestamp:        nil,
+				TimestampUnknown: true,
+			})
 		}
 	}
-
 	// A prompt Cursor wrote into the user role is a control record: the model
 	// answered it, so the answer is conversation, but the prompt is the
 	// harness talking to itself. Marking it is what every consumer already
@@ -98,7 +90,6 @@ func mapJSONLMessage(
 	if injected {
 		visibility = transcript.MessageVisibilityMetaOnly
 	}
-
 	text := strings.Join(textParts, "\n")
 	// A turn Cursor recorded as failed or aborted, or one that ended at a boundary
 	// Clyde could not read, must not reach a reader as an ordinary finished
@@ -111,11 +102,9 @@ func mapJSONLMessage(
 			text += "\n" + marker
 		}
 	}
-
 	if text == "" && len(tools) == 0 {
 		return emptyMessage(), false
 	}
-
 	return transcript.Message{
 		UUID:              "",
 		ParentUUID:        "",
@@ -140,11 +129,9 @@ func turnOutcomeMarker(outcome cursorjsonl.TurnOutcome) string {
 	if outcome.Uncertain {
 		return turnBoundaryUnreadableMarker
 	}
-
 	if !outcome.Failed() {
 		return ""
 	}
-
 	// Label falls back to the boundary kind, because Cursor's standalone error
 	// event carries its reason with no status at all.
 	label := outcome.Label()
@@ -152,7 +139,6 @@ func turnOutcomeMarker(outcome cursorjsonl.TurnOutcome) string {
 	if reason == "" {
 		return turnEndedMarkerPrefix + label + turnMarkerSuffix
 	}
-
 	return turnEndedMarkerPrefix + label + " (" + reason + ")" + turnMarkerSuffix
 }
 
@@ -171,33 +157,27 @@ func mapComposerBubble(
 	if bubble.Type == cursorstore.BubbleTypeUser {
 		role = "user"
 	}
-
 	tools := make([]transcript.ToolCall, 0)
 	if bubble.ToolCall != nil {
 		toolOutput := ""
 		if opts.IncludeToolOutputs {
 			toolOutput = string(bubble.ToolCall.Result)
 		}
-
 		input := transcript.ToolInputJSON{Raw: rawArgsToJSON(bubble.ToolCall.RawArgs)}
 		display, displayLang := toolDisplayText(bubble.ToolCall.Name, input)
-		tools = append(
-			tools,
-			transcript.ToolCall{
-				ID:               "",
-				Name:             bubble.ToolCall.Name,
-				Input:            input,
-				Display:          display,
-				DisplayLang:      displayLang,
-				Output:           toolOutput,
-				IsError:          toolErrored(bubble.ToolCall.Status),
-				Attachments:      nil,
-				Timestamp:        nil,
-				TimestampUnknown: false,
-			},
-		)
+		tools = append(tools, transcript.ToolCall{
+			ID:               "",
+			Name:             bubble.ToolCall.Name,
+			Input:            input,
+			Display:          display,
+			DisplayLang:      displayLang,
+			Output:           toolOutput,
+			IsError:          toolErrored(bubble.ToolCall.Status),
+			Attachments:      nil,
+			Timestamp:        nil,
+			TimestampUnknown: false,
+		})
 	}
-
 	// Cursor persists whatever Clyde's MITM/BYOK ingress streamed into
 	// delta.content as an ordinary bubble, so a prior turn's synthetic
 	// envelope (thinking, notice, redacted-thinking) reads back here
@@ -215,11 +195,9 @@ func mapComposerBubble(
 	if bubble.Type == cursorstore.BubbleTypeAssistant {
 		text = stripClydeSyntheticEnvelopes(bubble.Text)
 	}
-
 	if text == "" && bubble.Thinking.Text == "" && len(tools) == 0 {
 		return emptyMessage(), false
 	}
-
 	return transcript.Message{
 		UUID:              bubble.BubbleID,
 		ParentUUID:        "",
@@ -254,33 +232,15 @@ func composerBubbleTimestamp(createdAt string) time.Time {
 	orderable := cursorstore.OrderableTimestamp(createdAt)
 	if orderable == "" {
 		if createdAt != "" {
-			slog.Debug(
-				"providers.cursor.parser.bubble_timestamp_unparsed",
-				"concern",
-				concern,
-				"created_at",
-				createdAt,
-			)
+			slog.Debug("providers.cursor.parser.bubble_timestamp_unparsed", "concern", concern, "created_at", createdAt)
 		}
-
 		return time.Time{}
 	}
-
 	parsed, err := time.Parse(time.RFC3339, orderable)
 	if err != nil {
-		slog.Debug(
-			"providers.cursor.parser.bubble_timestamp_unparsed",
-			"concern",
-			concern,
-			"created_at",
-			createdAt,
-			"err",
-			err,
-		)
-
+		slog.Debug("providers.cursor.parser.bubble_timestamp_unparsed", "concern", concern, "created_at", createdAt, "err", err)
 		return time.Time{}
 	}
-
 	return parsed.UTC()
 }
 
@@ -298,18 +258,15 @@ func mapLegacyBubble(
 	default:
 		return emptyMessage(), false
 	}
-
 	// See mapComposerBubble: Clyde injects only into the assistant stream,
 	// so a user bubble is never stripped.
 	text := bubble.Text
 	if role == "assistant" {
 		text = stripClydeSyntheticEnvelopes(bubble.Text)
 	}
-
 	if text == "" {
 		return emptyMessage(), false
 	}
-
 	return transcript.Message{
 		UUID:              "",
 		ParentUUID:        "",
@@ -322,8 +279,7 @@ func mapLegacyBubble(
 		Thinking:          "",
 		HasTools:          false,
 		Tools:             nil,
-		Attachments:       nil,
-		TextParts:         nil,
+		Attachments:       nil, TextParts: nil,
 	}, true
 }
 
@@ -340,8 +296,7 @@ func emptyMessage() transcript.Message {
 		Thinking:          "",
 		HasTools:          false,
 		Tools:             nil,
-		Attachments:       nil,
-		TextParts:         nil,
+		Attachments:       nil, TextParts: nil,
 	}
 }
 
@@ -377,16 +332,13 @@ func emptyMessage() transcript.Message {
 // to be Clyde's own content and removed.
 func stripClydeSyntheticEnvelopes(text string) string {
 	parts := adapterrender.ExtractSyntheticParts(text)
-
 	textBodies := make([]string, 0, len(parts))
 	for _, part := range parts {
 		if part.Kind != adapterrender.SyntheticKindText {
 			continue
 		}
-
 		textBodies = append(textBodies, part.Body)
 	}
-
 	return strings.Join(textBodies, "\n\n")
 }
 
@@ -394,7 +346,6 @@ func cloneRaw(raw json.RawMessage) json.RawMessage {
 	if len(raw) == 0 {
 		return nil
 	}
-
 	return append(json.RawMessage(nil), raw...)
 }
 
@@ -403,12 +354,10 @@ func rawArgsToJSON(raw string) json.RawMessage {
 	if json.Valid([]byte(trimmed)) {
 		return append(json.RawMessage(nil), []byte(trimmed)...)
 	}
-
 	encoded, err := json.Marshal(raw)
 	if err != nil {
 		return nil
 	}
-
 	return encoded
 }
 

@@ -18,7 +18,6 @@ func TestResponseAdapterAppliesRealAgentGateDiagnostic(t *testing.T) {
 	if command == "" {
 		t.Skip("AGENT_GATE_TEST_COMMAND is unset")
 	}
-
 	prohibitedVerb := strings.Join([]string{"car", "ries"}, "")
 	responseText := "The response " + prohibitedVerb + " the result."
 	body := "event: response.output_text.delta\n" +
@@ -34,17 +33,11 @@ func TestResponseAdapterAppliesRealAgentGateDiagnostic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TransformResponse: %v", err)
 	}
-
 	got, err := io.ReadAll(response.Body)
 	if err != nil {
 		t.Fatalf("read response: %v", err)
 	}
-
-	for _, expected := range []string{
-		responseText,
-		"Agent Gate rejected",
-		"no-vague-prose-relationships",
-	} {
+	for _, expected := range []string{responseText, "Agent Gate rejected", "no-vague-prose-relationships"} {
 		if !bytes.Contains(got, []byte(expected)) {
 			t.Fatalf("response missing %q: %s", expected, got)
 		}

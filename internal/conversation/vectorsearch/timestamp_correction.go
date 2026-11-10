@@ -76,18 +76,8 @@ type TimestampCorrectionReport struct {
 // NewCorrectionReport returns a report with zero counts and an initialized source outcome map.
 func NewCorrectionReport() TimestampCorrectionReport {
 	return TimestampCorrectionReport{
-		Conversations:  0,
-		RowsListed:     0,
-		RowsPlanned:    0,
-		RowsCurrent:    0,
-		RowsWritten:    0,
-		GuardMismatch:  0,
-		RowsAbsent:     0,
-		NotEvaluated:   0,
-		ToKnown:        0,
-		ToUnknown:      0,
-		SourceOutcomes: map[string]int{},
-		Evidence:       nil,
+		Conversations: 0, RowsListed: 0, RowsPlanned: 0, RowsCurrent: 0, RowsWritten: 0, GuardMismatch: 0,
+		RowsAbsent: 0, NotEvaluated: 0, ToKnown: 0, ToUnknown: 0, SourceOutcomes: map[string]int{}, Evidence: nil,
 	}
 }
 
@@ -106,7 +96,6 @@ func (report *TimestampCorrectionReport) Add(other TimestampCorrectionReport) {
 	if report.SourceOutcomes == nil {
 		report.SourceOutcomes = map[string]int{}
 	}
-
 	for outcome, count := range other.SourceOutcomes {
 		report.SourceOutcomes[outcome] += count
 	}
@@ -127,14 +116,8 @@ func correctionDesired(evidence SourceRepairEvidence) (int64, bool) {
 	switch evidence.Outcome {
 	case SourceOutcomeMatched:
 		return evidence.Chosen, true
-	case SourceOutcomeEmpty,
-		SourceOutcomeIncomplete,
-		SourceOutcomeMissingSource,
-		SourceOutcomeComponentUnevaluated,
-		SourceOutcomeSequenceMismatch,
-		SourceOutcomeContentMismatch,
-		SourceOutcomeIdentityUnavailable,
-		SourceOutcomeUnmatched:
+	case SourceOutcomeEmpty, SourceOutcomeIncomplete, SourceOutcomeMissingSource, SourceOutcomeComponentUnevaluated,
+		SourceOutcomeSequenceMismatch, SourceOutcomeContentMismatch, SourceOutcomeIdentityUnavailable, SourceOutcomeUnmatched:
 		return 0, false
 	default:
 		return missingTimestampUnix, true
@@ -144,219 +127,96 @@ func correctionDesired(evidence SourceRepairEvidence) (int64, bool) {
 // CorrectTimestampsFromSource plans timestamp corrections from source evidence
 // for rows in Corrections. It writes and verifies updates when dryRun is false
 // and every listed row exists and passes its expected state checks.
-func (c *Client) CorrectTimestampsFromSource(
-	ctx context.Context,
-	collectionID string,
-	sources []TimestampSourceRepairSource,
-	dryRun bool,
-) (TimestampCorrectionReport, error) {
+func (c *Client) CorrectTimestampsFromSource(ctx context.Context, collectionID string, sources []TimestampSourceRepairSource, dryRun bool) (TimestampCorrectionReport, error) {
 	report := NewCorrectionReport()
 	if c == nil {
 		return report, errors.New("conversation search client is nil")
 	}
-
 	milvus, isMilvus := c.store.(*milvusBackend)
 	if !isMilvus || milvus.shared == nil {
 		return report, ErrTimestampRepairUnsupported
 	}
-
 	collectionName := CollectionName(strings.TrimSpace(collectionID))
 	exists, err := c.loadCollectionIfPresent(ctx, collectionName)
 	if err != nil {
 		return report, err
 	}
-
 	if !exists {
-		slog.WarnContext(
-			ctx,
-			"conversation.vectorsearch.timestamp_correction_collection_absent",
-			"concern",
-			"conversation.semantic",
-			"component",
-			"conversation",
-			"collection",
-			collectionName,
-		)
-
-		return report, fmt.Errorf(
-			"collection does not exist %s: %w",
-			collectionName,
-			ErrCollectionAbsent,
-		)
+		slog.WarnContext(ctx, "conversation.vectorsearch.timestamp_correction_collection_absent",
+			"concern", "conversation.semantic", "component", "conversation", "collection", collectionName)
+		return report, fmt.Errorf("collection does not exist %s: %w", collectionName, ErrCollectionAbsent)
 	}
-
 	targets := make(map[string]correctionTarget)
 	guards := make(map[string]TimestampCorrectionGuard)
-
 	for _, source := range sources {
 		if source.Corrections == nil {
 			return report, errors.New("correction source requires a non-nil Corrections map")
 		}
-
 		report.Conversations++
 		report.RowsListed += len(source.Corrections)
 		maps.Copy(guards, source.Corrections)
-
 		for id, guard := range source.Corrections {
-			targets[id] = correctionTarget{
-				conversationID: source.ConversationID,
-				family:         "",
-				outcome:        "",
-				desired:        guard.TimestampUnix,
-				evaluated:      false,
-				toolCallID:     "",
-				toolProjection: "",
-			}
+			targets[id] = correctionTarget{conversationID: source.ConversationID, family: "", outcome: "", desired: guard.TimestampUnix, evaluated: false, toolCallID: "", toolProjection: ""}
 		}
-
 		evidence, readErr := c.sourceEvidence(ctx, collectionName, source)
 		if readErr != nil {
 			return report, readErr
 		}
-
-		applyCorrectionEvidence(source.ConversationID, evidence, guards, targets, &report)
-	}
-
-	updates, err := c.planCorrections(ctx, milvus, collectionName, guards, targets, &report)
-	if err != nil || dryRun || len(updates) == 0 || report.GuardMismatch > 0 ||
-		report.RowsAbsent > 0 {
-		return report, err
-	}
-
-	if err := c.writeTimestampCorrections(
-		ctx,
-		milvus,
-		collectionName,
-		updates,
-		guards,
-		&report,
-	); err != nil {
-		return report, err
-	}
-
-	return report, nil
-}
-
-func applyCorrectionEvidence(
-	sourceConversationID string,
-	evidence []SourceRepairEvidence,
-	guards map[string]TimestampCorrectionGuard,
-	targets map[string]correctionTarget,
-	report *TimestampCorrectionReport,
-) {
-	for _, entry := range evidence {
-		desired, evaluated := correctionDesired(entry)
-		for _, rowID := range entry.Rows {
-			report.SourceOutcomes[entry.Outcome]++
-			target := correctionTarget{
-				conversationID: sourceConversationID,
-				family:         entry.Family,
-				outcome:        entry.Outcome,
-				desired:        desired,
-				evaluated:      evaluated,
-				toolCallID:     entry.ToolCallID,
-				toolProjection: entry.ToolProjection,
+		for _, entry := range evidence {
+			desired, evaluated := correctionDesired(entry)
+			for _, id := range entry.Rows {
+				report.SourceOutcomes[entry.Outcome]++
+				target := correctionTarget{conversationID: source.ConversationID, family: entry.Family, outcome: entry.Outcome, desired: desired, evaluated: evaluated, toolCallID: entry.ToolCallID, toolProjection: entry.ToolProjection}
+				if !evaluated {
+					target.desired = guards[id].TimestampUnix
+				}
+				targets[id] = target
 			}
-			if !evaluated {
-				target.desired = guards[rowID].TimestampUnix
-			}
-
-			targets[rowID] = target
 		}
 	}
-}
-
-func (c *Client) writeTimestampCorrections(
-	ctx context.Context,
-	milvus *milvusBackend,
-	collectionName string,
-	updates []timestampUpdate,
-	guards map[string]TimestampCorrectionGuard,
-	report *TimestampCorrectionReport,
-) error {
-	written := newTimestampRepairReport()
+	updates, err := c.planCorrections(ctx, milvus, collectionName, guards, targets, &report)
+	if err != nil || dryRun || len(updates) == 0 || report.GuardMismatch > 0 || report.RowsAbsent > 0 {
+		return report, err
+	}
+	written := TimestampRepairReport{Conversations: 0, RowsRead: 0, RowsCurrent: 0, RowsChanged: 0, RowsWritten: 0, RowsUnmatched: 0, RowsMissingTimestamp: 0, RowsAmbiguous: 0, RowsInvalidMetadata: 0}
 	writeErr := writeSourceTimestamps(ctx, c, milvus, collectionName, updates, &written)
 	report.RowsWritten = written.RowsWritten
 	if writeErr != nil {
-		return writeErr
+		return report, writeErr
 	}
-
 	if err := milvus.verifyCorrections(ctx, collectionName, updates, guards); err != nil {
-		return err
+		return report, err
 	}
-
 	writtenIDs := make(map[string]bool, len(updates))
 	for _, update := range updates {
 		writtenIDs[update.id] = true
 	}
-
 	for index := range report.Evidence {
 		report.Evidence[index].Written = writtenIDs[report.Evidence[index].RowID]
 	}
-
-	slog.InfoContext(
-		ctx,
-		"conversation.vectorsearch.timestamp_correction_completed",
-		"concern",
-		"conversation.semantic",
-		"component",
-		"conversation",
-		"collection",
-		collectionName,
-		"conversations",
-		report.Conversations,
-		"rows_listed",
-		report.RowsListed,
-		"rows_planned",
-		report.RowsPlanned,
-		"rows_written",
-		report.RowsWritten,
-		"guard_mismatch",
-		report.GuardMismatch,
-		"rows_absent",
-		report.RowsAbsent,
-	)
-
-	return nil
+	slog.InfoContext(ctx, "conversation.vectorsearch.timestamp_correction_completed",
+		"concern", "conversation.semantic", "component", "conversation", "collection", collectionName,
+		"conversations", report.Conversations, "rows_listed", report.RowsListed, "rows_planned", report.RowsPlanned,
+		"rows_written", report.RowsWritten, "guard_mismatch", report.GuardMismatch, "rows_absent", report.RowsAbsent)
+	return report, nil
 }
 
-func (c *Client) planCorrections(
-	ctx context.Context,
-	milvus *milvusBackend,
-	collectionName string,
-	guards map[string]TimestampCorrectionGuard,
-	targets map[string]correctionTarget,
-	report *TimestampCorrectionReport,
-) ([]timestampUpdate, error) {
+func (c *Client) planCorrections(ctx context.Context, milvus *milvusBackend, collectionName string, guards map[string]TimestampCorrectionGuard, targets map[string]correctionTarget, report *TimestampCorrectionReport) ([]timestampUpdate, error) {
 	ids := make([]string, 0, len(guards))
 	for id := range guards {
 		ids = append(ids, id)
 	}
-
 	slices.Sort(ids)
 	stored, err := milvus.readRowGuards(ctx, collectionName, ids)
 	if err != nil {
 		return nil, err
 	}
-
 	updates := make([]timestampUpdate, 0)
-
 	for _, id := range ids {
 		guard := guards[id]
 		target := targets[id]
 		evaluated := target.evaluated
-		evidence := TimestampCorrectionEvidence{
-			RowID:          id,
-			ConversationID: target.conversationID,
-			Family:         target.family,
-			SourceOutcome:  target.outcome,
-			Correction:     CorrectionNotEvaluated,
-			FromUnix:       guard.TimestampUnix,
-			ToUnix:         target.desired,
-			Written:        false,
-			ToolCallID:     target.toolCallID,
-			ToolProjection: target.toolProjection,
-		}
+		evidence := TimestampCorrectionEvidence{RowID: id, ConversationID: target.conversationID, Family: target.family, SourceOutcome: target.outcome, Correction: CorrectionNotEvaluated, FromUnix: guard.TimestampUnix, ToUnix: target.desired, Written: false, ToolCallID: target.toolCallID, ToolProjection: target.toolProjection}
 		current, found := stored[id]
 		switch {
 		case !found:
@@ -374,11 +234,7 @@ func (c *Client) planCorrections(
 		case !evaluated:
 			report.NotEvaluated++
 		default:
-			rewritten, metadataTimestamp, replaceErr := replaceMetadataTimestamp(
-				id,
-				current.metadata,
-				target.desired,
-			)
+			rewritten, metadataTimestamp, replaceErr := replaceMetadataTimestamp(id, current.metadata, target.desired)
 			switch {
 			case replaceErr != nil:
 				report.NotEvaluated++
@@ -393,114 +249,61 @@ func (c *Client) planCorrections(
 				} else {
 					report.ToKnown++
 				}
-
-				updates = append(
-					updates,
-					timestampUpdate{
-						id:            id,
-						relativePath:  current.relativePath,
-						metadata:      rewritten,
-						timestampUnix: target.desired,
-					},
-				)
+				updates = append(updates, timestampUpdate{id: id, relativePath: current.relativePath, metadata: rewritten, timestampUnix: target.desired})
 			}
 		}
-
 		report.Evidence = append(report.Evidence, evidence)
 	}
-
 	return updates, nil
 }
 
 // correctedFromGuard reports whether the scalar and metadata timestamps equal
 // desired and restoring guard.MetadataTimestampUnix reproduces
 // guard.MetadataSHA256.
-func correctedFromGuard(
-	rowID string,
-	current storedGuard,
-	guard TimestampCorrectionGuard,
-	desired int64,
-) bool {
+func correctedFromGuard(id string, current storedGuard, guard TimestampCorrectionGuard, desired int64) bool {
 	if current.timestampUnix != desired {
 		return false
 	}
-
-	restored, metadataTimestamp, err := replaceMetadataTimestamp(
-		rowID,
-		current.metadata,
-		guard.MetadataTimestampUnix,
-	)
+	restored, metadataTimestamp, err := replaceMetadataTimestamp(id, current.metadata, guard.MetadataTimestampUnix)
 	if err != nil || metadataTimestamp != desired {
 		return false
 	}
-
 	forms := []string{restored}
 	if guard.MetadataTimestampUnix == missingTimestampUnix {
 		nullField := fmt.Sprintf("%q:%s", metadataTimestampKey, metadataNull)
 		markerField := fmt.Sprintf("%q:%d", metadataTimestampKey, missingTimestampUnix)
 		forms = append(forms, strings.Replace(restored, nullField, markerField, 1))
 	}
-
 	for _, form := range forms {
 		sum := sha256.Sum256([]byte(form))
 		if hex.EncodeToString(sum[:]) == guard.MetadataSHA256 {
 			return true
 		}
 	}
-
 	return false
 }
 
-func (c *Client) sourceEvidence(
-	ctx context.Context,
-	collectionName string,
-	source TimestampSourceRepairSource,
-) ([]SourceRepairEvidence, error) {
+func (c *Client) sourceEvidence(ctx context.Context, collectionName string, source TimestampSourceRepairSource) ([]SourceRepairEvidence, error) {
 	conversationID := strings.TrimSpace(source.ConversationID)
-	rows, err := c.store.QueryRows(
-		ctx,
-		collection.RowsRequest{
-			Collection:  collectionName,
-			Declaration: sourceRepairRowsDeclaration(),
-			ItemIDs:     []string{conversationID},
-			PathPrefixes: []string{
-				conversationRelativePathPrefix(conversationID),
-				conversationToolRelativePathPrefix(conversationID),
-				conversationThinkingRelativePathPrefix(conversationID),
-			},
-			IncludeVector: false,
+	rows, err := c.store.QueryRows(ctx, collection.RowsRequest{
+		Collection:  collectionName,
+		Declaration: sourceRepairRowsDeclaration(),
+		ItemIDs:     []string{conversationID},
+		PathPrefixes: []string{
+			conversationRelativePathPrefix(conversationID),
+			conversationToolRelativePathPrefix(conversationID),
+			conversationThinkingRelativePathPrefix(conversationID),
 		},
-	)
+		IncludeVector: false,
+	})
 	if err != nil {
 		return nil, failRead("read conversation rows from collection "+collectionName, err)
 	}
-
 	report := TimestampSourceRepairReport{
-		TimestampRepairReport: TimestampRepairReport{
-			Conversations:        0,
-			RowsRead:             0,
-			RowsCurrent:          0,
-			RowsChanged:          0,
-			RowsWritten:          0,
-			RowsUnmatched:        0,
-			RowsMissingTimestamp: 0,
-			RowsAmbiguous:        0,
-			RowsInvalidMetadata:  0,
-		},
-		RowsNotZeroTime:  0,
-		RowsEmptyContent: 0,
-		RowsIncomplete:   0,
-		Evidence:         nil,
-		Outcomes:         map[string]int{},
+		TimestampRepairReport: TimestampRepairReport{Conversations: 0, RowsRead: 0, RowsCurrent: 0, RowsChanged: 0, RowsWritten: 0, RowsUnmatched: 0, RowsMissingTimestamp: 0, RowsAmbiguous: 0, RowsInvalidMetadata: 0},
+		RowsNotZeroTime:       0, RowsEmptyContent: 0, RowsIncomplete: 0, Evidence: nil, Outcomes: map[string]int{},
 	}
-	matchSourceFamilies(
-		conversationID,
-		rows,
-		newSourceTimeLookup(source),
-		make(map[string]matchedRow),
-		&report,
-	)
-
+	matchSourceFamilies(conversationID, rows, newSourceTimeLookup(source), make(map[string]matchedRow), &report)
 	return report.Evidence, nil
 }
 
@@ -513,56 +316,29 @@ type storedGuard struct {
 }
 
 // readRowGuards reads stored row values with strong consistency and computes metadata hashes for correction checks.
-func (b *milvusBackend) readRowGuards(
-	ctx context.Context,
-	collectionName string,
-	ids []string,
-) (map[string]storedGuard, error) {
+func (b *milvusBackend) readRowGuards(ctx context.Context, collectionName string, ids []string) (map[string]storedGuard, error) {
 	stored := make(map[string]storedGuard, len(ids))
-	timestampColumn := collection.ScalarColumn{
-		Name:      timestampUnixColumn,
-		Type:      collection.ScalarTypeInt64,
-		Nullable:  true,
-		MaxLength: 0,
-	}
-
+	timestampColumn := collection.ScalarColumn{Name: timestampUnixColumn, Type: collection.ScalarTypeInt64, Nullable: true, MaxLength: 0}
 	for start := 0; start < len(ids); start += conversationFilterIDBatchSize {
 		end := min(start+conversationFilterIDBatchSize, len(ids))
-		resultSet, err := b.client.Query(
-			ctx,
-			milvusclient.NewQueryOption(collectionName).
-				WithIDs(
-					column.NewColumnVarChar(milvusstore.IDField, slices.Clone(ids[start:end])),
-				).
-				WithOutputFields(
-					milvusstore.IDField,
-					milvusstore.RelativePathField,
-					milvusstore.MetadataField,
-					timestampUnixColumn,
-					milvusstore.VectorKeyField,
-				).
-				WithConsistencyLevel(
-					entity.ClStrong,
-				),
-		)
+		resultSet, err := b.client.Query(ctx, milvusclient.NewQueryOption(collectionName).
+			WithIDs(column.NewColumnVarChar(milvusstore.IDField, slices.Clone(ids[start:end]))).
+			WithOutputFields(milvusstore.IDField, milvusstore.RelativePathField, milvusstore.MetadataField, timestampUnixColumn, milvusstore.VectorKeyField).
+			WithConsistencyLevel(entity.ClStrong))
 		if err != nil {
 			return nil, failRead("read stored row guards from "+collectionName, err)
 		}
-
 		if resultSet.ResultCount == 0 {
 			continue
 		}
-
 		idColumn := resultSet.GetColumn(milvusstore.IDField)
 		pathColumn := resultSet.GetColumn(milvusstore.RelativePathField)
 		metadataColumn := resultSet.GetColumn(milvusstore.MetadataField)
 		cellColumn := resultSet.GetColumn(timestampUnixColumn)
 		keyColumn := resultSet.GetColumn(milvusstore.VectorKeyField)
-		if idColumn == nil || pathColumn == nil || metadataColumn == nil || cellColumn == nil ||
-			keyColumn == nil {
+		if idColumn == nil || pathColumn == nil || metadataColumn == nil || cellColumn == nil || keyColumn == nil {
 			return nil, collection.ErrSearchResultIncomplete
 		}
-
 		for rowIndex := range resultSet.ResultCount {
 			id, idErr := idColumn.GetAsString(rowIndex)
 			path, pathErr := pathColumn.GetAsString(rowIndex)
@@ -570,72 +346,35 @@ func (b *milvusBackend) readRowGuards(
 			key, keyErr := keyColumn.GetAsString(rowIndex)
 			value, valueErr := milvusstore.ScalarValueAt(cellColumn, timestampColumn, rowIndex)
 			if err := errors.Join(idErr, pathErr, metadataErr, keyErr, valueErr); err != nil {
-				return nil, failRead(
-					fmt.Sprintf("read guard values of row %d from %s", rowIndex, collectionName),
-					err,
-				)
+				return nil, failRead(fmt.Sprintf("read guard values of row %d from %s", rowIndex, collectionName), err)
 			}
-
 			stamp := value.Int64
 			if value.Null {
 				stamp = missingTimestampUnix
 			}
-
 			sum := sha256.Sum256([]byte(metadata))
-			stored[id] = storedGuard{
-				relativePath:   path,
-				metadata:       metadata,
-				metadataSHA256: hex.EncodeToString(sum[:]),
-				timestampUnix:  stamp,
-				vectorKey:      key,
-			}
+			stored[id] = storedGuard{relativePath: path, metadata: metadata, metadataSHA256: hex.EncodeToString(sum[:]), timestampUnix: stamp, vectorKey: key}
 		}
 	}
-
 	return stored, nil
 }
 
-func (b *milvusBackend) verifyCorrections(
-	ctx context.Context,
-	collectionName string,
-	updates []timestampUpdate,
-	guards map[string]TimestampCorrectionGuard,
-) error {
+func (b *milvusBackend) verifyCorrections(ctx context.Context, collectionName string, updates []timestampUpdate, guards map[string]TimestampCorrectionGuard) error {
 	ids := make([]string, 0, len(updates))
 	for _, update := range updates {
 		ids = append(ids, update.id)
 	}
-
 	stored, err := b.readRowGuards(ctx, collectionName, ids)
 	if err != nil {
 		return err
 	}
-
 	for _, update := range updates {
 		current, found := stored[update.id]
-		if !found || current.timestampUnix != update.timestampUnix ||
-			current.metadata != update.metadata ||
-			current.vectorKey != guards[update.id].VectorKey {
-			verifyErr := fmt.Errorf(
-				"timestamp correction verification failed for row %s",
-				update.id,
-			)
-			slog.ErrorContext(
-				ctx,
-				"conversation.vectorsearch.timestamp_correction_verify_failed",
-				"concern",
-				"conversation.semantic",
-				"component",
-				"conversation",
-				"row_id",
-				update.id,
-				"err",
-				verifyErr,
-			)
-
+		if !found || current.timestampUnix != update.timestampUnix || current.metadata != update.metadata || current.vectorKey != guards[update.id].VectorKey {
+			verifyErr := fmt.Errorf("timestamp correction verification failed for row %s", update.id)
+			slog.ErrorContext(ctx, "conversation.vectorsearch.timestamp_correction_verify_failed", "concern", "conversation.semantic", "component", "conversation", "row_id", update.id, "err", verifyErr)
 			return verifyErr
 		}
 	}
-
 	return nil
 }

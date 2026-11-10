@@ -54,10 +54,8 @@ func (r *replayConversationClient) Recv() (*clydev1.ConversationChunk, error) {
 	if r.cursor >= len(r.chunks) {
 		return nil, io.EOF
 	}
-
 	chunk := &clydev1.ConversationChunk{Text: r.chunks[r.cursor]}
 	r.cursor++
-
 	return chunk, nil
 }
 
@@ -74,10 +72,8 @@ func (r *replayExportClient) Recv() (*clydev1.ExportChunk, error) {
 	if r.cursor >= len(r.chunks) {
 		return nil, io.EOF
 	}
-
 	chunk := &clydev1.ExportChunk{Body: r.chunks[r.cursor]}
 	r.cursor++
-
 	return chunk, nil
 }
 
@@ -95,7 +91,6 @@ func (r *recordingProviderStatsStream) Send(event *clydev1.ProviderStatsEvent) e
 	if len(r.events) == 2 {
 		r.cancel()
 	}
-
 	return nil
 }
 
@@ -119,7 +114,6 @@ func TestSubscribeProviderStatsUsesEmissionTime(t *testing.T) {
 		providerStatsNow: func() time.Time {
 			result := emissionTimes[emissionIndex]
 			emissionIndex++
-
 			return result
 		},
 		providerStatsTicks: ticks,
@@ -129,21 +123,13 @@ func TestSubscribeProviderStatsUsesEmissionTime(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "context canceled") {
 		t.Fatalf("SubscribeProviderStats() error = %v, want context canceled", err)
 	}
-
 	if len(stream.events) != 2 {
 		t.Fatalf("event count = %d, want 2", len(stream.events))
 	}
-
 	for i, event := range stream.events {
 		if event.GetEmittedAtUnix() != emissionTimes[i].Unix() {
-			t.Fatalf(
-				"event %d emitted_at_unix = %d, want %d",
-				i,
-				event.GetEmittedAtUnix(),
-				emissionTimes[i].Unix(),
-			)
+			t.Fatalf("event %d emitted_at_unix = %d, want %d", i, event.GetEmittedAtUnix(), emissionTimes[i].Unix())
 		}
-
 		if event.GetEmittedAtUnix() == generationStartedAt.Unix() {
 			t.Fatalf("event %d reused generation start", i)
 		}
@@ -152,7 +138,6 @@ func TestSubscribeProviderStatsUsesEmissionTime(t *testing.T) {
 
 func TestStreamTextChunksRoundTrips(t *testing.T) {
 	t.Parallel()
-
 	cases := map[string]string{
 		"empty":           "",
 		"single_byte":     "x",
@@ -163,43 +148,30 @@ func TestStreamTextChunksRoundTrips(t *testing.T) {
 		// A multibyte rune straddling a chunk boundary must survive: the byte
 		// stream is split at controlStreamChunkBytes, which can fall inside a
 		// 3-byte rune, and the reassembler stitches the bytes before decoding.
-		"multibyte_boundary": strings.Repeat("a", controlStreamChunkBytes-1) + strings.Repeat(
-			"世",
-			4,
-		),
+		"multibyte_boundary": strings.Repeat("a", controlStreamChunkBytes-1) + strings.Repeat("世", 4),
 	}
 	for name, text := range cases {
-		t.Run(
-			name,
-			func(t *testing.T) {
-				t.Parallel()
-				server := &recordingConversationStream{ServerStreamingServer: nil, chunks: nil}
-				if err := streamTextChunks(server, text); err != nil {
-					t.Fatalf("streamTextChunks: %v", err)
-				}
-
-				assertChunkBounds(t, server.chunks)
-				client := &replayConversationClient{
-					ServerStreamingClient: nil,
-					chunks:                server.chunks,
-					cursor:                0,
-				}
-				got, err := reassembleConversationChunks(context.Background(), client)
-				if err != nil {
-					t.Fatalf("reassembleConversationChunks: %v", err)
-				}
-
-				if got != text {
-					t.Fatalf("reassembled text length %d, want %d", len(got), len(text))
-				}
-			},
-		)
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			server := &recordingConversationStream{ServerStreamingServer: nil, chunks: nil}
+			if err := streamTextChunks(server, text); err != nil {
+				t.Fatalf("streamTextChunks: %v", err)
+			}
+			assertChunkBounds(t, server.chunks)
+			client := &replayConversationClient{ServerStreamingClient: nil, chunks: server.chunks, cursor: 0}
+			got, err := reassembleConversationChunks(context.Background(), client)
+			if err != nil {
+				t.Fatalf("reassembleConversationChunks: %v", err)
+			}
+			if got != text {
+				t.Fatalf("reassembled text length %d, want %d", len(got), len(text))
+			}
+		})
 	}
 }
 
 func TestStreamExportChunksRoundTrips(t *testing.T) {
 	t.Parallel()
-
 	cases := map[string][]byte{
 		"empty":           {},
 		"single_byte":     {0x01},
@@ -209,37 +181,27 @@ func TestStreamExportChunksRoundTrips(t *testing.T) {
 		"many_chunks":     repeatByte(0x05, controlStreamChunkBytes*2+13),
 	}
 	for name, body := range cases {
-		t.Run(
-			name,
-			func(t *testing.T) {
-				t.Parallel()
-				server := &recordingExportStream{ServerStreamingServer: nil, chunks: nil}
-				if err := streamExportChunks(server, body); err != nil {
-					t.Fatalf("streamExportChunks: %v", err)
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			server := &recordingExportStream{ServerStreamingServer: nil, chunks: nil}
+			if err := streamExportChunks(server, body); err != nil {
+				t.Fatalf("streamExportChunks: %v", err)
+			}
+			assertChunkBounds(t, server.chunks)
+			client := &replayExportClient{ServerStreamingClient: nil, chunks: server.chunks, cursor: 0}
+			got, err := reassembleExportChunks(context.Background(), client)
+			if err != nil {
+				t.Fatalf("reassembleExportChunks: %v", err)
+			}
+			if len(got) != len(body) {
+				t.Fatalf("reassembled body length %d, want %d", len(got), len(body))
+			}
+			for i := range got {
+				if got[i] != body[i] {
+					t.Fatalf("reassembled body differs at index %d", i)
 				}
-
-				assertChunkBounds(t, server.chunks)
-				client := &replayExportClient{
-					ServerStreamingClient: nil,
-					chunks:                server.chunks,
-					cursor:                0,
-				}
-				got, err := reassembleExportChunks(context.Background(), client)
-				if err != nil {
-					t.Fatalf("reassembleExportChunks: %v", err)
-				}
-
-				if len(got) != len(body) {
-					t.Fatalf("reassembled body length %d, want %d", len(got), len(body))
-				}
-
-				for i := range got {
-					if got[i] != body[i] {
-						t.Fatalf("reassembled body differs at index %d", i)
-					}
-				}
-			},
-		)
+			}
+		})
 	}
 }
 
@@ -247,19 +209,12 @@ func TestStreamExportChunksRoundTrips(t *testing.T) {
 // empty chunk is sent, which would waste a frame.
 func assertChunkBounds(t *testing.T, chunks [][]byte) {
 	t.Helper()
-
 	for index, chunk := range chunks {
 		if len(chunk) == 0 {
 			t.Fatalf("chunk %d is empty", index)
 		}
-
 		if len(chunk) > controlStreamChunkBytes {
-			t.Fatalf(
-				"chunk %d is %d bytes, over the %d bound",
-				index,
-				len(chunk),
-				controlStreamChunkBytes,
-			)
+			t.Fatalf("chunk %d is %d bytes, over the %d bound", index, len(chunk), controlStreamChunkBytes)
 		}
 	}
 }
@@ -269,6 +224,5 @@ func repeatByte(value byte, count int) []byte {
 	for i := range body {
 		body[i] = value
 	}
-
 	return body
 }

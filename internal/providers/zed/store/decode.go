@@ -64,12 +64,7 @@ func (err ZstdThreadTooLargeError) Error() string {
 	if err.ActualBytes <= 0 {
 		return fmt.Sprintf("decoded zed zstd thread payload exceeds limit %d bytes", err.LimitBytes)
 	}
-
-	return fmt.Sprintf(
-		"decoded zed zstd thread payload %d bytes exceeds limit %d bytes",
-		err.ActualBytes,
-		err.LimitBytes,
-	)
+	return fmt.Sprintf("decoded zed zstd thread payload %d bytes exceeds limit %d bytes", err.ActualBytes, err.LimitBytes)
 }
 
 // DecodeThreadJSON decodes one stored Zed thread payload into raw JSON bytes.
@@ -86,22 +81,13 @@ func DecodeThreadJSON(dataType DataType, data []byte) ([]byte, error) {
 		decoded, err := decoder.DecodeAll(data, nil)
 		if err != nil {
 			if strings.Contains(err.Error(), "decompressed size exceeds configured limit") {
-				return nil, ZstdThreadTooLargeError{
-					LimitBytes:  maxDecodedThreadBytes,
-					ActualBytes: 0,
-				}
+				return nil, ZstdThreadTooLargeError{LimitBytes: maxDecodedThreadBytes, ActualBytes: 0}
 			}
-
 			return nil, ZstdThreadDecodeError{Err: err}
 		}
-
 		if len(decoded) > maxDecodedThreadBytes {
-			return nil, ZstdThreadTooLargeError{
-				LimitBytes:  maxDecodedThreadBytes,
-				ActualBytes: len(decoded),
-			}
+			return nil, ZstdThreadTooLargeError{LimitBytes: maxDecodedThreadBytes, ActualBytes: len(decoded)}
 		}
-
 		return decoded, nil
 	default:
 		return nil, UnknownThreadDataTypeError{DataType: dataType}

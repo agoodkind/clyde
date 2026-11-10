@@ -14,31 +14,16 @@ import (
 	"goodkind.io/clyde/internal/livetrack"
 )
 
-func (p *Proxy) serveProviderInterceptedHTTP2(
-	ctx context.Context,
-	client *tls.Conn,
-	target string,
-	host string,
-	provider Provider,
-	parent *livetrack.Session[TunnelMeta],
-) {
+func (p *Proxy) serveProviderInterceptedHTTP2(ctx context.Context, client *tls.Conn, target string, host string, provider Provider, parent *livetrack.Session[TunnelMeta]) {
 	providerID := provider.ID().String()
 	stopWatcher := make(chan struct{})
 	var activeRequests atomic.Int32
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				p.log.WarnContext(
-					ctx,
-					"mitm.provider.tls.drain_watcher_panicked",
-					"concern",
-					"providers.mitm.wire",
-					"provider",
-					providerID,
-					"host",
-					host,
-					"panic",
-					recovered,
+				p.log.WarnContext(ctx, "mitm.provider.tls.drain_watcher_panicked", "concern", "providers.mitm.wire", "provider", providerID,
+					"host", host,
+					"panic", recovered,
 				)
 			}
 		}()
@@ -46,23 +31,9 @@ func (p *Proxy) serveProviderInterceptedHTTP2(
 	}()
 	defer close(stopWatcher)
 
-	serveHTTP2Conn(
-		ctx,
-		client,
-		http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			p.handleProviderH2Stream(
-				ctx,
-				client,
-				w,
-				req,
-				target,
-				host,
-				provider,
-				parent,
-				&activeRequests,
-			)
-		}),
-	)
+	serveHTTP2Conn(ctx, client, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		p.handleProviderH2Stream(ctx, client, w, req, target, host, provider, parent, &activeRequests)
+	}))
 }
 
 // serveHTTP2Conn serves HTTP/2 with handler on one TLS connection that
@@ -101,7 +72,6 @@ func (l *singleConnListener) Accept() (net.Conn, error) {
 	if l.accepted.Swap(true) {
 		return nil, net.ErrClosed
 	}
-
 	return l.conn, nil
 }
 
@@ -120,74 +90,38 @@ func (l *singleConnListener) Addr() net.Addr {
 // sink. It uses the connection context ctx (the server base context) for
 // livetrack and logging, matching the h1 loop; the per-stream request context
 // still flows to the upstream round trip through the cloned req.
-func (p *Proxy) handleProviderH2Stream(
-	ctx context.Context,
-	client *tls.Conn,
-	w http.ResponseWriter,
-	req *http.Request,
-	target string,
-	host string,
-	provider Provider,
-	parent *livetrack.Session[TunnelMeta],
-	activeRequests *atomic.Int32,
-) {
+func (p *Proxy) handleProviderH2Stream(ctx context.Context, client *tls.Conn, w http.ResponseWriter, req *http.Request, target string, host string, provider Provider, parent *livetrack.Session[TunnelMeta], activeRequests *atomic.Int32) {
 	providerID := provider.ID().String()
 	parent.Touch()
 	activeRequests.Add(1)
 	defer activeRequests.Add(-1)
 
 	closer := newTunnelCloser(&connCloser{conn: client}, nil)
-	streamSession, registerErr := p.Tunnels.Register(
-		ctx,
-		"mitm."+providerID+".http2",
-		TunnelMeta{
-			ConnectHost:   host,
-			UpstreamAddr:  target,
-			CaptureFile:   "",
-			KeepaliveSeen: false,
-		},
-		closer,
-		livetrack.WithParent(parent),
-	)
+	streamSession, registerErr := p.Tunnels.Register(ctx, "mitm."+providerID+".http2", TunnelMeta{
+		ConnectHost:   host,
+		UpstreamAddr:  target,
+		CaptureFile:   "",
+		KeepaliveSeen: false,
+	}, closer, livetrack.WithParent(parent))
 	if registerErr != nil {
-		p.rejectProviderH2Stream(ctx, w, req, providerID, host, parent, registerErr)
-
+		_ = req.Body.Close()
+		if !errors.Is(registerErr, livetrack.ErrRegistryClosed) || parent == nil || p.Tunnels.State() != livetrack.StateDraining {
+			p.log.WarnContext(ctx, "mitm.provider.http2.register_rejected", "concern", "providers.mitm.wire", "provider", providerID, "host", host, "err", registerErr)
+		} else {
+			p.log.DebugContext(ctx, "mitm.provider.http2.request_rejected_reload_drain", "concern", "providers.mitm.wire", "provider", providerID, "host", host, "err", registerErr)
+		}
+		http.Error(w, "service draining", http.StatusServiceUnavailable)
 		return
 	}
-
 	releaseReason := "mitm." + providerID + ".http2.completed"
 	defer func() {
 		p.Tunnels.Release(ctx, streamSession, releaseReason)
 	}()
 
 	sink := &h2ProviderResponseSink{rw: w, session: streamSession, wroteHeader: false}
-	if err := p.handleProviderInterceptedRequest(
-		ctx,
-		nil,
-		nil,
-		sink,
-		req,
-		target,
-		host,
-		provider,
-		parent,
-		streamSession,
-	); err != nil {
+	if err := p.handleProviderInterceptedRequest(ctx, nil, nil, sink, req, target, host, provider, parent, streamSession); err != nil {
 		releaseReason = "mitm." + providerID + ".http2.failed"
-		p.log.WarnContext(
-			ctx,
-			"mitm.provider.http2.request_failed",
-			"concern",
-			"providers.mitm.wire",
-			"provider",
-			providerID,
-			"host",
-			host,
-			"path",
-			req.URL.Path,
-			"err",
-			err,
-		)
+		p.log.WarnContext(ctx, "mitm.provider.http2.request_failed", "concern", "providers.mitm.wire", "provider", providerID, "host", host, "path", req.URL.Path, "err", err)
 		// A failure before any header was written would otherwise leave the h2
 		// stream with no explicit response; net/http2 implicitly closes it as a
 		// 200 with an empty body, misleading the client into treating the
@@ -196,54 +130,10 @@ func (p *Proxy) handleProviderH2Stream(
 		if !sink.wroteHeader {
 			http.Error(w, "bad gateway", http.StatusBadGateway)
 		}
-
 		return
 	}
-
 	parent.Touch()
 	streamSession.Touch()
-}
-
-func (p *Proxy) rejectProviderH2Stream(
-	ctx context.Context,
-	writer http.ResponseWriter,
-	req *http.Request,
-	providerID string,
-	host string,
-	parent *livetrack.Session[TunnelMeta],
-	registerErr error,
-) {
-	_ = req.Body.Close()
-	if !errors.Is(registerErr, livetrack.ErrRegistryClosed) || parent == nil ||
-		p.Tunnels.State() != livetrack.StateDraining {
-		p.log.WarnContext(
-			ctx,
-			"mitm.provider.http2.register_rejected",
-			"concern",
-			"providers.mitm.wire",
-			"provider",
-			providerID,
-			"host",
-			host,
-			"err",
-			registerErr,
-		)
-	} else {
-		p.log.DebugContext(
-			ctx,
-			"mitm.provider.http2.request_rejected_reload_drain",
-			"concern",
-			"providers.mitm.wire",
-			"provider",
-			providerID,
-			"host",
-			host,
-			"err",
-			registerErr,
-		)
-	}
-
-	http.Error(writer, "service draining", http.StatusServiceUnavailable)
 }
 
 type h2ProviderResponseSink struct {
@@ -252,10 +142,7 @@ type h2ProviderResponseSink struct {
 	wroteHeader bool
 }
 
-func (s *h2ProviderResponseSink) writeProviderResponse(
-	resp *http.Response,
-	bodyCap int,
-) (int64, []byte, error) {
+func (s *h2ProviderResponseSink) writeProviderResponse(resp *http.Response, bodyCap int) (int64, []byte, error) {
 	forwardResponseHeaders(s.rw.Header(), resp.Header)
 	s.wroteHeader = true
 	s.rw.WriteHeader(resp.StatusCode)
@@ -267,7 +154,6 @@ func (s *h2ProviderResponseSink) writeProviderResponse(
 	// caller (forwardProviderRequestToUpstream) owns logging, matching the h1
 	// forwardAndCaptureProviderResponse contract.
 	err := streamWithFlush(counter, captureBuffer, resp.Body, flusher, s.session)
-
 	return counter.bytesWritten, captureBuffer.Bytes(), err
 }
 
@@ -277,11 +163,10 @@ type countingWriter struct {
 }
 
 func (w *countingWriter) Write(p []byte) (int, error) {
-	written, err := w.writer.Write(p)
-	w.bytesWritten += int64(written)
+	n, err := w.writer.Write(p)
+	w.bytesWritten += int64(n)
 	if err != nil {
-		return written, fmt.Errorf("counting writer: %w", err)
+		return n, fmt.Errorf("counting writer: %w", err)
 	}
-
-	return written, nil
+	return n, nil
 }

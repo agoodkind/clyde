@@ -70,7 +70,6 @@ func openAITypeForClass(class string) string {
 	if t, ok := openAITypeByClass[strings.TrimSpace(class)]; ok {
 		return t
 	}
-
 	return "invalid_request_error"
 }
 
@@ -96,11 +95,9 @@ func documentedTypeForStatus(status int) string {
 	if envelopeType, ok := documentedTypeByStatus[status]; ok {
 		return envelopeType
 	}
-
 	if status >= http.StatusInternalServerError {
 		return "server_error"
 	}
-
 	return "invalid_request_error"
 }
 
@@ -111,11 +108,9 @@ func envelopeTypeFor(status int, info errcontract.ErrorInfo) string {
 	if info.Contract == errcontract.ClientContractDocumented {
 		return documentedTypeForStatus(status)
 	}
-
 	if info.Type != "" {
 		return info.Type
 	}
-
 	return openAITypeForClass(info.Class)
 }
 
@@ -134,42 +129,25 @@ func (ErrorRenderer) Render(w http.ResponseWriter, code int, info errcontract.Er
 	if body.Code == "" {
 		body.Code = body.Type
 	}
-
 	log := slog.Default()
 	payload, err := json.Marshal(ErrorResponse{Error: body})
 	if err != nil {
 		const fallback = `{"error":{"message":"failed to encode error envelope","type":"internal_error","code":"internal_error"}}`
 		writeErr := erroring.WriteJSONStatus(w, http.StatusInternalServerError, []byte(fallback))
-		log.Warn(
-			"adapter.openai_error_envelope.render_failed",
-			"concern",
-			"adapter.http.errors",
-			"event",
-			"marshal_failed",
-			"err",
-			err.Error(),
+		log.Warn("adapter.openai_error_envelope.render_failed", "concern", "adapter.http.errors", "event", "marshal_failed",
+			"err", err.Error(),
 		)
 		if writeErr != nil {
 			return fmt.Errorf("write openai error fallback: %w", writeErr)
 		}
-
 		return fmt.Errorf("marshal openai error envelope: %w", err)
 	}
-
 	if writeErr := erroring.WriteJSONStatus(w, code, payload); writeErr != nil {
-		log.Warn(
-			"adapter.openai_error_envelope.render_failed",
-			"concern",
-			"adapter.http.errors",
-			"event",
-			"write_failed",
-			"err",
-			writeErr.Error(),
+		log.Warn("adapter.openai_error_envelope.render_failed", "concern", "adapter.http.errors", "event", "write_failed",
+			"err", writeErr.Error(),
 		)
-
 		return fmt.Errorf("write openai error envelope: %w", writeErr)
 	}
-
 	return nil
 }
 
@@ -202,8 +180,7 @@ func (UpstreamErrorMapper) Map(
 	provider string,
 	status int,
 	class errcontract.UpstreamCodeClass,
-	code string,
-	message string,
+	code, message string,
 ) errcontract.UpstreamMapping {
 	trimmedProvider := strings.TrimSpace(provider)
 	trimmedMsg := strings.TrimSpace(message)
@@ -212,7 +189,6 @@ func (UpstreamErrorMapper) Map(
 	if resolvedMessage == "" {
 		resolvedMessage = upstreamFallbackMessage(trimmedProvider, status, trimmedCode, trimmedMsg)
 	}
-
 	switch class {
 	case errcontract.UpstreamClassRateLimit:
 		return openAIInvalidRequestMapping("upstream_rate_limited", resolvedMessage)
@@ -260,32 +236,22 @@ func openAIInvalidRequestMapping(code, message string) errcontract.UpstreamMappi
 // surface a useful diagnostic to the chat transcript. Provider is
 // passed empty here because the boundary holds the provider name and
 // stitches it into adapterError.Provider separately.
-func upstreamFallbackMessage(
-	provider string,
-	upstreamStatus int,
-	upstreamCode string,
-	upstreamMessage string,
-) string {
+func upstreamFallbackMessage(provider string, upstreamStatus int, upstreamCode, upstreamMessage string) string {
 	parts := []string{}
 	if provider != "" {
 		parts = append(parts, "provider="+provider)
 	}
-
 	if upstreamStatus > 0 {
 		parts = append(parts, "upstream_status="+strconv.Itoa(upstreamStatus))
 	}
-
 	if upstreamCode != "" {
 		parts = append(parts, "upstream_code="+upstreamCode)
 	}
-
 	if upstreamMessage != "" {
 		parts = append(parts, "upstream_message="+upstreamMessage)
 	}
-
 	if len(parts) == 0 {
 		return "upstream call failed without diagnostic detail"
 	}
-
 	return "upstream call failed: " + strings.Join(parts, " ")
 }

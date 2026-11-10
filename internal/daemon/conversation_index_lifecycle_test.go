@@ -31,38 +31,24 @@ func (parser *cachedBoundaryParser) Provider() providerid.Provider {
 	if parser.provider != providerid.ProviderUnspecified {
 		return parser.provider
 	}
-
 	return providerid.ProviderCursor
 }
 
-func (parser *cachedBoundaryParser) Discover(
-	context.Context,
-	map[string]conversation.Record,
-) ([]conversation.ScanCandidate, error) {
+func (parser *cachedBoundaryParser) Discover(context.Context, map[string]conversation.Record) ([]conversation.ScanCandidate, error) {
 	parser.discoveries.Add(1)
-
-	return []conversation.ScanCandidate{
-		{Path: parser.record.ArtifactPath, Stamp: conversation.FileStamp{Size: 1}},
-	}, nil
+	return []conversation.ScanCandidate{{Path: parser.record.ArtifactPath, Stamp: conversation.FileStamp{Size: 1}}}, nil
 }
 
-func (parser *cachedBoundaryParser) ScanRecord(
-	string,
-	conversation.FileStamp,
-) (conversation.Record, bool) {
+func (parser *cachedBoundaryParser) ScanRecord(string, conversation.FileStamp) (conversation.Record, bool) {
 	return parser.record, true
 }
 
-func (parser *cachedBoundaryParser) Stream(
-	string,
-	conversation.LoadOptions,
-) iter.Seq2[transcript.Message, error] {
+func (parser *cachedBoundaryParser) Stream(string, conversation.LoadOptions) iter.Seq2[transcript.Message, error] {
 	return func(yield func(transcript.Message, error) bool) {
 		text := parser.text
 		if text == "" {
 			text = "cached boundary transcript"
 		}
-
 		yield(transcript.Message{Role: "user", Text: text}, nil)
 	}
 }
@@ -89,43 +75,27 @@ func TestCachedRequestHookAndExportTranscriptLocalSkipProviderDiscovery(t *testi
 	if err := index.Refresh(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-
 	discoveries.Store(0)
 
 	server := &controlServer{index: index}
 	runner := hookspec.Runner{
-		Registry: hookspec.NewRegistry(),
-		Input: strings.NewReader(
-			`{"hook_event_name":"PreCompact","conversation_id":"` + requestID + `","cwd":"/tmp/project","session_id":"session-1"}`,
-		),
+		Registry:      hookspec.NewRegistry(),
+		Input:         strings.NewReader(`{"hook_event_name":"PreCompact","conversation_id":"` + requestID + `","cwd":"/tmp/project","session_id":"session-1"}`),
 		Output:        &strings.Builder{},
 		SnapshotStore: hookspec.NewFileSnapshotStore(t.TempDir()),
-		Reorient: func(
-			ctx context.Context,
-			conversationID string,
-			workspace string,
-			cursor string,
-			maxLines int,
-			pageBytes int,
-			includeToolOutputs bool,
-			syntheticPreCompact bool,
-		) (conversation.ReorientPage, error) {
-			response, err := server.ReorientConversation(
-				ctx,
-				&clydev1.ReorientConversationRequest{
-					ConversationId:      conversationID,
-					Workspace:           workspace,
-					Cursor:              cursor,
-					MaxLines:            int64(maxLines),
-					PageBytes:           int64(pageBytes),
-					IncludeToolOutputs:  includeToolOutputs,
-					SyntheticPrecompact: syntheticPreCompact,
-				},
-			)
+		Reorient: func(ctx context.Context, conversationID, workspace, cursor string, maxLines, pageBytes int, includeToolOutputs, syntheticPreCompact bool) (conversation.ReorientPage, error) {
+			response, err := server.ReorientConversation(ctx, &clydev1.ReorientConversationRequest{
+				ConversationId:      conversationID,
+				Workspace:           workspace,
+				Cursor:              cursor,
+				MaxLines:            int64(maxLines),
+				PageBytes:           int64(pageBytes),
+				IncludeToolOutputs:  includeToolOutputs,
+				SyntheticPrecompact: syntheticPreCompact,
+			})
 			if err != nil {
 				return conversation.ReorientPage{}, err
 			}
-
 			return reorientPageFromProto(response), nil
 		},
 	}
@@ -136,19 +106,14 @@ func TestCachedRequestHookAndExportTranscriptLocalSkipProviderDiscovery(t *testi
 	previousFactory := newLocalConversationIndex
 	newLocalConversationIndex = func() *conversation.Index { return index }
 	t.Cleanup(func() { newLocalConversationIndex = previousFactory })
-	body, err := ExportTranscriptLocal(
-		t.Context(),
-		requestID,
-		conversation.ExportOptions{
-			Format:     conversation.ExportFormatMarkdown,
-			Whitespace: conversation.WhitespacePreserve,
-			Content:    conversation.NewContentKindSet(conversation.ContentKindChat),
-		},
-	)
+	body, err := ExportTranscriptLocal(t.Context(), requestID, conversation.ExportOptions{
+		Format:     conversation.ExportFormatMarkdown,
+		Whitespace: conversation.WhitespacePreserve,
+		Content:    conversation.NewContentKindSet(conversation.ContentKindChat),
+	})
 	if err != nil || !strings.Contains(string(body), "cached boundary transcript") {
 		t.Fatalf("export = %q, %v", body, err)
 	}
-
 	if discoveries.Load() != 0 {
 		t.Fatalf("provider discoveries = %d, want 0", discoveries.Load())
 	}
@@ -161,38 +126,25 @@ type lifecycleConversationParser struct {
 
 func (*lifecycleConversationParser) Provider() providerid.Provider { return providerid.ProviderCursor }
 
-func (parser *lifecycleConversationParser) Discover(
-	ctx context.Context,
-	_ map[string]conversation.Record,
-) ([]conversation.ScanCandidate, error) {
+func (parser *lifecycleConversationParser) Discover(ctx context.Context, _ map[string]conversation.Record) ([]conversation.ScanCandidate, error) {
 	close(parser.started)
 	<-ctx.Done()
 	defer close(parser.stopped)
-
 	return nil, ctx.Err()
 }
 
-func (*lifecycleConversationParser) ScanRecord(
-	string,
-	conversation.FileStamp,
-) (conversation.Record, bool) {
+func (*lifecycleConversationParser) ScanRecord(string, conversation.FileStamp) (conversation.Record, bool) {
 	return conversation.Record{}, false
 }
 
-func (*lifecycleConversationParser) Stream(
-	string,
-	conversation.LoadOptions,
-) iter.Seq2[transcript.Message, error] {
+func (*lifecycleConversationParser) Stream(string, conversation.LoadOptions) iter.Seq2[transcript.Message, error] {
 	return func(func(transcript.Message, error) bool) {}
 }
 
 func TestConversationIndexJoinsRefreshDuringLifecycleDrain(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	parser := &lifecycleConversationParser{
-		started: make(chan struct{}),
-		stopped: make(chan struct{}),
-	}
+	parser := &lifecycleConversationParser{started: make(chan struct{}), stopped: make(chan struct{})}
 	registry := conversation.NewRegistry()
 	registry.Register(parser)
 	index := conversation.NewIndex(registry, config.ConversationConfig{})
@@ -204,7 +156,6 @@ func TestConversationIndexJoinsRefreshDuringLifecycleDrain(t *testing.T) {
 	if t.Context().Err() != nil {
 		t.Fatal("drain must cancel the index without canceling its daemon parent")
 	}
-
 	if _, err := os.Stat(conversation.CachePath()); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("canceled scan persisted cache: %v", err)
 	}
@@ -216,7 +167,6 @@ func TestExportTranscriptLocalAppliesMaxTokens(t *testing.T) {
 	t.Setenv(envOpenAI, "")
 
 	var text strings.Builder
-
 	for i := 0; i < 200; i++ {
 		text.WriteString("one short transcript line\n")
 	}
@@ -273,11 +223,9 @@ func TestExportTranscriptLocalAppliesMaxTokens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("capped export: %v", err)
 	}
-
 	if len(capped) >= len(uncapped) {
 		t.Fatalf("capped bytes = %d, uncapped bytes = %d", len(capped), len(uncapped))
 	}
-
 	if !strings.HasSuffix(string(uncapped), string(capped)) {
 		t.Fatal("capped export is not a suffix of the final rendered body")
 	}
@@ -324,20 +272,15 @@ func TestExportTranscriptLocalRejectsInvalidMaxTokens(t *testing.T) {
 		newLocalConversationIndex = previousFactory
 	})
 
-	_, err := ExportTranscriptLocal(
-		t.Context(),
-		parser.record.ID,
-		conversation.ExportOptions{
-			Format:     conversation.ExportFormatMarkdown,
-			Whitespace: conversation.WhitespaceDense,
-			Content:    conversation.NewContentKindSet(conversation.ContentKindChat),
-			MaxTokens:  "not-a-token-count",
-		},
-	)
+	_, err := ExportTranscriptLocal(t.Context(), parser.record.ID, conversation.ExportOptions{
+		Format:     conversation.ExportFormatMarkdown,
+		Whitespace: conversation.WhitespaceDense,
+		Content:    conversation.NewContentKindSet(conversation.ContentKindChat),
+		MaxTokens:  "not-a-token-count",
+	})
 	if err == nil {
 		t.Fatal("expected error for invalid max tokens")
 	}
-
 	if !strings.Contains(err.Error(), "parse max tokens") {
 		t.Fatalf("error = %q, want parse max tokens", err)
 	}

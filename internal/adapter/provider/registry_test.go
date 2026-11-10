@@ -14,21 +14,13 @@ type stubProvider struct {
 }
 
 func (s stubProvider) ID() adapterresolver.ProviderID { return s.id }
-
-func (s stubProvider) Execute(
-	_ context.Context,
-	_ adapterresolver.ResolvedRequest,
-	_ EventWriter,
-) (Result, error) {
+func (s stubProvider) Execute(_ context.Context, _ adapterresolver.ResolvedRequest, _ EventWriter) (Result, error) {
 	return Result{}, nil
 }
 
 func TestRegistryLookupMissingReturnsTypedError(t *testing.T) {
 	r := NewRegistry()
-	if _, err := r.Lookup(adapterresolver.ProviderCodex); !errors.Is(
-		err,
-		ErrProviderNotRegistered,
-	) {
+	if _, err := r.Lookup(adapterresolver.ProviderCodex); !errors.Is(err, ErrProviderNotRegistered) {
 		t.Fatalf("expected ErrProviderNotRegistered, got %v", err)
 	}
 }
@@ -41,7 +33,6 @@ func TestRegistryRegisterAndLookup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Lookup failed: %v", err)
 	}
-
 	if got.ID() != want.ID() {
 		t.Errorf("provider ID = %v, want %v", got.ID(), want.ID())
 	}
@@ -62,12 +53,10 @@ func TestRegistryIDs(t *testing.T) {
 	r.Register(stubProvider{id: adapterresolver.ProviderCodex})
 	r.Register(stubProvider{id: adapterresolver.ProviderAnthropic})
 	ids := r.IDs()
-
 	stringsList := make([]string, 0, len(ids))
 	for _, id := range ids {
 		stringsList = append(stringsList, id.String())
 	}
-
 	sort.Strings(stringsList)
 	if len(stringsList) != 2 || stringsList[0] != "anthropic" || stringsList[1] != "codex" {
 		t.Errorf("unexpected IDs: %v", stringsList)

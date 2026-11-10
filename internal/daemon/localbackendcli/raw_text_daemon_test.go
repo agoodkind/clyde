@@ -16,24 +16,16 @@ import (
 // returns want matches. An error other than Unavailable fails the test at once.
 func waitForFirstMatches(t *testing.T, options conversation.SearchConversationsOptions, want int) {
 	t.Helper()
-
 	deadline := time.Now().Add(localtest.RawTextSearchTimeout)
 	for time.Now().Before(deadline) {
 		result, err := daemon.SearchConversations(context.Background(), options)
 		if err != nil && status.Code(err) != codes.Unavailable {
 			t.Fatalf("SearchConversations: %v", err)
 		}
-
 		if err == nil && len(result.Matches) == want {
 			return
 		}
-
 		time.Sleep(localtest.RawTextPollInterval)
 	}
-
-	t.Fatalf(
-		"SearchConversations did not return %d matches within %s",
-		want,
-		localtest.RawTextSearchTimeout,
-	)
+	t.Fatalf("SearchConversations did not return %d matches within %s", want, localtest.RawTextSearchTimeout)
 }

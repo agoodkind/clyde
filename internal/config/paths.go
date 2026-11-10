@@ -26,7 +26,6 @@ func resolveExportAPIKeyFiles(cfg *ExportConfig, configDir string) {
 	if cfg == nil {
 		return
 	}
-
 	cfg.AnthropicAPIKeyFile = resolveConfiguredFilePath(configDir, cfg.AnthropicAPIKeyFile)
 	cfg.OpenAIAPIKeyFile = resolveConfiguredFilePath(configDir, cfg.OpenAIAPIKeyFile)
 }
@@ -38,11 +37,7 @@ func resolveReorientInstructionsFile(cfg *MITMConfig, configDir string) {
 	if cfg == nil {
 		return
 	}
-
-	cfg.ReorientInjectInstructionsFile = resolveConfiguredFilePath(
-		configDir,
-		cfg.ReorientInjectInstructionsFile,
-	)
+	cfg.ReorientInjectInstructionsFile = resolveConfiguredFilePath(configDir, cfg.ReorientInjectInstructionsFile)
 }
 
 func resolveConfiguredFilePath(configDir string, configuredPath string) string {
@@ -50,11 +45,9 @@ func resolveConfiguredFilePath(configDir string, configuredPath string) string {
 	if trimmedPath == "" {
 		return ""
 	}
-
 	resolvedPath := cleanExpandedPath(trimmedPath)
 	if filepath.IsAbs(resolvedPath) {
 		return resolvedPath
 	}
-
 	return filepath.Join(configDir, resolvedPath)
 }

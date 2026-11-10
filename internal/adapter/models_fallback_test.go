@@ -18,7 +18,6 @@ func validClientIdentity() config.AdapterClientIdentity {
 func baseConfig() config.AdapterConfig {
 	tools := true
 	vision := true
-
 	return config.AdapterConfig{
 		DefaultModel:   "clyde-haiku-4.5-medium",
 		ClientIdentity: validClientIdentity(),
@@ -32,12 +31,10 @@ func baseConfig() config.AdapterConfig {
 		},
 		ModelProfiles: map[string]config.AdapterModelProfile{
 			"haiku": {
-				Contexts: []config.AdapterModelProfileContext{
-					{
-						Name:   "standard",
-						Tokens: 200000,
-					},
-				},
+				Contexts: []config.AdapterModelProfileContext{{
+					Name:   "standard",
+					Tokens: 200000,
+				}},
 				MaxOutputTokens:  16000,
 				ReasoningEfforts: []config.AdapterReasoningEffort{EffortMedium},
 				DefaultEffort:    EffortMedium,
@@ -50,26 +47,18 @@ func baseConfig() config.AdapterConfig {
 				Provider:  config.AdapterModelProviderAnthropic,
 				WireModel: "claude-haiku-4-5-20251001",
 				Profile:   "haiku",
-				Aliases: []config.AdapterModelAlias{
-					{
-						ID: "clyde-haiku-4-5",
-					},
-				},
+				Aliases: []config.AdapterModelAlias{{
+					ID: "clyde-haiku-4-5",
+				}},
 			},
 		},
-		ModelRoutes: []config.AdapterModelRoute{
-			{
-				Match: "claude-*",
-				Surfaces: []config.AdapterIngressSurface{
-					config.AdapterIngressCursor,
-					config.AdapterIngressOpenAI,
-					config.AdapterIngressAnthropic,
-				},
-				Provider:         config.AdapterModelProviderAnthropic,
-				WireModelPolicy:  config.AdapterWireModelPolicyPreserve,
-				CapabilityPolicy: config.AdapterWildcardCapabilityPolicyPassthrough,
-			},
-		},
+		ModelRoutes: []config.AdapterModelRoute{{
+			Match:            "claude-*",
+			Surfaces:         []config.AdapterIngressSurface{config.AdapterIngressCursor, config.AdapterIngressOpenAI, config.AdapterIngressAnthropic},
+			Provider:         config.AdapterModelProviderAnthropic,
+			WireModelPolicy:  config.AdapterWireModelPolicyPreserve,
+			CapabilityPolicy: config.AdapterWildcardCapabilityPolicyPassthrough,
+		}},
 	}
 }
 
@@ -101,12 +90,10 @@ func modelMatrixConfig() config.AdapterConfig {
 		},
 	}
 	cfg.ModelProfiles["codex"] = config.AdapterModelProfile{
-		Contexts: []config.AdapterModelProfileContext{
-			{
-				Name:   "large",
-				Tokens: 1000000,
-			},
-		},
+		Contexts: []config.AdapterModelProfileContext{{
+			Name:   "large",
+			Tokens: 1000000,
+		}},
 		MaxOutputTokens: 128000,
 		ReasoningEfforts: []config.AdapterReasoningEffort{
 			EffortLow,
@@ -124,29 +111,10 @@ func modelMatrixConfig() config.AdapterConfig {
 			WireModel: "claude-opus-4-7",
 			Profile:   "opus",
 			Aliases: []config.AdapterModelAlias{
-				{
-					ID:              "clyde-opus-4.7-medium-thinking",
-					ReasoningEffort: EffortMedium,
-					ThinkingProfile: "adaptive",
-				},
-				{
-					ID:              "clyde-opus-4.7-high-thinking",
-					ReasoningEffort: EffortHigh,
-					ThinkingProfile: "adaptive",
-				},
-				{
-					ID:              "clyde-opus-4.7-1m-medium-thinking",
-					Advertise:       true,
-					ReasoningEffort: EffortMedium,
-					Context:         "large",
-					ThinkingProfile: "adaptive",
-				},
-				{
-					ID:              "clyde-opus-4.7-1m-high-thinking",
-					ReasoningEffort: EffortHigh,
-					Context:         "large",
-					ThinkingProfile: "adaptive",
-				},
+				{ID: "clyde-opus-4.7-medium-thinking", ReasoningEffort: EffortMedium, ThinkingProfile: "adaptive"},
+				{ID: "clyde-opus-4.7-high-thinking", ReasoningEffort: EffortHigh, ThinkingProfile: "adaptive"},
+				{ID: "clyde-opus-4.7-1m-medium-thinking", Advertise: true, ReasoningEffort: EffortMedium, Context: "large", ThinkingProfile: "adaptive"},
+				{ID: "clyde-opus-4.7-1m-high-thinking", ReasoningEffort: EffortHigh, Context: "large", ThinkingProfile: "adaptive"},
 			},
 		},
 		"clyde-opus-4.6-medium": {
@@ -154,11 +122,7 @@ func modelMatrixConfig() config.AdapterConfig {
 			WireModel: "claude-opus-4-6",
 			Profile:   "opus",
 			Aliases: []config.AdapterModelAlias{
-				{
-					ID:              "clyde-opus-4.6-medium-thinking",
-					ReasoningEffort: EffortMedium,
-					ThinkingProfile: "enabled",
-				},
+				{ID: "clyde-opus-4.6-medium-thinking", ReasoningEffort: EffortMedium, ThinkingProfile: "enabled"},
 			},
 		},
 		"gpt-5.4": {
@@ -171,7 +135,6 @@ func modelMatrixConfig() config.AdapterConfig {
 			},
 		},
 	}
-
 	return cfg
 }
 
@@ -179,14 +142,12 @@ func addTestCodexModel(cfg *config.AdapterConfig) {
 	if cfg == nil {
 		return
 	}
-
 	tools := true
 	vision := true
 	cfg.Codex.Enabled = true
 	if cfg.ModelProfiles == nil {
 		cfg.ModelProfiles = make(map[string]config.AdapterModelProfile)
 	}
-
 	cfg.ModelProfiles["test-codex"] = config.AdapterModelProfile{
 		Contexts:        []config.AdapterModelProfileContext{{Name: "standard", Tokens: 272000}},
 		MaxOutputTokens: 128000,
@@ -203,23 +164,16 @@ func addTestCodexModel(cfg *config.AdapterConfig) {
 	if cfg.Models == nil {
 		cfg.Models = make(map[string]config.AdapterModelDeclaration)
 	}
-
 	cfg.Models["gpt-5.4"] = config.AdapterModelDeclaration{
 		Provider:  config.AdapterModelProviderCodex,
 		WireModel: "gpt-5.4",
 		Profile:   "test-codex",
 	}
-	cfg.ModelRoutes = append(
-		cfg.ModelRoutes,
-		config.AdapterModelRoute{
-			Match: "gpt-*",
-			Surfaces: []config.AdapterIngressSurface{
-				config.AdapterIngressCursor,
-				config.AdapterIngressOpenAI,
-			},
-			Provider:         config.AdapterModelProviderCodex,
-			WireModelPolicy:  config.AdapterWireModelPolicyPreserve,
-			CapabilityPolicy: config.AdapterWildcardCapabilityPolicyPassthrough,
-		},
-	)
+	cfg.ModelRoutes = append(cfg.ModelRoutes, config.AdapterModelRoute{
+		Match:            "gpt-*",
+		Surfaces:         []config.AdapterIngressSurface{config.AdapterIngressCursor, config.AdapterIngressOpenAI},
+		Provider:         config.AdapterModelProviderCodex,
+		WireModelPolicy:  config.AdapterWireModelPolicyPreserve,
+		CapabilityPolicy: config.AdapterWildcardCapabilityPolicyPassthrough,
+	})
 }

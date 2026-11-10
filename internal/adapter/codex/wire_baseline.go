@@ -125,10 +125,7 @@ func NewWireBaselineLoader() *WireBaselineLoader {
 // parse, no-flavor, or no-codex-flavor failure yields
 // [ErrCodexBaselineInvalid]. Both sentinels signal the caller to fall back to
 // the compiled-in identity constants.
-func (l *WireBaselineLoader) Load(
-	ctx context.Context,
-	store codexBaselineStore,
-) (WireIdentity, error) {
+func (l *WireBaselineLoader) Load(ctx context.Context, store codexBaselineStore) (WireIdentity, error) {
 	var zero WireIdentity
 	if store == nil {
 		return zero, fmt.Errorf("%w: no capture store", ErrCodexBaselineMissing)
@@ -136,35 +133,14 @@ func (l *WireBaselineLoader) Load(
 
 	updatedAt, err := store.CurrentBaselineUpdatedAt(ctx, codexWireUpstream)
 	if err != nil {
-		slog.WarnContext(
-			ctx,
-			"codex.wire_baseline.updated_at_failed",
-			"concern",
-			codexWireBaselineConcern,
-			"subcomponent",
-			"codex",
-			"err",
-			err.Error(),
+		slog.WarnContext(ctx, "codex.wire_baseline.updated_at_failed", "concern", codexWireBaselineConcern, "subcomponent", "codex",
+			"err", err.Error(),
 		)
-
 		return zero, fmt.Errorf("%w: updated_at: %w", ErrCodexBaselineInvalid, err)
 	}
-
 	if updatedAt == 0 {
-		slog.DebugContext(
-			ctx,
-			"codex.wire_baseline.missing",
-			"concern",
-			codexWireBaselineConcern,
-			"subcomponent",
-			"codex",
-		)
-
-		return zero, fmt.Errorf(
-			"%w: no baseline for %s",
-			ErrCodexBaselineMissing,
-			codexWireUpstream,
-		)
+		slog.DebugContext(ctx, "codex.wire_baseline.missing", "concern", codexWireBaselineConcern, "subcomponent", "codex")
+		return zero, fmt.Errorf("%w: no baseline for %s", ErrCodexBaselineMissing, codexWireUpstream)
 	}
 
 	l.mu.Lock()
@@ -181,7 +157,6 @@ func (l *WireBaselineLoader) Load(
 	l.cached = identity
 	l.cachedAt = updatedAt
 	l.cachedOK = true
-
 	return identity, nil
 }
 
@@ -189,82 +164,34 @@ func (l *WireBaselineLoader) Load(
 // decodes it, and projects the codex-cli flavor. It reuses
 // [mitm.DecodeBaselineSnapshot] because the mitm package does not import this
 // package, so there is no import cycle.
-func loadWireIdentityFromStore(
-	ctx context.Context,
-	store codexBaselineStore,
-) (WireIdentity, error) {
+func loadWireIdentityFromStore(ctx context.Context, store codexBaselineStore) (WireIdentity, error) {
 	var zero WireIdentity
 	raw, ok, err := store.CurrentBaseline(ctx, codexWireUpstream)
 	if err != nil {
-		slog.WarnContext(
-			ctx,
-			"codex.wire_baseline.read_failed",
-			"concern",
-			codexWireBaselineConcern,
-			"subcomponent",
-			"codex",
-			"err",
-			err.Error(),
+		slog.WarnContext(ctx, "codex.wire_baseline.read_failed", "concern", codexWireBaselineConcern, "subcomponent", "codex",
+			"err", err.Error(),
 		)
-
 		return zero, fmt.Errorf("%w: read %s: %w", ErrCodexBaselineInvalid, codexWireUpstream, err)
 	}
-
 	if !ok {
-		return zero, fmt.Errorf(
-			"%w: no baseline for %s",
-			ErrCodexBaselineMissing,
-			codexWireUpstream,
-		)
+		return zero, fmt.Errorf("%w: no baseline for %s", ErrCodexBaselineMissing, codexWireUpstream)
 	}
-
 	snap, err := mitm.DecodeBaselineSnapshot(raw)
 	if err != nil {
-		slog.WarnContext(
-			ctx,
-			"codex.wire_baseline.parse_failed",
-			"concern",
-			codexWireBaselineConcern,
-			"subcomponent",
-			"codex",
-			"err",
-			err.Error(),
+		slog.WarnContext(ctx, "codex.wire_baseline.parse_failed", "concern", codexWireBaselineConcern, "subcomponent", "codex",
+			"err", err.Error(),
 		)
-
 		return zero, fmt.Errorf("%w: parse %s: %w", ErrCodexBaselineInvalid, codexWireUpstream, err)
 	}
-
 	if len(snap.Flavors) == 0 {
-		slog.DebugContext(
-			ctx,
-			"codex.wire_baseline.no_flavors",
-			"concern",
-			codexWireBaselineConcern,
-			"subcomponent",
-			"codex",
-		)
-
+		slog.DebugContext(ctx, "codex.wire_baseline.no_flavors", "concern", codexWireBaselineConcern, "subcomponent", "codex")
 		return zero, fmt.Errorf("%w: %s has no flavors", ErrCodexBaselineInvalid, codexWireUpstream)
 	}
-
 	shape, ok := selectCodexFlavor(snap.Flavors)
 	if !ok {
-		slog.DebugContext(
-			ctx,
-			"codex.wire_baseline.no_codex_flavor",
-			"concern",
-			codexWireBaselineConcern,
-			"subcomponent",
-			"codex",
-		)
-
-		return zero, fmt.Errorf(
-			"%w: no codex-cli flavor in baseline %s",
-			ErrCodexBaselineInvalid,
-			codexWireUpstream,
-		)
+		slog.DebugContext(ctx, "codex.wire_baseline.no_codex_flavor", "concern", codexWireBaselineConcern, "subcomponent", "codex")
+		return zero, fmt.Errorf("%w: no codex-cli flavor in baseline %s", ErrCodexBaselineInvalid, codexWireUpstream)
 	}
-
 	return projectWireIdentity(shape), nil
 }
 
@@ -276,17 +203,14 @@ func loadWireIdentityFromStore(
 // still projects.
 func selectCodexFlavor(flavors []mitm.FlavorShape) (mitm.FlavorShape, bool) {
 	var zero mitm.FlavorShape
-
 	for _, shape := range flavors {
 		if strings.HasPrefix(shape.Slug, codexWireFlavorSlugPrefix) {
 			return shape, true
 		}
 	}
-
 	if len(flavors) == 1 {
 		return flavors[0], true
 	}
-
 	return zero, false
 }
 
@@ -311,18 +235,15 @@ func projectWireIdentity(shape mitm.FlavorShape) WireIdentity {
 // "" when the header is not constant, not present, or carries more than
 // one observed value, matching the Anthropic loader's projection rule.
 func codexConstantHeaderValue(shape mitm.FlavorShape, name string) string {
-	for _, header := range shape.Headers {
-		if !strings.EqualFold(header.Name, name) {
+	for _, h := range shape.Headers {
+		if !strings.EqualFold(h.Name, name) {
 			continue
 		}
-
-		if header.Classification == mitm.HeaderClassConstant && len(header.ObservedValues) == 1 {
-			return strings.TrimSpace(header.ObservedValues[0])
+		if h.Classification == mitm.HeaderClassConstant && len(h.ObservedValues) == 1 {
+			return strings.TrimSpace(h.ObservedValues[0])
 		}
-
 		return ""
 	}
-
 	return ""
 }
 
@@ -335,22 +256,18 @@ func codexRequiredBodyFields(shape mitm.FlavorShape) []string {
 			out = append(out, f.Name)
 		}
 	}
-
 	sort.Strings(out)
 	if len(out) == 0 {
 		return nil
 	}
-
 	return out
 }
 
-func copyCodexStrings(input []string) []string {
-	if len(input) == 0 {
+func copyCodexStrings(in []string) []string {
+	if len(in) == 0 {
 		return nil
 	}
-
-	out := make([]string, len(input))
-	copy(out, input)
-
+	out := make([]string, len(in))
+	copy(out, in)
 	return out
 }

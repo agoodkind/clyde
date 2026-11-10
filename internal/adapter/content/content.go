@@ -134,7 +134,6 @@ func (i *imageURL) UnmarshalJSON(raw []byte) error {
 		i.URL = strings.TrimSpace(s)
 		return nil
 	}
-
 	var obj struct {
 		URL    string `json:"url"`
 		Detail string `json:"detail"`
@@ -142,10 +141,8 @@ func (i *imageURL) UnmarshalJSON(raw []byte) error {
 	if err := json.Unmarshal(raw, &obj); err != nil {
 		return fmt.Errorf("unmarshal image content: %w", err)
 	}
-
 	i.URL = strings.TrimSpace(obj.URL)
 	i.Detail = strings.TrimSpace(obj.Detail)
-
 	return nil
 }
 
@@ -159,56 +156,23 @@ func NormalizeRaw(raw json.RawMessage) ([]Part, Kind) {
 	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
 		return nil, KindEmpty
 	}
-
-	var text string
-	if err := json.Unmarshal(raw, &text); err == nil {
-		return []Part{
-			{
-				Kind:      PartText,
-				WireType:  "text",
-				Text:      text,
-				Image:     nil,
-				Audio:     nil,
-				Refusal:   "",
-				ToolUseID: "",
-				Content:   nil,
-				ID:        "",
-				Name:      "",
-				Input:     nil,
-			},
-		}, KindString
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return []Part{{Kind: PartText, WireType: "text", Text: s, Image: nil, Audio: nil, Refusal: "", ToolUseID: "", Content: nil, ID: "", Name: "", Input: nil}}, KindString
 	}
-
 	var parts []wirePart
 	if err := json.Unmarshal(raw, &parts); err == nil {
 		out := make([]Part, 0, len(parts))
 		for _, part := range parts {
 			out = append(out, normalizePart(part))
 		}
-
 		return out, KindParts
 	}
-
 	var single wirePart
 	if err := json.Unmarshal(raw, &single); err == nil && single.Type != "" {
 		return []Part{normalizePart(single)}, KindParts
 	}
-
-	return []Part{
-		{
-			Kind:      PartText,
-			WireType:  "text",
-			Text:      string(raw),
-			Image:     nil,
-			Audio:     nil,
-			Refusal:   "",
-			ToolUseID: "",
-			Content:   nil,
-			ID:        "",
-			Name:      "",
-			Input:     nil,
-		},
-	}, KindString
+	return []Part{{Kind: PartText, WireType: "text", Text: string(raw), Image: nil, Audio: nil, Refusal: "", ToolUseID: "", Content: nil, ID: "", Name: "", Input: nil}}, KindString
 }
 
 func normalizePart(part wirePart) Part {
@@ -216,7 +180,6 @@ func normalizePart(part wirePart) Part {
 	if wireType == "" {
 		wireType = "text"
 	}
-
 	out := Part{
 		WireType:  wireType,
 		Text:      part.Text,
@@ -225,10 +188,7 @@ func normalizePart(part wirePart) Part {
 		Content:   part.Content,
 		ID:        part.ID,
 		Name:      part.Name,
-		Input:     part.Input,
-		Kind:      "",
-		Image:     nil,
-		Audio:     nil,
+		Input:     part.Input, Kind: "", Image: nil, Audio: nil,
 	}
 	switch contentWireType(wireType) {
 	case contentWireText, contentWireInputText, contentWireOutputText:
@@ -240,7 +200,6 @@ func normalizePart(part wirePart) Part {
 			if detail == "" {
 				detail = strings.TrimSpace(part.Detail)
 			}
-
 			out.Image = &Image{URL: strings.TrimSpace(part.ImageURL.URL), Detail: detail}
 		}
 	case contentWireInputAudio:
@@ -257,7 +216,6 @@ func normalizePart(part wirePart) Part {
 	default:
 		out.Kind = PartUnsupported
 	}
-
 	return out
 }
 
@@ -270,17 +228,14 @@ func FlattenRaw(raw json.RawMessage) string {
 		if len(parts) == 0 {
 			return ""
 		}
-
 		return parts[0].Text
 	}
-
 	return FlattenParts(parts)
 }
 
 // FlattenParts is part of Clyde's typed adapter surface.
 func FlattenParts(parts []Part) string {
 	var b strings.Builder
-
 	for _, part := range parts {
 		switch part.Kind {
 		case PartText:
@@ -301,6 +256,5 @@ func FlattenParts(parts []Part) string {
 			b.WriteString("]")
 		}
 	}
-
 	return b.String()
 }

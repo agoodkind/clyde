@@ -37,7 +37,6 @@ func (c ResponseClass) String() string {
 	case ResponseClassSuccessNoWarning:
 		return "success_no_warning"
 	}
-
 	return "unknown"
 }
 
@@ -89,46 +88,21 @@ type Classification struct {
 func Classify(resp *http.Response, transportErr error) Classification {
 	if transportErr != nil {
 		return Classification{
-			Class:              ResponseClassRetryableError,
-			TransportError:     transportErr,
-			Retryable:          true,
-			Status:             0,
-			HasOverageRejected: false,
-			HasOverageActive:   false,
-			SurpassedThreshold: false,
-			AllowedWarning:     false,
+			Class:          ResponseClassRetryableError,
+			TransportError: transportErr,
+			Retryable:      true, Status: 0, HasOverageRejected: false, HasOverageActive: false, SurpassedThreshold: false, AllowedWarning: false,
 		}
 	}
-
 	if resp == nil {
-		return Classification{
-			Class:              ResponseClassUnknown,
-			Status:             0,
-			TransportError:     nil,
-			Retryable:          false,
-			HasOverageRejected: false,
-			HasOverageActive:   false,
-			SurpassedThreshold: false,
-			AllowedWarning:     false,
-		}
+		return Classification{Class: ResponseClassUnknown, Status: 0, TransportError: nil, Retryable: false, HasOverageRejected: false, HasOverageActive: false, SurpassedThreshold: false, AllowedWarning: false}
 	}
 
-	out := Classification{
-		Status:             resp.StatusCode,
-		Class:              0,
-		TransportError:     nil,
-		Retryable:          false,
-		HasOverageRejected: false,
-		HasOverageActive:   false,
-		SurpassedThreshold: false,
-		AllowedWarning:     false,
-	}
+	out := Classification{Status: resp.StatusCode, Class: 0, TransportError: nil, Retryable: false, HasOverageRejected: false, HasOverageActive: false, SurpassedThreshold: false, AllowedWarning: false}
 
 	switch resp.StatusCode {
 	case http.StatusOK:
 		populateWarningFlags(&out, resp.Header)
-		if out.HasOverageRejected || out.HasOverageActive || out.SurpassedThreshold ||
-			out.AllowedWarning {
+		if out.HasOverageRejected || out.HasOverageActive || out.SurpassedThreshold || out.AllowedWarning {
 			out.Class = ResponseClassSuccessWithWarning
 		} else {
 			out.Class = ResponseClassSuccessNoWarning
@@ -143,7 +117,6 @@ func Classify(resp *http.Response, transportErr error) Classification {
 	default:
 		out.Class = ResponseClassFatalError
 	}
-
 	return out
 }
 
@@ -175,9 +148,7 @@ const (
 
 func populateWarningFlags(out *Classification, h http.Header) {
 	status := strings.ToLower(strings.TrimSpace(h.Get("Anthropic-Ratelimit-Unified-Status")))
-	overage := strings.ToLower(
-		strings.TrimSpace(h.Get("Anthropic-Ratelimit-Unified-Overage-Status")),
-	)
+	overage := strings.ToLower(strings.TrimSpace(h.Get("Anthropic-Ratelimit-Unified-Overage-Status")))
 
 	out.AllowedWarning = status == "allowed_warning"
 	switch rateLimitOverageStatus(overage) {
@@ -186,11 +157,8 @@ func populateWarningFlags(out *Classification, h http.Header) {
 	case rateLimitOverageAllowed, rateLimitOverageAllowedWarning:
 		out.HasOverageActive = true
 	}
-
 	for _, claim := range []string{"5h", "7d", "overage"} {
-		v := strings.TrimSpace(
-			h.Get("Anthropic-Ratelimit-Unified-" + claim + "-Surpassed-Threshold"),
-		)
+		v := strings.TrimSpace(h.Get("Anthropic-Ratelimit-Unified-" + claim + "-Surpassed-Threshold"))
 		if v != "" {
 			out.SurpassedThreshold = true
 			return

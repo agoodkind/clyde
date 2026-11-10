@@ -32,16 +32,7 @@ func startDebugFacilities(ctx context.Context, log *slog.Logger) {
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				log.ErrorContext(
-					ctx,
-					"daemon.debug.signal_panic",
-					"concern",
-					"process.daemon.lifecycle",
-					"component",
-					"daemon",
-					"err",
-					fmt.Sprintf("panic: %v", recovered),
-				)
+				log.ErrorContext(ctx, "daemon.debug.signal_panic", "concern", "process.daemon.lifecycle", "component", "daemon", "err", fmt.Sprintf("panic: %v", recovered))
 			}
 		}()
 		watchGoroutineDumpSignal(ctx, log)
@@ -55,7 +46,6 @@ func resolvePProfAddr(configured string) string {
 	if addr := strings.TrimSpace(os.Getenv(debugPProfAddrEnv)); addr != "" {
 		return addr
 	}
-
 	return strings.TrimSpace(configured)
 }
 
@@ -75,43 +65,15 @@ func servePProf(ctx context.Context, log *slog.Logger, listener net.Listener) {
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				log.ErrorContext(
-					ctx,
-					"daemon.debug.pprof_closer_panic",
-					"concern",
-					"process.daemon.lifecycle",
-					"component",
-					"daemon",
-					"err",
-					fmt.Sprintf("panic: %v", recovered),
-				)
+				log.ErrorContext(ctx, "daemon.debug.pprof_closer_panic", "concern", "process.daemon.lifecycle", "component", "daemon", "err", fmt.Sprintf("panic: %v", recovered))
 			}
 		}()
 		<-ctx.Done()
 		_ = server.Close()
 	}()
-	log.InfoContext(
-		ctx,
-		"daemon.debug.pprof_listening",
-		"concern",
-		"process.daemon.lifecycle",
-		"component",
-		"daemon",
-		"addr",
-		listener.Addr().String(),
-	)
-	if serveErr := server.Serve(listener); serveErr != nil && !errors.Is(serveErr, net.ErrClosed) &&
-		!errors.Is(serveErr, http.ErrServerClosed) {
-		log.WarnContext(
-			ctx,
-			"daemon.debug.pprof_serve_failed",
-			"concern",
-			"process.daemon.lifecycle",
-			"component",
-			"daemon",
-			"err",
-			serveErr,
-		)
+	log.InfoContext(ctx, "daemon.debug.pprof_listening", "concern", "process.daemon.lifecycle", "component", "daemon", "addr", listener.Addr().String())
+	if serveErr := server.Serve(listener); serveErr != nil && !errors.Is(serveErr, net.ErrClosed) && !errors.Is(serveErr, http.ErrServerClosed) {
+		log.WarnContext(ctx, "daemon.debug.pprof_serve_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", serveErr)
 	}
 }
 
@@ -119,7 +81,6 @@ func watchGoroutineDumpSignal(ctx context.Context, log *slog.Logger) {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGUSR1)
 	defer signal.Stop(signals)
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -134,21 +95,15 @@ func watchGoroutineDumpSignal(ctx context.Context, log *slog.Logger) {
 // buffer until the full dump fits so no stack is truncated.
 func dumpGoroutines(ctx context.Context, log *slog.Logger) {
 	buf := make([]byte, 1<<20)
-
 	for {
 		written := runtime.Stack(buf, true)
 		if written < len(buf) {
 			buf = buf[:written]
 			break
 		}
-
 		buf = make([]byte, 2*len(buf))
 	}
-
-	log.LogAttrs(
-		ctx,
-		slog.LevelInfo,
-		"daemon.debug.goroutine_dump",
+	log.LogAttrs(ctx, slog.LevelInfo, "daemon.debug.goroutine_dump",
 		slog.String("concern", "process.daemon.lifecycle"),
 		slog.String("component", "daemon"),
 		slog.Int("goroutines", runtime.NumGoroutine()),

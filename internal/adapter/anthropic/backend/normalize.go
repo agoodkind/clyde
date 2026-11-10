@@ -19,12 +19,10 @@ func normalizeContent(raw json.RawMessage) ([]OpenAIContentPart, contentKind) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil, contentKindEmpty
 	}
-
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {
 		return []OpenAIContentPart{textContentPart(s)}, contentKindString
 	}
-
 	var parts []OpenAIContentPart
 	if err := json.Unmarshal(raw, &parts); err == nil {
 		for i := range parts {
@@ -32,10 +30,8 @@ func normalizeContent(raw json.RawMessage) ([]OpenAIContentPart, contentKind) {
 				parts[i].Type = "text"
 			}
 		}
-
 		return parts, contentKindParts
 	}
-
 	return []OpenAIContentPart{textContentPart(string(raw))}, contentKindString
 }
 
@@ -63,12 +59,9 @@ func flattenContent(raw json.RawMessage) string {
 		if len(parts) == 0 {
 			return ""
 		}
-
 		return parts[0].Text
 	}
-
 	var b strings.Builder
-
 	for _, p := range parts {
 		switch openAIContentPartType(p.Type) {
 		case openAIContentPartTypeText:
@@ -77,9 +70,7 @@ func flattenContent(raw json.RawMessage) string {
 			b.WriteString("[image]")
 		case openAIContentPartTypeInputAudio:
 			b.WriteString("[audio]")
-		case openAIContentPartTypeToolResult,
-			openAIContentPartTypeToolUse,
-			openAIContentPartTypeThinking:
+		case openAIContentPartTypeToolResult, openAIContentPartTypeToolUse, openAIContentPartTypeThinking:
 			b.WriteString("[")
 			b.WriteString(p.Type)
 			b.WriteString("]")
@@ -93,6 +84,5 @@ func flattenContent(raw json.RawMessage) string {
 			b.WriteString("]")
 		}
 	}
-
 	return b.String()
 }

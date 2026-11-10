@@ -10,49 +10,35 @@ import (
 
 // zedThreadRecord writes one Zed thread row plus its sidebar metadata, then
 // discovers and scans it through the parser's public boundary.
-func zedThreadRecord(
-	t *testing.T,
-	threadID string,
-	agentID string,
-	threadJSON string,
-) (conversation.Record, bool) {
+func zedThreadRecord(t *testing.T, threadID string, agentID string, threadJSON string) (conversation.Record, bool) {
 	t.Helper()
 	root := t.TempDir()
 	t.Setenv("CLYDE_ZED_DATA_DIRS", root)
 	updatedAt := time.Date(2026, time.June, 27, 12, 0, 0, 0, time.UTC)
 
 	writeThreadsRow(t, root, threadID, "", updatedAt, []byte(threadJSON))
-	writeSidebarRowWithOptions(
-		t,
-		filepath.Join(root, "db", "0-stable", "db.sqlite"),
-		sidebarRowOptions{
-			SessionID:              threadID,
-			AgentID:                agentID,
-			Title:                  "Thread title",
-			TitleOverride:          "",
-			UpdatedAt:              updatedAt,
-			CreatedAt:              updatedAt,
-			FolderPaths:            "/repo",
-			FolderPathsOrder:       "0",
-			Archived:               false,
-			MainWorktreePaths:      "/repo",
-			MainWorktreePathsOrder: "0",
-		},
-	)
+	writeSidebarRowWithOptions(t, filepath.Join(root, "db", "0-stable", "db.sqlite"), sidebarRowOptions{
+		SessionID:              threadID,
+		AgentID:                agentID,
+		Title:                  "Thread title",
+		TitleOverride:          "",
+		UpdatedAt:              updatedAt,
+		CreatedAt:              updatedAt,
+		FolderPaths:            "/repo",
+		FolderPathsOrder:       "0",
+		Archived:               false,
+		MainWorktreePaths:      "/repo",
+		MainWorktreePathsOrder: "0",
+	})
 
 	parser := New()
 	candidates, err := parser.Discover(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("Discover returned error: %v", err)
 	}
-
 	if len(candidates) != 1 {
-		t.Fatalf(
-			"candidates len = %d, want the thread discovered so its origin can be classified",
-			len(candidates),
-		)
+		t.Fatalf("candidates len = %d, want the thread discovered so its origin can be classified", len(candidates))
 	}
-
 	return parser.ScanRecord(candidates[0].Path, candidates[0].Stamp)
 }
 
@@ -67,19 +53,12 @@ func TestDiscoverAdmitsAgentThreadsSoTheSettingGovernsThem(t *testing.T) {
 	if !ok {
 		t.Fatal("ScanRecord returned ok=false for an agent thread")
 	}
-
 	if record.Origin != conversation.OriginSubagent {
-		t.Fatalf(
-			"origin = %q, want %q from the sidebar agent id",
-			record.Origin,
-			conversation.OriginSubagent,
-		)
+		t.Fatalf("origin = %q, want %q from the sidebar agent id", record.Origin, conversation.OriginSubagent)
 	}
-
 	if !record.IsSubagent() {
 		t.Fatalf("IsSubagent = false, want true for an agent-owned thread")
 	}
-
 	// Zed thread ids are the thread's own, so unlike Claude there is no parent
 	// collision to avoid.
 	if record.NativeID != "agent-thread" {
@@ -96,15 +75,9 @@ func TestScanRecordClassifiesSubagentContextAsSubagentOrigin(t *testing.T) {
 	if !ok {
 		t.Fatal("ScanRecord returned ok=false")
 	}
-
 	if record.Origin != conversation.OriginSubagent {
-		t.Fatalf(
-			"origin = %q, want %q from the persisted subagent context",
-			record.Origin,
-			conversation.OriginSubagent,
-		)
+		t.Fatalf("origin = %q, want %q from the persisted subagent context", record.Origin, conversation.OriginSubagent)
 	}
-
 	if record.Lineage == nil || record.Lineage.ParentNativeID != "parent-thread" {
 		t.Fatalf("lineage = %#v, want the parent thread carried", record.Lineage)
 	}
@@ -117,11 +90,9 @@ func TestScanRecordClassifiesAnUnmarkedZedThreadAsUserOrigin(t *testing.T) {
 	if !ok {
 		t.Fatal("ScanRecord returned ok=false")
 	}
-
 	if record.Origin != conversation.OriginUser {
 		t.Fatalf("origin = %q, want %q", record.Origin, conversation.OriginUser)
 	}
-
 	if record.IsSubagent() {
 		t.Fatalf("IsSubagent = true, want false for an unmarked thread")
 	}

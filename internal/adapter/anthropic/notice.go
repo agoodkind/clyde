@@ -22,53 +22,35 @@ func EarlyWarningUsageWindows(h http.Header) []adapterruntime.UsageWindowNoticeI
 	if ClassifyHeaders(h, http.StatusOK).Class == ResponseClassSuccessNoWarning {
 		return nil
 	}
-
 	windows := make([]adapterruntime.UsageWindowNoticeInput, 0, 3)
-
 	for _, claim := range []string{"five_hour", "seven_day", "overage"} {
 		headerClaim := earlyWarningHeaderClaim(claim)
-		threshold := strings.TrimSpace(
-			h.Get("Anthropic-Ratelimit-Unified-" + headerClaim + "-Surpassed-Threshold"),
-		)
+		threshold := strings.TrimSpace(h.Get("Anthropic-Ratelimit-Unified-" + headerClaim + "-Surpassed-Threshold"))
 		resetsAt := parseUnix(h.Get("Anthropic-Ratelimit-Unified-" + headerClaim + "-Reset"))
-		util, hasUtil := parseUtilization(
-			h.Get("Anthropic-Ratelimit-Unified-" + headerClaim + "-Utilization"),
-		)
+		util, hasUtil := parseUtilization(h.Get("Anthropic-Ratelimit-Unified-" + headerClaim + "-Utilization"))
 
 		if threshold == "" && !hasUtil && resetsAt.IsZero() {
 			continue
 		}
-
-		if threshold == "" && !hasUtil &&
-			!strings.EqualFold(
-				strings.TrimSpace(h.Get("Anthropic-Ratelimit-Unified-Status")),
-				"allowed_warning",
-			) {
+		if threshold == "" && !hasUtil && !strings.EqualFold(strings.TrimSpace(h.Get("Anthropic-Ratelimit-Unified-Status")), "allowed_warning") {
 			continue
 		}
-
 		if !hasUtil {
 			continue
 		}
-
 		limitLabel := rateLimitLabel(claim)
 		if limitLabel == "" {
 			limitLabel = "usage"
 		}
-
-		windows = append(
-			windows,
-			adapterruntime.UsageWindowNoticeInput{
-				Provider:    "anthropic",
-				WindowKey:   claim,
-				LimitLabel:  limitLabel,
-				UsedPercent: util * 100,
-				ResetsAt:    resetsAt,
-				Kind:        earlyWarningKind(claim),
-			},
-		)
+		windows = append(windows, adapterruntime.UsageWindowNoticeInput{
+			Provider:    "anthropic",
+			WindowKey:   claim,
+			LimitLabel:  limitLabel,
+			UsedPercent: util * 100,
+			ResetsAt:    resetsAt,
+			Kind:        earlyWarningKind(claim),
+		})
 	}
-
 	return windows
 }
 
@@ -134,19 +116,15 @@ func parseUtilization(raw string) (float64, bool) {
 	if raw == "" {
 		return 0, false
 	}
-
 	value, err := strconv.ParseFloat(raw, 64)
 	if err != nil {
 		return 0, false
 	}
-
 	if value > 1 {
 		value /= 100
 	}
-
 	if value < 0 {
 		return 0, false
 	}
-
 	return value, true
 }

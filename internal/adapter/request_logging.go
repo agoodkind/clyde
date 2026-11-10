@@ -32,37 +32,24 @@ func logEventIdentityFromCorrelation(corr correlation.Context) logevent.Identity
 	}
 }
 
-func (s *Server) beginChatLogRecorder(
-	r *http.Request,
-	corr correlation.Context,
-) *logevent.Recorder {
+func (s *Server) beginChatLogRecorder(r *http.Request, corr correlation.Context) *logevent.Recorder {
 	emitter := s.requestLog
 	if emitter == nil {
 		return nil
 	}
-
 	var path logevent.Path
 	path.Surface = logevent.SurfaceAdapterChat
 	path.RouteFamily = logevent.RouteFamilyChatCompatible
 	path.Path = r.URL.Path
 	path.Method = r.Method
 	path.Host = r.Host
-
 	return emitter.Begin(logEventIdentityFromCorrelation(corr), path)
 }
 
-func (s *Server) emitChatRequestLeg(
-	ctx context.Context,
-	recorder *logevent.Recorder,
-	leg logevent.Leg,
-	phase logevent.Phase,
-	status logevent.Status,
-	facets []logevent.Facet,
-) {
+func (s *Server) emitChatRequestLeg(ctx context.Context, recorder *logevent.Recorder, leg logevent.Leg, phase logevent.Phase, status logevent.Status, facets []logevent.Facet) {
 	if recorder == nil {
 		return
 	}
-
 	var event logevent.Event
 	event.Path.Leg = leg
 	event.Path.Phase = phase
@@ -72,23 +59,16 @@ func (s *Server) emitChatRequestLeg(
 	recorder.Emit(ctx, event)
 }
 
-func (s *Server) emitChatPayloadLeg(
-	ctx context.Context,
-	recorder *logevent.Recorder,
-	body []byte,
-	parseErr error,
-) {
+func (s *Server) emitChatPayloadLeg(ctx context.Context, recorder *logevent.Recorder, body []byte, parseErr error) {
 	if recorder == nil {
 		return
 	}
-
 	status := logevent.StatusOK
 	errorMessage := ""
 	if parseErr != nil {
 		status = logevent.StatusError
 		errorMessage = parseErr.Error()
 	}
-
 	var event logevent.Event
 	event.Path.Leg = logevent.LegAdapterPayload
 	event.Path.Phase = logevent.PhaseCompleted
@@ -99,16 +79,10 @@ func (s *Server) emitChatPayloadLeg(
 	recorder.Emit(ctx, event)
 }
 
-func (s *Server) emitChatClientMetadataLeg(
-	ctx context.Context,
-	recorder *logevent.Recorder,
-	corr correlation.Context,
-	facets []logevent.Facet,
-) {
+func (s *Server) emitChatClientMetadataLeg(ctx context.Context, recorder *logevent.Recorder, corr correlation.Context, facets []logevent.Facet) {
 	if recorder == nil {
 		return
 	}
-
 	recorder.UpdateIdentity(logEventIdentityFromCorrelation(corr))
 	var event logevent.Event
 	event.Path.Leg = logevent.LegAdapterClientMetadata
@@ -119,18 +93,10 @@ func (s *Server) emitChatClientMetadataLeg(
 	recorder.Emit(ctx, event)
 }
 
-func (s *Server) emitChatModelResolveLeg(
-	ctx context.Context,
-	recorder *logevent.Recorder,
-	corr correlation.Context,
-	req *adapterresolver.ResolvedRequest,
-	effort string,
-	facets []logevent.Facet,
-) {
+func (s *Server) emitChatModelResolveLeg(ctx context.Context, recorder *logevent.Recorder, corr correlation.Context, req *adapterresolver.ResolvedRequest, effort string, facets []logevent.Facet) {
 	if recorder == nil {
 		return
 	}
-
 	recorder.UpdateIdentity(logEventIdentityFromCorrelation(corr))
 	backend := resolvedRequestBackendName(req)
 	var event logevent.Event
@@ -145,19 +111,10 @@ func (s *Server) emitChatModelResolveLeg(
 	recorder.Emit(ctx, event)
 }
 
-func (s *Server) emitChatProviderSendStartedLeg(
-	ctx context.Context,
-	recorder *logevent.Recorder,
-	corr correlation.Context,
-	chatReq ChatRequest,
-	req *adapterresolver.ResolvedRequest,
-	effort string,
-	facets []logevent.Facet,
-) {
+func (s *Server) emitChatProviderSendStartedLeg(ctx context.Context, recorder *logevent.Recorder, corr correlation.Context, chatReq ChatRequest, req *adapterresolver.ResolvedRequest, effort string, facets []logevent.Facet) {
 	if recorder == nil {
 		return
 	}
-
 	recorder.UpdateIdentity(logEventIdentityFromCorrelation(corr))
 	backend := resolvedRequestBackendName(req)
 	var event logevent.Event
@@ -172,22 +129,12 @@ func (s *Server) emitChatProviderSendStartedLeg(
 	recorder.Emit(ctx, event)
 }
 
-func (s *Server) completeChatDispatchLegs(
-	ctx context.Context,
-	recorder *logevent.Recorder,
-	corr correlation.Context,
-	chatReq ChatRequest,
-	req *adapterresolver.ResolvedRequest,
-	effort string,
-	facets []logevent.Facet,
-) {
+func (s *Server) completeChatDispatchLegs(ctx context.Context, recorder *logevent.Recorder, corr correlation.Context, chatReq ChatRequest, req *adapterresolver.ResolvedRequest, effort string, facets []logevent.Facet) {
 	if recorder == nil {
 		return
 	}
-
 	recorder.UpdateIdentity(logEventIdentityFromCorrelation(corr))
 	backend := resolvedRequestBackendName(req)
-
 	legs := []logevent.Leg{
 		logevent.LegProviderAccepted,
 		logevent.LegProviderResponseStarted,
@@ -215,7 +162,6 @@ func resolvedRequestBackendName(req *adapterresolver.ResolvedRequest) string {
 	if req == nil {
 		return ""
 	}
-
 	return req.Provider.String()
 }
 
@@ -223,7 +169,6 @@ func attachFacets(event *logevent.Event, facets []logevent.Facet) {
 	if event == nil {
 		return
 	}
-
 	for _, facet := range facets {
 		event.Facets.Set(facet)
 	}
@@ -234,37 +179,25 @@ func appendFacetSlogAttrs(attrs []slog.Attr, facets []logevent.Facet) []slog.Att
 		if facet == nil {
 			continue
 		}
-
 		facetAttrs := facet.FacetAttrs()
 		if len(facetAttrs) == 0 {
 			continue
 		}
-
-		attrs = append(
-			attrs,
-			slog.Attr{
-				Key:   facet.FacetKey(),
-				Value: slog.GroupValue(facetAttrs...),
-			},
-		)
+		attrs = append(attrs, slog.Attr{
+			Key:   facet.FacetKey(),
+			Value: slog.GroupValue(facetAttrs...),
+		})
 	}
-
 	return attrs
 }
 
 // attachBackendFacet asks the registered backend factory for the
 // provider-owned facet and attaches it through the logevent.Facet
 // interface.
-func attachBackendFacet(
-	event *logevent.Event,
-	req *adapterresolver.ResolvedRequest,
-	effort string,
-	chatReq *ChatRequest,
-) {
+func attachBackendFacet(event *logevent.Event, req *adapterresolver.ResolvedRequest, effort string, chatReq *ChatRequest) {
 	if event == nil {
 		return
 	}
-
 	input := backendFacetInput(req, effort, chatReq)
 	facet := defaultBackendFacetRegistry.requestFacet(resolvedRequestBackendName(req), input)
 	if facet != nil {
@@ -272,16 +205,11 @@ func attachBackendFacet(
 	}
 }
 
-func backendFacetInput(
-	req *adapterresolver.ResolvedRequest,
-	effort string,
-	chatReq *ChatRequest,
-) backendfacet.Input {
+func backendFacetInput(req *adapterresolver.ResolvedRequest, effort string, chatReq *ChatRequest) backendfacet.Input {
 	model := ""
 	if req != nil {
 		model = req.Model
 	}
-
 	input := backendfacet.Input{
 		Backend:          resolvedRequestBackendName(req),
 		Model:            model,
@@ -297,7 +225,6 @@ func backendFacetInput(
 	if chatReq == nil {
 		return input
 	}
-
 	input.ServiceTier = chatReq.ServiceTier
 	input.ThinkingEnabled = chatReq.Reasoning != nil
 	input.InputCount = len(chatReq.Messages)
@@ -305,7 +232,6 @@ func backendFacetInput(
 	if chatReq.Reasoning != nil {
 		input.ReasoningSummary = chatReq.Reasoning.Summary
 	}
-
 	return input
 }
 
@@ -313,6 +239,5 @@ func (s *Server) completeChatLogRecorder(ctx context.Context, recorder *logevent
 	if recorder == nil {
 		return
 	}
-
 	recorder.Complete(ctx)
 }

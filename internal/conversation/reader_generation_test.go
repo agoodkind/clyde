@@ -21,10 +21,7 @@ func TestContentFingerprintPreservesCursorCompatibilitySuffix(t *testing.T) {
 	t.Parallel()
 
 	stamp := fingerprintTestStamp()
-	got := ContentFingerprint(
-		fingerprintTestRecord(string(ArtifactKindCursorAgentTranscript)),
-		stamp,
-	)
+	got := ContentFingerprint(fingerprintTestRecord(string(ArtifactKindCursorAgentTranscript)), stamp)
 	want := stamp.Fingerprint() + ":r1"
 	if got != want {
 		t.Fatalf("fingerprint = %q, want %q", got, want)
@@ -43,16 +40,8 @@ func TestContentFingerprintLeavesOtherArtifactKindsUnchanged(t *testing.T) {
 		"rollout",
 	}
 	for _, artifactKind := range unchanged {
-		if got := ContentFingerprint(
-			fingerprintTestRecord(artifactKind),
-			stamp,
-		); got != stamp.Fingerprint() {
-			t.Fatalf(
-				"%s fingerprint = %q, want the bare stamp %q",
-				artifactKind,
-				got,
-				stamp.Fingerprint(),
-			)
+		if got := ContentFingerprint(fingerprintTestRecord(artifactKind), stamp); got != stamp.Fingerprint() {
+			t.Fatalf("%s fingerprint = %q, want the bare stamp %q", artifactKind, got, stamp.Fingerprint())
 		}
 	}
 }

@@ -19,7 +19,6 @@ func EffectiveThinkingMode(req *adapterresolver.ResolvedRequest, strippedModel s
 	if req == nil {
 		return ""
 	}
-
 	return req.Thinking
 }
 
@@ -28,7 +27,6 @@ func StripContextSuffix(model string) string {
 	if prefix, _, ok := strings.Cut(model, "["); ok {
 		return strings.TrimSpace(prefix)
 	}
-
 	return strings.TrimSpace(model)
 }
 
@@ -37,7 +35,6 @@ func MaxTokens(req *int) int {
 	if req == nil || *req <= 0 {
 		return 4096
 	}
-
 	return *req
 }
 
@@ -48,37 +45,28 @@ func ResolveMaxTokens(maxTokensReq *int, resolved *adapterresolver.ResolvedReque
 	if resolved != nil {
 		maxOutputTokens = resolved.MaxOutputTokens
 	}
-
 	if (maxTokensReq == nil || *maxTokensReq <= 0) && maxOutputTokens > 0 {
 		maxTokens = maxOutputTokens
 	}
-
 	if maxOutputTokens > 0 && maxTokens > maxOutputTokens {
 		maxTokens = maxOutputTokens
 	}
-
 	return maxTokens
 }
 
 // ApplyThinkingConfig is part of Clyde's typed adapter surface.
-func ApplyThinkingConfig(
-	req *anthropic.Request,
-	resolved *adapterresolver.ResolvedRequest,
-	strippedModel string,
-) {
+func ApplyThinkingConfig(req *anthropic.Request, resolved *adapterresolver.ResolvedRequest, strippedModel string) {
 	maxOutputTokens := 0
 	configuredBudgetTokens := 0
 	if resolved != nil {
 		maxOutputTokens = resolved.MaxOutputTokens
 		configuredBudgetTokens = resolved.ThinkingBudgetTokens
 	}
-
 	switch EffectiveThinkingMode(resolved, strippedModel) {
 	case adaptermodel.ThinkingAdaptive:
 		req.Thinking = &anthropic.Thinking{
-			Type:         "adaptive",
-			Display:      "summarized",
-			BudgetTokens: 0,
+			Type:    "adaptive",
+			Display: "summarized", BudgetTokens: 0,
 		}
 	case adaptermodel.ThinkingEnabled:
 		budgetTokens := configuredBudgetTokens
@@ -87,18 +75,14 @@ func ApplyThinkingConfig(
 			if tokenCap <= 0 {
 				tokenCap = req.MaxTokens
 			}
-
 			if tokenCap < 1025 {
 				tokenCap = 1025
 			}
-
 			budgetTokens = tokenCap - 1
 		}
-
 		if req.MaxTokens <= budgetTokens {
 			req.MaxTokens = budgetTokens + 1
 		}
-
 		req.Thinking = &anthropic.Thinking{
 			Type:         "enabled",
 			BudgetTokens: budgetTokens,

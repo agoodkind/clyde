@@ -38,18 +38,12 @@ func TestTranscriptOnlyRecordsAreNotOffered(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildSemanticConversationDocuments returned error: %v", err)
 	}
-
 	if len(built.Docs) != 1 {
-		t.Fatalf(
-			"documents = %d, want 1: the transcript-only record must not be offered",
-			len(built.Docs),
-		)
+		t.Fatalf("documents = %d, want 1: the transcript-only record must not be offered", len(built.Docs))
 	}
-
 	if built.PolicySkipped != 1 {
 		t.Fatalf("PolicySkipped = %d, want 1 (the transcript-only record)", built.PolicySkipped)
 	}
-
 	if built.Docs[0].Text != messages[0].Text {
 		t.Fatalf("offered text = %q, want the visible message", built.Docs[0].Text)
 	}
@@ -64,42 +58,24 @@ func TestLoadDocsReportsTheLoadTally(t *testing.T) {
 
 	conversationID := "codex:tally-report"
 	index := &fakeConversationSemanticIndex{
-		records: []conversation.StampedRecord{
-			{Record: semanticTestRecord(conversationID), Stamp: semanticTestStamp(20, 200)},
-		},
+		records: []conversation.StampedRecord{{Record: semanticTestRecord(conversationID), Stamp: semanticTestStamp(20, 200)}},
 		messagesByID: map[string][]transcript.Message{
 			conversationID: {
-				{
-					Role:       "user",
-					Visibility: transcript.MessageVisibilityVisible,
-					Timestamp:  time.Unix(1710000000, 0),
-					Text:       "typed prompt",
-				},
+				{Role: "user", Visibility: transcript.MessageVisibilityVisible, Timestamp: time.Unix(1710000000, 0), Text: "typed prompt"},
 			},
 		},
 		loadOptions: nil,
 		tally:       transcript.HarnessStrips{Injected: 3, System: 2},
 	}
-	worker := newConversationSemanticSyncWorker(
-		index,
-		staticSemanticSyncClient(&fakeConversationSemanticClient{needed: []string{conversationID}}),
-		"collection-test",
-		semanticTestLogger(),
-		semanticTestContentKinds(),
-	)
+	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(&fakeConversationSemanticClient{needed: []string{conversationID}}), "collection-test", semanticTestLogger(), semanticTestContentKinds())
 
-	built, err := worker.loadDocs(
-		context.Background(),
-		conversation.Record{ID: conversationID, Provider: providerid.ProviderCodex},
-	)
+	built, err := worker.loadDocs(context.Background(), conversation.Record{ID: conversationID, Provider: providerid.ProviderCodex})
 	if err != nil {
 		t.Fatalf("loadDocs returned error: %v", err)
 	}
-
 	if built.InjectedStripped != 3 {
 		t.Fatalf("InjectedStripped = %d, want the tally's 3", built.InjectedStripped)
 	}
-
 	if built.SystemStripped != 2 {
 		t.Fatalf("SystemStripped = %d, want the tally's 2", built.SystemStripped)
 	}

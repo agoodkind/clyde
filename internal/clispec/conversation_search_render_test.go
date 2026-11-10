@@ -30,16 +30,8 @@ func TestFormatSearchConversationsResultUsesSemanticSearchLayout(t *testing.T) {
 		ReturnedCount: 1,
 		Limit:         10,
 		Source:        conv.SearchSourceSemantic,
-		Freshness: conv.SearchFreshness{
-			Manifest:     1539,
-			Needed:       66,
-			Embedded:     1473,
-			Pending:      0,
-			LastSyncUnix: 0,
-		},
-		Facets: conv.SearchFacets{
-			Providers: []conv.SearchFacetCount{{Value: "claude", Count: 1}},
-		},
+		Freshness:     conv.SearchFreshness{Manifest: 1539, Needed: 66, Embedded: 1473, Pending: 0, LastSyncUnix: 0},
+		Facets:        conv.SearchFacets{Providers: []conv.SearchFacetCount{{Value: "claude", Count: 1}}},
 	}
 
 	out := formatSearchConversationsResult(result, "daemon reload")
@@ -160,7 +152,6 @@ func TestFormatSearchConversationsResultPrefersCursorHint(t *testing.T) {
 	if !strings.HasSuffix(out, "\nMore: --cursor page-two\n") {
 		t.Fatalf("cursor hint missing:\n%s", out)
 	}
-
 	if strings.Contains(out, "--offset") {
 		t.Fatalf("cursor page rendered an offset hint:\n%s", out)
 	}

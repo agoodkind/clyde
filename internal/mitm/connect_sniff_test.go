@@ -32,19 +32,13 @@ func TestHandleConnectSplicesUnclaimedServerFirstWithoutCapture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-
 	caDir := t.TempDir()
 	captureDir := t.TempDir()
 	dbPath := filepath.Join(captureDir, "capture.db")
-	store, err := capture.Open(
-		context.Background(),
-		capture.Config{DBPath: dbPath},
-		slog.New(slog.NewTextHandler(io.Discard, nil)),
-	)
+	store, err := capture.Open(context.Background(), capture.Config{DBPath: dbPath}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("open capture store: %v", err)
 	}
-
 	storeOpen := true
 	t.Cleanup(func() {
 		if storeOpen {
@@ -59,20 +53,10 @@ func TestHandleConnectSplicesUnclaimedServerFirstWithoutCapture(t *testing.T) {
 		CaptureDir: captureDir,
 	}
 	group := livetrack.NewGroup(livetrack.GroupOptions{Log: nil})
-	proxy, err := NewProxy(
-		mitmCfg,
-		config.LoggingRequest{},
-		nil,
-		[]net.Listener{listener},
-		nil,
-		store,
-		"test",
-		group,
-	)
+	proxy, err := NewProxy(mitmCfg, config.LoggingRequest{}, nil, []net.Listener{listener}, nil, store, "test", group)
 	if err != nil {
 		t.Fatalf("new proxy: %v", err)
 	}
-
 	serveDone := make(chan struct{})
 	go func() {
 		defer close(serveDone)
@@ -89,12 +73,10 @@ func TestHandleConnectSplicesUnclaimedServerFirstWithoutCapture(t *testing.T) {
 	if err := tunnel.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		t.Fatalf("set tunnel deadline: %v", err)
 	}
-
 	got := make([]byte, len(payload))
 	if _, err := io.ReadFull(tunnel, got); err != nil {
 		t.Fatalf("read spliced payload: %v", err)
 	}
-
 	_ = tunnel.Close()
 	if !bytes.Equal(got, payload) {
 		t.Fatalf("spliced payload = %q want %q", got, payload)
@@ -104,7 +86,6 @@ func TestHandleConnectSplicesUnclaimedServerFirstWithoutCapture(t *testing.T) {
 	if err := store.Close(context.Background(), "test"); err != nil {
 		t.Fatalf("close capture store: %v", err)
 	}
-
 	storeOpen = false
 	assertNoCaptureRows(t, dbPath)
 }
@@ -123,7 +104,6 @@ func TestStopPendingConnectReadClearsDeadline(t *testing.T) {
 	if err := local.SetReadDeadline(time.Now().Add(-time.Second)); err != nil {
 		t.Fatalf("seed deadline: %v", err)
 	}
-
 	readCh := make(chan connectByteRead, 1)
 	readCh <- connectByteRead{value: transparentTLSHandshakeRecord, ok: true}
 
@@ -154,14 +134,12 @@ func assertNoCaptureRows(t *testing.T, dbPath string) {
 	if err != nil {
 		t.Fatalf("open verifier db: %v", err)
 	}
-
 	defer func() { _ = db.Close() }()
 
 	var count int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM requests`).Scan(&count); err != nil {
 		t.Fatalf("count capture rows: %v", err)
 	}
-
 	if count != 0 {
 		t.Fatalf("capture rows = %d, want 0 (opaque splice must not capture)", count)
 	}

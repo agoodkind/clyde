@@ -21,7 +21,6 @@ func TestNewProxyAttachesToGroup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-
 	t.Cleanup(func() { _ = listener.Close() })
 
 	caDir := t.TempDir()
@@ -33,24 +32,13 @@ func TestNewProxyAttachesToGroup(t *testing.T) {
 		CaptureDir: t.TempDir(),
 	}
 
-	proxy, err := NewProxy(
-		mitmCfg,
-		config.LoggingRequest{},
-		nil,
-		[]net.Listener{listener},
-		nil,
-		nil,
-		"cli.test",
-		g,
-	)
+	proxy, err := NewProxy(mitmCfg, config.LoggingRequest{}, nil, []net.Listener{listener}, nil, nil, "cli.test", g)
 	if err != nil {
 		t.Fatalf("NewProxy: %v", err)
 	}
-
 	if proxy.Tunnels == nil {
 		t.Fatal("proxy tunnels registry is nil")
 	}
-
 	if g.MemberCount() != before+1 {
 		t.Fatalf("expected 1 attached member, got %d", g.MemberCount()-before)
 	}

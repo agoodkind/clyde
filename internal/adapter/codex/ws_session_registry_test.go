@@ -19,7 +19,6 @@ func (c *callRecordingCloser) Close(reason string) error {
 	if c.onClose != nil {
 		c.onClose(reason)
 	}
-
 	return nil
 }
 
@@ -51,11 +50,9 @@ func TestWsSessionCacheRegistryParity(t *testing.T) {
 	if cache.Size() != 0 {
 		t.Errorf("cache should be empty after Invalidate, got %d", cache.Size())
 	}
-
 	if reg.Count() != 0 {
 		t.Errorf("registry should be empty after Invalidate, got %d", reg.Count())
 	}
-
 	if !s.Closed {
 		t.Error("session should be marked closed after Invalidate")
 	}
@@ -82,7 +79,6 @@ func TestWsSessionCacheCloseAllUsesRegistry(t *testing.T) {
 	if cache.Size() != 0 {
 		t.Errorf("expected empty cache after CloseAll, got %d", cache.Size())
 	}
-
 	if reg.Count() != 0 {
 		t.Errorf("expected empty registry after CloseAll, got %d", reg.Count())
 	}
@@ -103,7 +99,6 @@ func TestWsSessionCacheCloseAllLegacyPathNoRegistry(t *testing.T) {
 	if cache.Size() != 0 {
 		t.Errorf("expected empty cache, got %d", cache.Size())
 	}
-
 	if !a.Closed || !b.Closed {
 		t.Error("entries should be closed by legacy CloseAll")
 	}
@@ -124,27 +119,19 @@ func TestWsSessionRegistryForceCloseMatchingBehavior(t *testing.T) {
 		LastUsed:       time.Now(),
 	}
 	var closeCalled bool
-	closer := &callRecordingCloser{
-		onClose: func(_ string) {
-			closeCalled = true
-			sess.Closed = true
-		},
-	}
+	closer := &callRecordingCloser{onClose: func(_ string) {
+		closeCalled = true
+		sess.Closed = true
+	}}
 
-	liveSess, err := reg.Register(
-		context.Background(),
-		wsSessionKind,
-		WsSessionMeta{
-			ConversationID: "conv-force",
-			Model:          "",
-			FrameCount:     0,
-		},
-		closer,
-	)
+	liveSess, err := reg.Register(context.Background(), wsSessionKind, WsSessionMeta{
+		ConversationID: "conv-force",
+		Model:          "",
+		FrameCount:     0,
+	}, closer)
 	if err != nil {
 		t.Fatalf("Register failed: %v", err)
 	}
-
 	if liveSess == nil {
 		t.Fatal("expected non-nil session from Register")
 	}
@@ -155,15 +142,12 @@ func TestWsSessionRegistryForceCloseMatchingBehavior(t *testing.T) {
 	if closedCount != 1 {
 		t.Errorf("ForceCloseMatching returned %d, want 1", closedCount)
 	}
-
 	if !closeCalled {
 		t.Error("closer should have been called by ForceCloseMatching")
 	}
-
 	if !sess.Closed {
 		t.Error("session should be marked closed after ForceCloseMatching")
 	}
-
 	if reg.Count() != 0 {
 		t.Errorf("registry should be empty after ForceCloseMatching, got %d", reg.Count())
 	}
@@ -179,7 +163,6 @@ func TestWsConnCloserNilConnIsNoop(t *testing.T) {
 	if err := closer.Close("test"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
 	// Nil conn: session.Closed stays false because nothing was closed.
 	if sess.Closed {
 		t.Error("nil-conn Close should not mark session closed")

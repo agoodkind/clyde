@@ -19,21 +19,14 @@ func loadWithToolOutputs(t *testing.T, body string) []transcript.Message {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
-
-	messages, err := conversation.CollectMessages(
-		New().Stream(
-			path,
-			conversation.LoadOptions{
-				IncludeSystemPrompts:  false,
-				IncludeSystemMessages: false,
-				IncludeToolOutputs:    true,
-			},
-		),
-	)
+	messages, err := conversation.CollectMessages(New().Stream(path, conversation.LoadOptions{
+		IncludeSystemPrompts:  false,
+		IncludeSystemMessages: false,
+		IncludeToolOutputs:    true,
+	}))
 	if err != nil {
 		t.Fatalf("stream fixture: %v", err)
 	}
-
 	return messages
 }
 
@@ -66,11 +59,9 @@ func TestAToolResultKeepsItsOutputInEitherShape(t *testing.T) {
 	if len(messages) != 2 {
 		t.Fatalf("messages = %d, want 2", len(messages))
 	}
-
 	if got := messages[0].Tools[0].Output; !strings.Contains(got, "drwxr-xr-x") {
 		t.Fatalf("a string result lost its output: %q", got)
 	}
-
 	if got := messages[1].Tools[0].Output; !strings.Contains(got, "06-26-refactor_conversation") {
 		t.Fatalf("a list result lost its output: %q", got)
 	}
@@ -92,13 +83,11 @@ func TestAToolResultKeepsEveryBlockItReturned(t *testing.T) {
 
 	messages := loadWithToolOutputs(t, body)
 	got := messages[0].Tools[0].Output
-
 	for _, want := range []string{"first match", "second match"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("output is missing %q: %q", want, got)
 		}
 	}
-
 	if !messages[0].Tools[0].IsError {
 		t.Fatal("the error flag was dropped")
 	}
@@ -132,7 +121,6 @@ func TestAToolResultTravelsWithItsDecodeVerdict(t *testing.T) {
 	if err := complete.UnmarshalJSON([]byte(`"ran clean"`)); err != nil {
 		t.Fatalf("decode string result: %v", err)
 	}
-
 	text, decode := complete.SearchableText()
 	if text != "ran clean" || decode != FieldDecodeComplete {
 		t.Fatalf("SearchableText() = %q, %q; want %q, complete", text, decode, "ran clean")
@@ -142,7 +130,6 @@ func TestAToolResultTravelsWithItsDecodeVerdict(t *testing.T) {
 	if err := partial.UnmarshalJSON([]byte(`["not a block"]`)); err != nil {
 		t.Fatalf("decode block list: %v", err)
 	}
-
 	if _, decode := partial.SearchableText(); decode != FieldDecodePartial {
 		t.Fatalf("a value the parser could not read reported %q, want partial", decode)
 	}

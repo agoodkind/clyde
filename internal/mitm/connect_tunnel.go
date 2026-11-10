@@ -43,33 +43,23 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	if target == "" {
 		target = strings.TrimSpace(r.Host)
 	}
-
 	if target == "" {
 		http.Error(w, "missing CONNECT target", http.StatusBadRequest)
 		return
 	}
-
 	cleanTarget, connectHost, err := cleanConnectTarget(target)
 	if err != nil {
 		http.Error(w, "invalid CONNECT target: "+target, http.StatusBadRequest)
 		return
 	}
-
 	if provider, claim, ok := providerForConnect(cleanTarget); ok {
 		p.handleProviderTLSConnect(r.Context(), w, cleanTarget, claim.Host, provider, started)
 		return
 	}
-
 	p.handleUnclaimedConnect(r.Context(), w, cleanTarget, connectHost, started)
 }
 
-func (p *Proxy) handleUnclaimedConnect(
-	ctx context.Context,
-	w http.ResponseWriter,
-	cleanTarget string,
-	connectHost string,
-	started time.Time,
-) {
+func (p *Proxy) handleUnclaimedConnect(ctx context.Context, w http.ResponseWriter, cleanTarget string, connectHost string, started time.Time) {
 	ctx = context.WithoutCancel(ctx)
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
@@ -79,47 +69,19 @@ func (p *Proxy) handleUnclaimedConnect(
 
 	clientConn, bufrw, err := hijacker.Hijack()
 	if err != nil {
-		p.log.WarnContext(
-			ctx,
-			"mitm.connect.hijack_failed",
-			"concern",
-			"providers.mitm.errors",
-			"target",
-			cleanTarget,
-			"err",
-			err,
-		)
-
+		p.log.WarnContext(ctx, "mitm.connect.hijack_failed", "concern", "providers.mitm.errors", "target", cleanTarget, "err", err)
 		return
 	}
-
 	defer func() { _ = clientConn.Close() }()
 
 	// Tell the client the tunnel is established. The client will
 	// follow with TLS handshake + websocket frames.
 	if _, err := bufrw.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
-		p.log.WarnContext(
-			ctx,
-			"mitm.connect.write_established_failed",
-			"concern",
-			"providers.mitm.errors",
-			"err",
-			err,
-		)
-
+		p.log.WarnContext(ctx, "mitm.connect.write_established_failed", "concern", "providers.mitm.errors", "err", err)
 		return
 	}
-
 	if err := bufrw.Flush(); err != nil {
-		p.log.WarnContext(
-			ctx,
-			"mitm.connect.flush_failed",
-			"concern",
-			"providers.mitm.errors",
-			"err",
-			err,
-		)
-
+		p.log.WarnContext(ctx, "mitm.connect.flush_failed", "concern", "providers.mitm.errors", "err", err)
 		return
 	}
 
@@ -127,145 +89,68 @@ func (p *Proxy) handleUnclaimedConnect(
 	if !ok {
 		return
 	}
-
 	if start.interceptTLS {
-		p.interceptHijackedConnectTLS(
-			ctx,
-			clientConn,
-			start.clientPrefix,
-			cleanTarget,
-			connectHost,
-			unclaimedProvider{},
-			started,
-		)
-
+		p.interceptHijackedConnectTLS(ctx, clientConn, start.clientPrefix, cleanTarget, connectHost, unclaimedProvider{}, started)
 		return
 	}
-
-	p.spliceHijackedConnect(
-		ctx,
-		clientConn,
-		start.upstream,
-		start.clientPrefix,
-		start.upstreamPrefix,
-		cleanTarget,
-		connectHost,
-		started,
-	)
+	p.spliceHijackedConnect(ctx, clientConn, start.upstream, start.clientPrefix, start.upstreamPrefix, cleanTarget, connectHost, started)
 }
 
-func (p *Proxy) spliceHijackedConnect(
-	ctx context.Context,
-	clientConn net.Conn,
-	upstream net.Conn,
-	clientPrefix []byte,
-	upstreamPrefix []byte,
-	cleanTarget string,
-	connectHost string,
-	started time.Time,
-) {
+func (p *Proxy) spliceHijackedConnect(ctx context.Context, clientConn net.Conn, upstream net.Conn, clientPrefix []byte, upstreamPrefix []byte, cleanTarget string, connectHost string, started time.Time) {
 	defer func() { _ = upstream.Close() }()
 
 	closer := newTunnelCloser(&connCloser{conn: clientConn}, &connCloser{conn: upstream})
-	sess, err := p.Tunnels.Register(
-		ctx,
-		"mitm.connect",
-		TunnelMeta{
-			ConnectHost:   connectHost,
-			UpstreamAddr:  cleanTarget,
-			CaptureFile:   "",
-			KeepaliveSeen: false,
-		},
-		closer,
-	)
+	sess, err := p.Tunnels.Register(ctx, "mitm.connect", TunnelMeta{
+		ConnectHost:   connectHost,
+		UpstreamAddr:  cleanTarget,
+		CaptureFile:   "",
+		KeepaliveSeen: false,
+	}, closer)
 	if err != nil {
-		p.log.WarnContext(
-			ctx,
-			"mitm.connect.register_rejected",
-			"concern",
-			"providers.mitm.errors",
-			"target",
-			cleanTarget,
-			"err",
-			err,
-		)
-
+		p.log.WarnContext(ctx, "mitm.connect.register_rejected", "concern", "providers.mitm.errors", "target", cleanTarget, "err", err)
 		return
 	}
 	defer p.Tunnels.Release(ctx, sess, "mitm.connect.tunnel_closed")
 
-	p.log.InfoContext(
-		ctx,
-		"mitm.connect.tunnel_open",
-		"concern",
-		"providers.mitm.wire",
-		"target",
-		cleanTarget,
-		"host",
-		connectHost,
+	p.log.InfoContext(ctx, "mitm.connect.tunnel_open", "concern", "providers.mitm.wire", "target", cleanTarget,
+		"host", connectHost,
 	)
 	client := clientConn
 	if len(clientPrefix) > 0 {
 		client = &prefixConn{Conn: clientConn, prefix: clientPrefix}
 	}
-
 	upstreamSide := upstream
 	if len(upstreamPrefix) > 0 {
 		upstreamSide = &prefixConn{Conn: upstream, prefix: upstreamPrefix}
 	}
-
 	bytesUp, bytesDown := spliceConnections(client, upstreamSide, sess)
-	p.log.InfoContext(
-		ctx,
-		"mitm.connect.tunnel_closed",
-		"concern",
-		"providers.mitm.wire",
-		"target",
-		cleanTarget,
-		"host",
-		connectHost,
-		"duration_ms",
-		clock.Since(started).Milliseconds(),
-		"bytes_up",
-		bytesUp,
-		"bytes_down",
-		bytesDown,
+	p.log.InfoContext(ctx, "mitm.connect.tunnel_closed", "concern", "providers.mitm.wire", "target", cleanTarget,
+		"host", connectHost,
+		"duration_ms", clock.Since(started).Milliseconds(),
+		"bytes_up", bytesUp,
+		"bytes_down", bytesDown,
 	)
 }
 
 func cleanConnectTarget(target string) (string, string, error) {
 	host, port, err := net.SplitHostPort(strings.TrimSpace(target))
 	if err != nil {
-		slog.Warn(
-			"mitm.connect.split_target_failed",
-			"concern",
-			"providers.mitm.errors",
-			"target",
-			target,
-			"err",
-			err,
-		)
-
+		slog.Warn("mitm.connect.split_target_failed", "concern", "providers.mitm.errors", "target", target, "err", err)
 		return "", "", fmt.Errorf("split CONNECT target: %w", err)
 	}
-
 	if strings.TrimSpace(host) == "" {
 		return "", "", fmt.Errorf("missing CONNECT host")
 	}
-
 	if strings.ContainsRune(host, 0) || strings.ContainsRune(port, 0) {
 		return "", "", fmt.Errorf("CONNECT target contains NUL")
 	}
-
 	portNumber, err := strconv.Atoi(port)
 	if err != nil {
 		return "", "", fmt.Errorf("parse CONNECT port: %w", err)
 	}
-
 	if portNumber <= 0 || portNumber > 65535 {
 		return "", "", fmt.Errorf("CONNECT port out of range")
 	}
-
 	return net.JoinHostPort(host, strconv.Itoa(portNumber)), host, nil
 }
 
@@ -278,25 +163,15 @@ func cleanConnectTarget(target string) (string, string, error) {
 // idle-grace fast-path can tell a wedged keepalive tunnel from an
 // actively streaming one. Snapshot-copied sessions or callers that do
 // not register with livetrack may pass nil; the Touch is a no-op.
-func spliceConnections(
-	client net.Conn,
-	upstream net.Conn,
-	session *livetrack.Session[TunnelMeta],
-) (bytesUp, bytesDown int64) {
+func spliceConnections(client, upstream net.Conn, session *livetrack.Session[TunnelMeta]) (bytesUp, bytesDown int64) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	var upN, downN int64
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				slog.Error(
-					"mitm.connect.copy_up_panic",
-					"concern",
-					"providers.mitm.errors",
-					"component",
-					"mitm",
-					"err",
-					fmt.Errorf("panic: %v", recovered),
+				slog.Error("mitm.connect.copy_up_panic", "concern", "providers.mitm.errors", "component", "mitm",
+					"err", fmt.Errorf("panic: %v", recovered),
 				)
 			}
 		}()
@@ -312,14 +187,8 @@ func spliceConnections(
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				slog.Error(
-					"mitm.connect.copy_down_panic",
-					"concern",
-					"providers.mitm.errors",
-					"component",
-					"mitm",
-					"err",
-					fmt.Errorf("panic: %v", recovered),
+				slog.Error("mitm.connect.copy_down_panic", "concern", "providers.mitm.errors", "component", "mitm",
+					"err", fmt.Errorf("panic: %v", recovered),
 				)
 			}
 		}()
@@ -331,7 +200,6 @@ func spliceConnections(
 		}
 	}()
 	wg.Wait()
-
 	return upN, downN
 }
 
@@ -352,22 +220,13 @@ func (t *touchOnWrite) Write(p []byte) (int, error) {
 	if n > 0 && t.touch != nil {
 		t.touch()
 	}
-
 	if err != nil {
 		return n, fmt.Errorf("touch-on-write: %w", err)
 	}
-
 	return n, nil
 }
 
-func (p *Proxy) handleProviderTLSConnect(
-	ctx context.Context,
-	w http.ResponseWriter,
-	target string,
-	host string,
-	provider Provider,
-	started time.Time,
-) {
+func (p *Proxy) handleProviderTLSConnect(ctx context.Context, w http.ResponseWriter, target string, host string, provider Provider, started time.Time) {
 	// The sniff front-door (newSniffListener) now fronts every listener, so this
 	// CONNECT arrives through a prefixConn. That changes how http.Server detects
 	// the hijack and it cancels r.Context() sooner, which would abort the
@@ -382,58 +241,19 @@ func (p *Proxy) handleProviderTLSConnect(
 		http.Error(w, "hijacking not supported", http.StatusInternalServerError)
 		return
 	}
-
 	clientConn, bufrw, err := hijacker.Hijack()
 	if err != nil {
-		p.log.WarnContext(
-			ctx,
-			"mitm.provider.connect.hijack_failed",
-			"concern",
-			"providers.mitm.wire",
-			"provider",
-			providerID,
-			"target",
-			target,
-			"err",
-			err,
-		)
-
+		p.log.WarnContext(ctx, "mitm.provider.connect.hijack_failed", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "err", err)
 		return
 	}
-
 	defer func() { _ = clientConn.Close() }()
 
 	if _, err := bufrw.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
-		p.log.WarnContext(
-			ctx,
-			"mitm.provider.connect.write_established_failed",
-			"concern",
-			"providers.mitm.wire",
-			"provider",
-			providerID,
-			"target",
-			target,
-			"err",
-			err,
-		)
-
+		p.log.WarnContext(ctx, "mitm.provider.connect.write_established_failed", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "err", err)
 		return
 	}
-
 	if err := bufrw.Flush(); err != nil {
-		p.log.WarnContext(
-			ctx,
-			"mitm.provider.connect.flush_failed",
-			"concern",
-			"providers.mitm.wire",
-			"provider",
-			providerID,
-			"target",
-			target,
-			"err",
-			err,
-		)
-
+		p.log.WarnContext(ctx, "mitm.provider.connect.flush_failed", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "err", err)
 		return
 	}
 
@@ -443,151 +263,56 @@ func (p *Proxy) handleProviderTLSConnect(
 // interceptHijackedConnectTLS completes the server-side TLS handshake for a
 // hijacked CONNECT stream and passes the terminated connection into the shared
 // intercepted HTTP path.
-func (p *Proxy) interceptHijackedConnectTLS(
-	ctx context.Context,
-	clientConn net.Conn,
-	prefix []byte,
-	target string,
-	host string,
-	provider Provider,
-	started time.Time,
-) {
+func (p *Proxy) interceptHijackedConnectTLS(ctx context.Context, clientConn net.Conn, prefix []byte, target string, host string, provider Provider, started time.Time) {
 	ctx = context.WithoutCancel(ctx)
 	providerID := provider.ID().String()
-	authority, err := p.mitmCA()
+	ca, err := p.mitmCA()
 	if err != nil {
-		p.log.WarnContext(
-			ctx,
-			"mitm.provider.connect.ca_failed",
-			"concern",
-			"providers.mitm.wire",
-			"provider",
-			providerID,
-			"target",
-			target,
-			"err",
-			err,
-		)
-
+		p.log.WarnContext(ctx, "mitm.provider.connect.ca_failed", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "err", err)
 		return
 	}
-
-	leaf, err := authority.leafForHost(host)
+	leaf, err := ca.leafForHost(host)
 	if err != nil {
-		p.log.WarnContext(
-			ctx,
-			"mitm.provider.connect.leaf_failed",
-			"concern",
-			"providers.mitm.wire",
-			"provider",
-			providerID,
-			"target",
-			target,
-			"host",
-			host,
-			"err",
-			err,
-		)
-
+		p.log.WarnContext(ctx, "mitm.provider.connect.leaf_failed", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "host", host, "err", err)
 		return
 	}
-
 	tlsInput := clientConn
 	if len(prefix) > 0 {
 		tlsInput = &prefixConn{Conn: clientConn, prefix: append([]byte(nil), prefix...)}
 	}
-
-	tlsConn := tls.Server(
-		tlsInput,
-		&tls.Config{
-			Certificates: []tls.Certificate{*leaf},
-			MinVersion:   tls.VersionTLS12,
-			GetConfigForClient: func(info *tls.ClientHelloInfo) (*tls.Config, error) {
-				p.log.DebugContext(
-					ctx,
-					"mitm.provider.connect.alpn_offer",
-					"concern",
-					"providers.mitm.wire",
-					"provider",
-					providerID,
-					"target",
-					target,
-					"host",
-					host,
-					"protos",
-					info.SupportedProtos,
-				)
-				nextProtos := mitmALPNProtocols(info.SupportedProtos)
-				if len(nextProtos) == 0 {
-					return nil, nil
-				}
-
-				return &tls.Config{
-					Certificates: []tls.Certificate{*leaf},
-					MinVersion:   tls.VersionTLS12,
-					NextProtos:   nextProtos,
-				}, nil
-			},
+	tlsConn := tls.Server(tlsInput, &tls.Config{
+		Certificates: []tls.Certificate{*leaf},
+		MinVersion:   tls.VersionTLS12,
+		GetConfigForClient: func(info *tls.ClientHelloInfo) (*tls.Config, error) {
+			p.log.DebugContext(ctx, "mitm.provider.connect.alpn_offer", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "host", host, "protos", info.SupportedProtos)
+			nextProtos := mitmALPNProtocols(info.SupportedProtos)
+			if len(nextProtos) == 0 {
+				return nil, nil
+			}
+			return &tls.Config{
+				Certificates: []tls.Certificate{*leaf},
+				MinVersion:   tls.VersionTLS12,
+				NextProtos:   nextProtos,
+			}, nil
 		},
-	)
+	})
 	// ctx has no cancellation (CLYDE-324 above), and the tunnel is not yet
 	// registered with livetrack, so drain cannot force-close a stalled
 	// handshake. Bound it with a deadline so a client that opens the tunnel and
 	// then stalls before or during the ClientHello cannot pin this goroutine and
 	// its fd. Clear the deadline after a successful handshake.
 	if err := clientConn.SetDeadline(clock.Now().Add(transparentSniffTimeout)); err != nil {
-		p.log.WarnContext(
-			ctx,
-			"mitm.provider.connect.set_handshake_deadline_failed",
-			"concern",
-			"providers.mitm.wire",
-			"provider",
-			providerID,
-			"target",
-			target,
-			"err",
-			err,
-		)
-
+		p.log.WarnContext(ctx, "mitm.provider.connect.set_handshake_deadline_failed", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "err", err)
 		return
 	}
-
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
-		p.log.WarnContext(
-			ctx,
-			"mitm.provider.connect.client_tls_failed",
-			"concern",
-			"providers.mitm.wire",
-			"provider",
-			providerID,
-			"target",
-			target,
-			"host",
-			host,
-			"err",
-			err,
-		)
-
+		p.log.WarnContext(ctx, "mitm.provider.connect.client_tls_failed", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "host", host, "err", err)
 		return
 	}
-
 	if err := clientConn.SetDeadline(time.Time{}); err != nil {
-		p.log.WarnContext(
-			ctx,
-			"mitm.provider.connect.clear_handshake_deadline_failed",
-			"concern",
-			"providers.mitm.wire",
-			"provider",
-			providerID,
-			"target",
-			target,
-			"err",
-			err,
-		)
-
+		p.log.WarnContext(ctx, "mitm.provider.connect.clear_handshake_deadline_failed", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "err", err)
 		return
 	}
-
 	p.serveInterceptedTLS(ctx, tlsConn, clientConn, target, host, provider, started)
 }
 
@@ -597,77 +322,31 @@ func (p *Proxy) interceptHijackedConnectTLS(
 // Both the CONNECT path and the transparent front-door share it. clientRaw is
 // the underlying pre-TLS connection whose Close force-closes the client side
 // during drain.
-func (p *Proxy) serveInterceptedTLS(
-	ctx context.Context,
-	tlsConn *tls.Conn,
-	clientRaw net.Conn,
-	target string,
-	host string,
-	provider Provider,
-	started time.Time,
-) {
+func (p *Proxy) serveInterceptedTLS(ctx context.Context, tlsConn *tls.Conn, clientRaw net.Conn, target string, host string, provider Provider, started time.Time) {
 	providerID := provider.ID().String()
 	closer := newTunnelCloser(&connCloser{conn: tlsConn}, &connCloser{conn: clientRaw})
-	sess, err := p.Tunnels.Register(
-		ctx,
-		"mitm."+providerID+".tls",
-		TunnelMeta{
-			ConnectHost:   host,
-			UpstreamAddr:  target,
-			CaptureFile:   "",
-			KeepaliveSeen: false,
-		},
-		closer,
-	)
+	sess, err := p.Tunnels.Register(ctx, "mitm."+providerID+".tls", TunnelMeta{
+		ConnectHost:   host,
+		UpstreamAddr:  target,
+		CaptureFile:   "",
+		KeepaliveSeen: false,
+	}, closer)
 	if err != nil {
-		p.log.WarnContext(
-			ctx,
-			"mitm.provider.connect.register_rejected",
-			"concern",
-			"providers.mitm.wire",
-			"provider",
-			providerID,
-			"target",
-			target,
-			"err",
-			err,
-		)
-
+		p.log.WarnContext(ctx, "mitm.provider.connect.register_rejected", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "err", err)
 		return
 	}
 	defer p.Tunnels.Release(ctx, sess, "mitm."+providerID+".tls.closed")
-	p.log.InfoContext(
-		ctx,
-		"mitm.provider.connect.intercept_open",
-		"concern",
-		"providers.mitm.wire",
-		"provider",
-		providerID,
-		"target",
-		target,
-		"host",
-		host,
-	)
+	p.log.InfoContext(ctx, "mitm.provider.connect.intercept_open", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "host", host)
 	switch tlsConn.ConnectionState().NegotiatedProtocol {
 	case http2.NextProtoTLS:
 		p.serveProviderInterceptedHTTP2(ctx, tlsConn, target, host, provider, sess)
 	default:
 		p.serveProviderInterceptedHTTP1(ctx, tlsConn, target, host, provider, sess)
 	}
-
-	p.log.InfoContext(
-		ctx,
-		"mitm.provider.connect.intercept_closed",
-		"concern",
-		"providers.mitm.wire",
-		"provider",
-		providerID,
-		"target",
-		target,
-		"host",
-		host,
-		"duration_ms",
-		clock.Since(started).Milliseconds(),
+	p.log.InfoContext(ctx, "mitm.provider.connect.intercept_closed", "concern", "providers.mitm.wire", "provider", providerID,
+		"target", target,
+		"host", host,
+		"duration_ms", clock.Since(started).Milliseconds(),
 	)
 }
 
@@ -677,18 +356,10 @@ func mitmALPNProtocols(offered []string) []string {
 			return []string{http2.NextProtoTLS, "http/1.1"}
 		}
 	}
-
 	return nil
 }
 
-func (p *Proxy) serveProviderInterceptedHTTP1(
-	ctx context.Context,
-	client *tls.Conn,
-	target string,
-	host string,
-	provider Provider,
-	parent *livetrack.Session[TunnelMeta],
-) {
+func (p *Proxy) serveProviderInterceptedHTTP1(ctx context.Context, client *tls.Conn, target string, host string, provider Provider, parent *livetrack.Session[TunnelMeta]) {
 	providerID := provider.ID().String()
 	reader := bufio.NewReader(client)
 	writer := bufio.NewWriter(client)
@@ -698,45 +369,23 @@ func (p *Proxy) serveProviderInterceptedHTTP1(
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				p.log.WarnContext(
-					ctx,
-					"mitm.provider.tls.drain_watcher_panicked",
-					"concern",
-					"providers.mitm.wire",
-					"provider",
-					providerID,
-					"host",
-					host,
-					"panic",
-					recovered,
+				p.log.WarnContext(ctx, "mitm.provider.tls.drain_watcher_panicked", "concern", "providers.mitm.wire", "provider", providerID,
+					"host", host,
+					"panic", recovered,
 				)
 			}
 		}()
 		p.watchProviderTunnelDrain(ctx, client, host, providerID, &activeRequests, stopWatcher)
 	}()
 	defer close(stopWatcher)
-
 	for {
 		req, err := http.ReadRequest(reader)
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
-				p.log.DebugContext(
-					ctx,
-					"mitm.provider.http.read_request_failed",
-					"concern",
-					"providers.mitm.wire",
-					"provider",
-					providerID,
-					"host",
-					host,
-					"err",
-					err,
-				)
+				p.log.DebugContext(ctx, "mitm.provider.http.read_request_failed", "concern", "providers.mitm.wire", "provider", providerID, "host", host, "err", err)
 			}
-
 			return
 		}
-
 		// Reading a fresh request off the parent TLS session counts
 		// as byte movement; refresh the parent's idle timestamp so
 		// the daemon reload-drain idle-grace fast-path does not
@@ -751,90 +400,31 @@ func (p *Proxy) serveProviderInterceptedHTTP1(
 		// parent linkage records the TLS session id so operators can
 		// correlate request bursts back to their CONNECT tunnel.
 		closer := newTunnelCloser(&connCloser{conn: client}, nil)
-		reqSess, registerErr := p.Tunnels.Register(
-			ctx,
-			"mitm."+providerID+".http",
-			TunnelMeta{
-				ConnectHost:   host,
-				UpstreamAddr:  target,
-				CaptureFile:   "",
-				KeepaliveSeen: false,
-			},
-			closer,
-			livetrack.WithParent(parent),
-		)
+		reqSess, registerErr := p.Tunnels.Register(ctx, "mitm."+providerID+".http", TunnelMeta{
+			ConnectHost:   host,
+			UpstreamAddr:  target,
+			CaptureFile:   "",
+			KeepaliveSeen: false,
+		}, closer, livetrack.WithParent(parent))
 		if registerErr != nil {
 			_ = req.Body.Close()
-			if !errors.Is(registerErr, livetrack.ErrRegistryClosed) || parent == nil ||
-				p.Tunnels.State() != livetrack.StateDraining {
+			if !errors.Is(registerErr, livetrack.ErrRegistryClosed) || parent == nil || p.Tunnels.State() != livetrack.StateDraining {
 				activeRequests.Add(-1)
-				p.log.WarnContext(
-					ctx,
-					"mitm.provider.http.register_rejected",
-					"concern",
-					"providers.mitm.wire",
-					"provider",
-					providerID,
-					"host",
-					host,
-					"err",
-					registerErr,
-				)
-
+				p.log.WarnContext(ctx, "mitm.provider.http.register_rejected", "concern", "providers.mitm.wire", "provider", providerID, "host", host, "err", registerErr)
 				return
 			}
-
 			activeRequests.Add(-1)
-			p.log.DebugContext(
-				ctx,
-				"mitm.provider.http.request_rejected_reload_drain",
-				"concern",
-				"providers.mitm.wire",
-				"provider",
-				providerID,
-				"host",
-				host,
-				"err",
-				registerErr,
-			)
-
+			p.log.DebugContext(ctx, "mitm.provider.http.request_rejected_reload_drain", "concern", "providers.mitm.wire", "provider", providerID, "host", host, "err", registerErr)
 			return
 		}
-
-		if err := p.handleProviderInterceptedRequest(
-			ctx,
-			client,
-			reader,
-			sink,
-			req,
-			target,
-			host,
-			provider,
-			parent,
-			reqSess,
-		); err != nil {
+		if err := p.handleProviderInterceptedRequest(ctx, client, reader, sink, req, target, host, provider, parent, reqSess); err != nil {
 			activeRequests.Add(-1)
-			p.log.WarnContext(
-				ctx,
-				"mitm.provider.http.request_failed",
-				"concern",
-				"providers.mitm.wire",
-				"provider",
-				providerID,
-				"host",
-				host,
-				"path",
-				req.URL.Path,
-				"err",
-				err,
-			)
+			p.log.WarnContext(ctx, "mitm.provider.http.request_failed", "concern", "providers.mitm.wire", "provider", providerID, "host", host, "path", req.URL.Path, "err", err)
 			if reqSess != nil {
 				p.Tunnels.Release(ctx, reqSess, "mitm."+providerID+".http.failed")
 			}
-
 			return
 		}
-
 		// Response body forwarded successfully: refresh both the
 		// parent TLS session and the per-request session so the
 		// idle-grace drain fast-path sees activity on whichever
@@ -843,50 +433,26 @@ func (p *Proxy) serveProviderInterceptedHTTP1(
 		if reqSess != nil {
 			reqSess.Touch()
 		}
-
 		activeRequests.Add(-1)
 		if reqSess != nil {
 			p.Tunnels.Release(ctx, reqSess, "mitm."+providerID+".http.completed")
 		}
-
 		if req.Close {
 			return
 		}
-
 		if parent != nil && p.Tunnels.State() == livetrack.StateDraining {
-			p.log.DebugContext(
-				ctx,
-				"mitm.provider.http.keepalive_closed_reload_drain",
-				"concern",
-				"providers.mitm.wire",
-				"provider",
-				providerID,
-				"host",
-				host,
-				"path",
-				req.URL.Path,
-			)
-
+			p.log.DebugContext(ctx, "mitm.provider.http.keepalive_closed_reload_drain", "concern", "providers.mitm.wire", "provider", providerID, "host", host, "path", req.URL.Path)
 			return
 		}
 	}
 }
 
-func (p *Proxy) watchProviderTunnelDrain(
-	ctx context.Context,
-	client *tls.Conn,
-	host string,
-	providerID string,
-	activeRequests *atomic.Int32,
-	stop <-chan struct{},
-) {
+func (p *Proxy) watchProviderTunnelDrain(ctx context.Context, client *tls.Conn, host, providerID string, activeRequests *atomic.Int32, stop <-chan struct{}) {
 	if p == nil || p.Tunnels == nil || client == nil {
 		return
 	}
-
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
-
 	for {
 		select {
 		case <-stop:
@@ -895,36 +461,18 @@ func (p *Proxy) watchProviderTunnelDrain(
 			if p.Tunnels.State() != livetrack.StateDraining {
 				continue
 			}
-
 			if activeRequests != nil && activeRequests.Load() > 0 {
 				continue
 			}
-
-			p.log.DebugContext(
-				ctx,
-				"mitm.provider.tls.closed_reload_drain",
-				"concern",
-				"providers.mitm.wire",
-				"provider",
-				providerID,
-				"host",
-				host,
-			)
+			p.log.DebugContext(ctx, "mitm.provider.tls.closed_reload_drain", "concern", "providers.mitm.wire", "provider", providerID, "host", host)
 			_ = client.Close()
-
 			return
 		}
 	}
 }
 
-func buildProviderFailureInput(
-	params providerForwardParams,
-	requestIndex captureBodyIndex,
-	responseIndex captureBodyIndex,
-	statusCode int,
-) httpCaptureRecordInput {
+func buildProviderFailureInput(params providerForwardParams, requestIndex captureBodyIndex, responseIndex captureBodyIndex, statusCode int) httpCaptureRecordInput {
 	requestBody := params.capturedRequestBody()
-
 	return buildHTTPFailureCaptureInput(
 		params.cfg,
 		params.provider.ID().String(),
@@ -937,21 +485,13 @@ func buildProviderFailureInput(
 	)
 }
 
-func (p *Proxy) recordProviderFailure(
-	req *http.Request,
-	responseHeader http.Header,
-	input httpCaptureRecordInput,
-	failure httpFailureRecord,
-) error {
+func (p *Proxy) recordProviderFailure(req *http.Request, responseHeader http.Header, input httpCaptureRecordInput, failure httpFailureRecord) error {
 	p.recordHTTPFailure(req, responseHeader, input, failure)
 	return fmt.Errorf(failure.errorCode+": %s", failure.errorMessage)
 }
 
 type providerResponseSink interface {
-	writeProviderResponse(
-		resp *http.Response,
-		bodyCap int,
-	) (bytesWritten int64, captured []byte, err error)
+	writeProviderResponse(resp *http.Response, bodyCap int) (bytesWritten int64, captured []byte, err error)
 }
 
 type bufioProviderResponseSink struct {
@@ -959,10 +499,7 @@ type bufioProviderResponseSink struct {
 	bufw  *bufio.Writer
 }
 
-func (s *bufioProviderResponseSink) writeProviderResponse(
-	resp *http.Response,
-	bodyCap int,
-) (int64, []byte, error) {
+func (s *bufioProviderResponseSink) writeProviderResponse(resp *http.Response, bodyCap int) (int64, []byte, error) {
 	return s.proxy.forwardAndCaptureProviderResponse(s.bufw, resp, bodyCap)
 }
 
@@ -979,15 +516,10 @@ type providerRequestCapture struct {
 	bytes   atomic.Int64
 }
 
-func newProviderRequestCapture(
-	body io.ReadCloser,
-	bodyCap int,
-	session *livetrack.Session[TunnelMeta],
-) *providerRequestCapture {
+func newProviderRequestCapture(body io.ReadCloser, bodyCap int, session *livetrack.Session[TunnelMeta]) *providerRequestCapture {
 	if body == nil {
 		body = http.NoBody
 	}
-
 	return &providerRequestCapture{
 		body:    body,
 		capture: &limitedBuffer{limit: bodyCap, buf: bytes.Buffer{}},
@@ -1008,7 +540,6 @@ func (c *providerRequestCapture) Read(p []byte) (int, error) {
 			c.session.Touch()
 		}
 	}
-
 	switch {
 	case err == nil:
 		return n, nil
@@ -1022,19 +553,9 @@ func (c *providerRequestCapture) Read(p []byte) (int, error) {
 func (c *providerRequestCapture) Close() error {
 	if err := c.body.Close(); err != nil {
 		wrapped := fmt.Errorf("close provider request body: %w", err)
-		slog.Warn(
-			"mitm.provider.request_body.close_failed",
-			"concern",
-			"providers.mitm.wire",
-			"component",
-			"mitm",
-			"err",
-			wrapped,
-		)
-
+		slog.Warn("mitm.provider.request_body.close_failed", "concern", "providers.mitm.wire", "component", "mitm", "err", wrapped)
 		return wrapped
 	}
-
 	return nil
 }
 
@@ -1042,10 +563,8 @@ func (c *providerRequestCapture) Bytes() []byte {
 	if c == nil {
 		return nil
 	}
-
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
 	return append([]byte(nil), c.capture.Bytes()...)
 }
 
@@ -1053,7 +572,6 @@ func (c *providerRequestCapture) BytesRead() int64 {
 	if c == nil {
 		return 0
 	}
-
 	return c.bytes.Load()
 }
 
@@ -1061,18 +579,7 @@ func (c *providerRequestCapture) BytesRead() int64 {
 // through the shared upstream and capture path. HTTP/2 callers pass nil for
 // client and reader because h2 request bodies are already decoded by http2
 // ServeConn and RFC 7540 does not use the HTTP/1.1 Upgrade websocket branch.
-func (p *Proxy) handleProviderInterceptedRequest(
-	ctx context.Context,
-	client *tls.Conn,
-	reader *bufio.Reader,
-	writer providerResponseSink,
-	req *http.Request,
-	target string,
-	host string,
-	provider Provider,
-	parent *livetrack.Session[TunnelMeta],
-	streamSession *livetrack.Session[TunnelMeta],
-) error {
+func (p *Proxy) handleProviderInterceptedRequest(ctx context.Context, client *tls.Conn, reader *bufio.Reader, writer providerResponseSink, req *http.Request, target string, host string, provider Provider, parent *livetrack.Session[TunnelMeta], streamSession *livetrack.Session[TunnelMeta]) error {
 	started := clock.Now()
 	cfg := p.config()
 	req.RequestURI = ""
@@ -1083,24 +590,10 @@ func (p *Proxy) handleProviderInterceptedRequest(
 		if client == nil || reader == nil || !ok || bufioSink == nil {
 			return fmt.Errorf("provider websocket requires intercepted TLS connection")
 		}
-
-		return p.handleProviderInterceptedWebsocket(
-			ctx,
-			client,
-			reader,
-			bufioSink.bufw,
-			req,
-			target,
-			host,
-			provider,
-			parent,
-		)
+		return p.handleProviderInterceptedWebsocket(ctx, client, reader, bufioSink.bufw, req, target, host, provider, parent)
 	}
-
 	bodyAccessor := newCachedRequestResponseHookBody(req)
-	transformer, reqTransformer, err := p.matchRequestResponseHook(
-		newRequestResponseHookRequest(provider.ID().String(), host, req, bodyAccessor),
-	)
+	transformer, reqTransformer, err := p.matchRequestResponseHook(newRequestResponseHookRequest(provider.ID().String(), host, req, bodyAccessor))
 	if err != nil {
 		// A hook is an optional enhancement, so a match failure must not abort the
 		// client request; forward it with no transformer. matchRequestResponseHook
@@ -1108,36 +601,27 @@ func (p *Proxy) handleProviderInterceptedRequest(
 		transformer = nil
 		reqTransformer = nil
 	}
-
 	// Apply any request-body rewrite before the capture wraps req.Body, so both the
 	// upstream send and the recorded capture reflect the forwarded (possibly trimmed)
 	// body. Fail-open: a body read error or transform error leaves the request as-is.
 	if reqTransformer != nil {
 		if originalBody, bodyErr := bodyAccessor.Bytes(); bodyErr == nil {
-			if newBody, changed := p.transformRequestBody(
-				ctx,
-				reqTransformer,
-				originalBody,
-			); changed {
+			if newBody, changed := p.transformRequestBody(ctx, reqTransformer, originalBody); changed {
 				reseatRequestBody(req, newBody)
 			}
 		}
 	}
-
 	requestCapture := newProviderRequestCapture(req.Body, p.captureBodyCap(cfg), streamSession)
 	req.Body = requestCapture
 
-	concern := resolveCaptureConcern(
-		cfg.CaptureRules,
-		captureConcernInput{
-			Provider:            provider.ID().String(),
-			Host:                host,
-			Method:              req.Method,
-			Path:                req.URL.Path,
-			RequestContentType:  req.Header.Get("Content-Type"),
-			ResponseContentType: "",
-		},
-	)
+	concern := resolveCaptureConcern(cfg.CaptureRules, captureConcernInput{
+		Provider:            provider.ID().String(),
+		Host:                host,
+		Method:              req.Method,
+		Path:                req.URL.Path,
+		RequestContentType:  req.Header.Get("Content-Type"),
+		ResponseContentType: "",
+	})
 	params := providerForwardParams{
 		writer:         writer,
 		req:            req,
@@ -1184,51 +668,26 @@ func (p providerForwardParams) requestBytes() int64 {
 // stream the client-visible response, and append capture metadata. Split out of
 // handleProviderInterceptedRequest to keep both functions under the
 // funlen ceiling.
-func (p *Proxy) forwardProviderRequestToUpstream(
-	ctx context.Context,
-	params providerForwardParams,
-) error {
+func (p *Proxy) forwardProviderRequestToUpstream(ctx context.Context, params providerForwardParams) error {
 	resp, err := p.roundTripProviderRequest(params.req, params.target, params.host)
 	if err != nil {
-		return p.recordProviderFailure(
-			params.req,
-			http.Header{},
-			buildProviderFailureInput(
-				params,
-				emptyCaptureBodyIndex(),
-				emptyCaptureBodyIndex(),
-				http.StatusBadGateway,
-			),
-			httpFailureRecord{
-				includePayload:      true,
-				includeUpstreamSend: true,
-				errorCode:           "upstream_round_trip_failed",
-				errorMessage:        err.Error(),
-			},
-		)
+		return p.recordProviderFailure(params.req, http.Header{}, buildProviderFailureInput(params, emptyCaptureBodyIndex(), emptyCaptureBodyIndex(), http.StatusBadGateway), httpFailureRecord{
+			includePayload:      true,
+			includeUpstreamSend: true,
+			errorCode:           "upstream_round_trip_failed",
+			errorMessage:        err.Error(),
+		})
 	}
-
 	defer func() { _ = resp.Body.Close() }()
 	streamResp, err := p.applyResponseHook(ctx, params.transformer, resp)
 	if err != nil {
-		return p.recordProviderFailure(
-			params.req,
-			resp.Header,
-			buildProviderFailureInput(
-				params,
-				emptyCaptureBodyIndex(),
-				emptyCaptureBodyIndex(),
-				http.StatusBadGateway,
-			),
-			httpFailureRecord{
-				includePayload:      true,
-				includeUpstreamSend: true,
-				errorCode:           "response_hook_transform_failed",
-				errorMessage:        err.Error(),
-			},
-		)
+		return p.recordProviderFailure(params.req, resp.Header, buildProviderFailureInput(params, emptyCaptureBodyIndex(), emptyCaptureBodyIndex(), http.StatusBadGateway), httpFailureRecord{
+			includePayload:      true,
+			includeUpstreamSend: true,
+			errorCode:           "response_hook_transform_failed",
+			errorMessage:        err.Error(),
+		})
 	}
-
 	// applyResponseHook returns a new response only when a transformer ran; that
 	// response's body is a separate reader that also needs closing. When no
 	// transform ran it returns resp unchanged, so the defer above already closes
@@ -1237,55 +696,31 @@ func (p *Proxy) forwardProviderRequestToUpstream(
 		defer func() { _ = streamResp.Body.Close() }()
 	}
 
-	responseBytes, responseBody, err := params.writer.writeProviderResponse(
-		streamResp,
-		p.captureBodyCap(params.cfg),
-	)
+	responseBytes, responseBody, err := params.writer.writeProviderResponse(streamResp, p.captureBodyCap(params.cfg))
 	if err != nil {
 		return err
 	}
-
-	p.log.InfoContext(
-		ctx,
-		"mitm.provider.capture.completed",
-		"provider",
-		params.provider.ID().String(),
-		"host",
-		params.host,
-		"concern",
-		params.concern,
-		"path",
-		params.req.URL.Path,
-		"status",
-		streamResp.StatusCode,
-		"duration_ms",
-		clock.Since(params.started).Milliseconds(),
-		"request_bytes",
-		params.requestBytes(),
-		"response_bytes",
-		responseBytes,
+	p.log.InfoContext(ctx, "mitm.provider.capture.completed",
+		"provider", params.provider.ID().String(),
+		"host", params.host,
+		"concern", params.concern,
+		"path", params.req.URL.Path,
+		"status", streamResp.StatusCode,
+		"duration_ms", clock.Since(params.started).Milliseconds(),
+		"request_bytes", params.requestBytes(),
+		"response_bytes", responseBytes,
 	)
-	p.recordHTTPCapture(
-		params.req,
-		streamResp.Header,
-		providerHTTPCaptureRecordInput(params, streamResp.StatusCode, responseBytes),
-	)
+	p.recordHTTPCapture(params.req, streamResp.Header, providerHTTPCaptureRecordInput(params, streamResp.StatusCode, responseBytes))
 	p.recordProviderCaptureStore(params, streamResp.Header, streamResp.StatusCode, responseBody)
 	p.diagnoseProviderExchange(ctx, params, "")
 	p.recordProviderDriftCapture(ctx, params)
-
 	return nil
 }
 
-func (p *Proxy) roundTripProviderRequest(
-	req *http.Request,
-	target string,
-	host string,
-) (*http.Response, error) {
+func (p *Proxy) roundTripProviderRequest(req *http.Request, target string, host string) (*http.Response, error) {
 	if req.ProtoMajor == 3 {
 		return p.providerHTTP3UpstreamRoundTrip(req, target, host)
 	}
-
 	return p.providerUpstreamRoundTrip(req, target, host)
 }
 
@@ -1294,42 +729,28 @@ func (p *Proxy) roundTripProviderRequest(
 // response body is the decoded buffer captured by
 // [Proxy.forwardAndCaptureProviderResponse] up to the store cap. Identity and
 // concern are derived from the same extraction the wire-leg emitter uses.
-func (p *Proxy) recordProviderCaptureStore(
-	params providerForwardParams,
-	responseHeader http.Header,
-	status int,
-	responseBody []byte,
-) {
+func (p *Proxy) recordProviderCaptureStore(params providerForwardParams, responseHeader http.Header, status int, responseBody []byte) {
 	requestBody := params.capturedRequestBody()
 	decodedBody, decoded := decodeForCapture(responseBody, responseHeader.Get("Content-Encoding"))
 	if !decoded {
 		decodedBody = responseBody
 	}
-
-	decodedRequest, requestDecoded := decodeForCapture(
-		requestBody,
-		params.req.Header.Get("Content-Encoding"),
-	)
+	decodedRequest, requestDecoded := decodeForCapture(requestBody, params.req.Header.Get("Content-Encoding"))
 	if !requestDecoded {
 		decodedRequest = requestBody
 	}
-
-	p.recordCaptureStore(
-		params.req,
-		responseHeader,
-		captureStoreInput{
-			provider:        params.provider.ID().String(),
-			host:            params.host,
-			method:          params.req.Method,
-			path:            params.req.URL.Path,
-			status:          status,
-			requestBody:     decodedRequest,
-			responseBody:    decodedBody,
-			duration:        clock.Since(params.started),
-			captureRules:    params.cfg.CaptureRules,
-			hasCaptureRules: true,
-		},
-	)
+	p.recordCaptureStore(params.req, responseHeader, captureStoreInput{
+		provider:        params.provider.ID().String(),
+		host:            params.host,
+		method:          params.req.Method,
+		path:            params.req.URL.Path,
+		status:          status,
+		requestBody:     decodedRequest,
+		responseBody:    decodedBody,
+		duration:        clock.Since(params.started),
+		captureRules:    params.cfg.CaptureRules,
+		hasCaptureRules: true,
+	})
 }
 
 // recordProviderDriftCapture feeds the provider TLS-intercept path's request
@@ -1345,18 +766,14 @@ func (p *Proxy) recordProviderDriftCapture(ctx context.Context, params providerF
 	if !decoded {
 		decodedBody = requestBody
 	}
-
-	p.recordDriftCapture(
-		params.cfg,
-		driftCaptureInput{
-			provider:    provider,
-			method:      params.req.Method,
-			path:        params.req.URL.Path,
-			upstreamURL: "https://" + params.host + params.req.URL.RequestURI(),
-			header:      params.req.Header,
-			body:        decodedBody,
-		},
-	)
+	p.recordDriftCapture(params.cfg, driftCaptureInput{
+		provider:    provider,
+		method:      params.req.Method,
+		path:        params.req.URL.Path,
+		upstreamURL: "https://" + params.host + params.req.URL.RequestURI(),
+		header:      params.req.Header,
+		body:        decodedBody,
+	})
 	queueBaselineRefresh(ctx, p.store, params.cfg, provider, p.log)
 }
 
@@ -1367,38 +784,25 @@ func (p *Proxy) recordProviderDriftCapture(ctx context.Context, params providerF
 // that do not implement the interface are skipped. The hook is given
 // the decoded request body so a provider can inspect a gRPC-web frame
 // without the generic layer knowing the wire shape.
-func (p *Proxy) diagnoseProviderExchange(
-	ctx context.Context,
-	params providerForwardParams,
-	hookName string,
-) {
+func (p *Proxy) diagnoseProviderExchange(ctx context.Context, params providerForwardParams, hookName string) {
 	diagnostician, ok := params.provider.(ExchangeDiagnostician)
 	if !ok {
 		return
 	}
-
 	requestBody := params.capturedRequestBody()
-	decodedRequestBody, decoded := decodeForCapture(
-		requestBody,
-		params.req.Header.Get("Content-Encoding"),
-	)
+	decodedRequestBody, decoded := decodeForCapture(requestBody, params.req.Header.Get("Content-Encoding"))
 	if !decoded {
 		decodedRequestBody = requestBody
 	}
-
-	diagnostician.DiagnoseExchange(
-		ctx,
-		p.log,
-		ExchangeDiagnostic{
-			RequestHeader:      params.req.Header,
-			DecodedRequestBody: decodedRequestBody,
-			Method:             params.req.Method,
-			Path:               params.req.URL.Path,
-			Host:               params.host,
-			Concern:            params.concern,
-			HookName:           hookName,
-		},
-	)
+	diagnostician.DiagnoseExchange(ctx, p.log, ExchangeDiagnostic{
+		RequestHeader:      params.req.Header,
+		DecodedRequestBody: decodedRequestBody,
+		Method:             params.req.Method,
+		Path:               params.req.URL.Path,
+		Host:               params.host,
+		Concern:            params.concern,
+		HookName:           hookName,
+	})
 }
 
 // providerHTTPCaptureRecordInput packages the provider request and the
@@ -1406,13 +810,8 @@ func (p *Proxy) diagnoseProviderExchange(
 // recordHTTPCapture. Body persistence now lives in the SQLite capture store,
 // so the wire-leg indexes carry the same filtered inline summaries the
 // plain-HTTP path emits rather than raw-file references.
-func providerHTTPCaptureRecordInput(
-	params providerForwardParams,
-	statusCode int,
-	responseBytes int64,
-) httpCaptureRecordInput {
+func providerHTTPCaptureRecordInput(params providerForwardParams, statusCode int, responseBytes int64) httpCaptureRecordInput {
 	requestBody := params.capturedRequestBody()
-
 	return httpCaptureRecordInput{
 		config:         params.cfg,
 		provider:       params.provider.ID().String(),
@@ -1434,11 +833,7 @@ func providerHTTPCaptureRecordInput(
 // funlen threshold; the transport is constructed per-request and its
 // idle connections are closed on return so this helper owns the
 // transport's lifetime end-to-end.
-func (p *Proxy) providerUpstreamRoundTrip(
-	req *http.Request,
-	target string,
-	host string,
-) (*http.Response, error) {
+func (p *Proxy) providerUpstreamRoundTrip(req *http.Request, target string, host string) (*http.Response, error) {
 	// Match the intercepted client's protocol upstream. When the client
 	// negotiated HTTP/2, forward over HTTP/2 too: gRPC streaming calls (for
 	// example agent.v1.AgentService/Run) require HTTP/2 end to end, and an
@@ -1450,7 +845,6 @@ func (p *Proxy) providerUpstreamRoundTrip(
 		forceHTTP2 = true
 		tlsConfig = upstreamTLSConfigWithHTTP2ALPN(p.tlsClientConfig)
 	}
-
 	transport := &http.Transport{
 		Proxy:               nil,
 		ForceAttemptHTTP2:   forceHTTP2,
@@ -1462,23 +856,15 @@ func (p *Proxy) providerUpstreamRoundTrip(
 	defer transport.CloseIdleConnections()
 	resp, err := transport.RoundTrip(providerUpstreamRequest(req, target, host))
 	if err != nil {
-		p.log.Warn(
-			"mitm.provider.upstream_round_trip_failed",
-			"component",
-			"mitm",
-			"concern",
-			"providers.mitm.wire",
-			"host",
-			host,
-			"path",
-			req.URL.Path,
-			"err",
-			err,
+		p.log.Warn("mitm.provider.upstream_round_trip_failed",
+			"component", "mitm",
+			"concern", "providers.mitm.wire",
+			"host", host,
+			"path", req.URL.Path,
+			"err", err,
 		)
-
 		return nil, fmt.Errorf("provider upstream round trip: %w", err)
 	}
-
 	return resp, nil
 }
 
@@ -1492,9 +878,7 @@ func upstreamTLSConfigWithHTTP2ALPN(base *tls.Config) *tls.Config {
 	if cfg == nil {
 		cfg = &tls.Config{MinVersion: tls.VersionTLS12}
 	}
-
 	cfg.NextProtos = []string{http2.NextProtoTLS, "http/1.1"}
-
 	return cfg
 }
 
@@ -1517,14 +901,12 @@ func providerUpstreamRequest(req *http.Request, target string, host string) *htt
 		upstreamReq.Body = req.Body
 		upstreamReq.ContentLength = req.ContentLength
 	}
-
 	upstreamReq.GetBody = nil
 	upstreamReq.Host = host
 	upstreamReq.URL.Scheme = "https"
 	upstreamReq.URL.Host = target
 	upstreamReq.RequestURI = ""
 	upstreamReq.Header = req.Header.Clone()
-
 	return upstreamReq
 }
 
@@ -1532,11 +914,9 @@ func closeProviderNoBodyRequest(body io.ReadCloser) {
 	if body == nil {
 		return
 	}
-
 	if body == http.NoBody {
 		return
 	}
-
 	_ = body.Close()
 }
 
@@ -1551,14 +931,11 @@ func providerRequestShouldForwardNoBody(req *http.Request) bool {
 	if req.ContentLength != 0 {
 		return false
 	}
-
 	if req.Method == http.MethodGet {
 		return true
 	}
-
 	if req.Method == http.MethodHead {
 		return true
 	}
-
 	return false
 }

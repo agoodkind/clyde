@@ -89,44 +89,17 @@ func TestExportRecoversLegacyInjectedClaudeTranscriptKinds(t *testing.T) {
 	binaryPath := buildClydeCLI(t)
 	home := t.TempDir()
 	fixture := recoveryProbeTranscript(t, recoveryProbeSession, false)
-	transcriptPath := filepath.Join(
-		home,
-		".claude",
-		"projects",
-		strings.ReplaceAll(injectedProbeWorkspace, "/", "-"),
-		recoveryProbeSession+".jsonl",
-	)
+	transcriptPath := filepath.Join(home, ".claude", "projects", strings.ReplaceAll(injectedProbeWorkspace, "/", "-"), recoveryProbeSession+".jsonl")
 	installLocalProofTranscript(t, transcriptPath, strings.Join(fixture.lines, "\n")+"\n")
 	before := injectedProbeDigest(t, transcriptPath)
 	environment := environmentWith(localProofProviderEnvironment(t, home)...)
 
 	settingsPath := writeSandboxSemanticSettings(t, "")
 	sandboxDaemon := startLocalProofDaemon(t, binaryPath, home, "--semantic-settings", settingsPath)
-	waitForInjectedProbeMCP(
-		t,
-		binaryPath,
-		sandboxDaemon.environment,
-		injectedProbeClaude,
-		recoveryProbeSession,
-	)
+	waitForInjectedProbeMCP(t, binaryPath, sandboxDaemon.environment, injectedProbeClaude, recoveryProbeSession)
 
-	chat := injectedProbeExport{
-		name:      "recovery chat",
-		provider:  injectedProbeClaude,
-		session:   recoveryProbeSession,
-		only:      injectedProbeChatOnly,
-		maxTokens: "",
-		output:    "",
-	}
-	complete := injectedProbeExport{
-		name:      "recovery all",
-		provider:  injectedProbeClaude,
-		session:   recoveryProbeSession,
-		only:      injectedProbeAll,
-		maxTokens: "",
-		output:    "",
-	}
-
+	chat := injectedProbeExport{name: "recovery chat", provider: injectedProbeClaude, session: recoveryProbeSession, only: injectedProbeChatOnly, maxTokens: "", output: ""}
+	complete := injectedProbeExport{name: "recovery all", provider: injectedProbeClaude, session: recoveryProbeSession, only: injectedProbeAll, maxTokens: "", output: ""}
 	chatBodies := map[string]string{
 		"cli": injectedProbeCLI(t, binaryPath, environment, chat),
 		"mcp": injectedProbeMCPBody(t, binaryPath, sandboxDaemon.environment, chat),
@@ -134,23 +107,16 @@ func TestExportRecoversLegacyInjectedClaudeTranscriptKinds(t *testing.T) {
 	for surface, body := range chatBodies {
 		assertRecoveryProbeChat(t, surface, body)
 	}
-
 	completeBodies := map[string]string{
 		"cli": injectedProbeCLI(t, binaryPath, environment, complete),
 		"mcp": injectedProbeMCPBody(t, binaryPath, sandboxDaemon.environment, complete),
 	}
 	encodedWrapper := strings.Trim(injectedProbeJSON(t, fixture.wrapper), `"`)
-
 	for surface, body := range completeBodies {
 		if !strings.Contains(body, encodedWrapper) {
-			t.Errorf(
-				"%s export with every content kind does not contain the original wrapper:\n%s",
-				surface,
-				body,
-			)
+			t.Errorf("%s export with every content kind does not contain the original wrapper:\n%s", surface, body)
 		}
 	}
-
 	if after := injectedProbeDigest(t, transcriptPath); after != before {
 		t.Errorf("export changed the source transcript: %s, %s", before, after)
 	}
@@ -164,13 +130,7 @@ func TestExportRejectsLegacyInjectedClaudeTranscriptWithCorruptedProvenance(t *t
 	binaryPath := buildClydeCLI(t)
 	home := t.TempDir()
 	fixture := recoveryProbeTranscript(t, recoveryProbeCorruptSession, true)
-	assertRecoveryProbeFilteredExportFails(
-		t,
-		binaryPath,
-		home,
-		recoveryProbeCorruptSession,
-		fixture.lines,
-	)
+	assertRecoveryProbeFilteredExportFails(t, binaryPath, home, recoveryProbeCorruptSession, fixture.lines)
 	if !strings.Contains(fixture.wrapper, recoveryProbeSystemHook) {
 		t.Error("corrupted fixture does not contain the original system hook in the stored wrapper")
 	}
@@ -185,18 +145,12 @@ func TestExportRejectsLegacyClaudeTranscriptAfterReplayStops(t *testing.T) {
 	binaryPath := buildClydeCLI(t)
 	home := t.TempDir()
 	fixture := recoveryProbeTranscript(t, recoveryProbeStoppedSession, false)
-	postRequest := slices.IndexFunc(
-		fixture.lines,
-		func(line string) bool {
-			return strings.Contains(line, `"id":"request-second-post"`)
-		},
-	)
+	postRequest := slices.IndexFunc(fixture.lines, func(line string) bool {
+		return strings.Contains(line, `"id":"request-second-post"`)
+	})
 	if postRequest < 1 {
-		t.Fatal(
-			"The fixture does not contain the request that follows compaction for the second summary.",
-		)
+		t.Fatal("The fixture does not contain the request that follows compaction for the second summary.")
 	}
-
 	stop := `{"type":"api-request","sessionId":"` + recoveryProbeStoppedSession + `","id":"request-without-keep","tail":[]}`
 	lines := slices.Insert(fixture.lines, postRequest-1, stop)
 	assertRecoveryProbeFilteredExportFails(t, binaryPath, home, recoveryProbeStoppedSession, lines)
@@ -211,29 +165,14 @@ func TestExportRejectsLegacyClaudeTranscriptWithUnresolvedSourceRequest(t *testi
 	binaryPath := buildClydeCLI(t)
 	home := t.TempDir()
 	fixture := recoveryProbeTranscript(t, recoveryProbeUnresolvedSession, false)
-	sourceRequest := slices.IndexFunc(
-		fixture.lines,
-		func(line string) bool {
-			return strings.Contains(line, `"id":"request-second-b"`)
-		},
-	)
+	sourceRequest := slices.IndexFunc(fixture.lines, func(line string) bool {
+		return strings.Contains(line, `"id":"request-second-b"`)
+	})
 	if sourceRequest < 0 {
 		t.Fatal("The fixture does not contain the source request for the second summary.")
 	}
-
-	fixture.lines[sourceRequest] = strings.Replace(
-		fixture.lines[sourceRequest],
-		`"tail":["`,
-		`"tail":["missing-reference","`,
-		1,
-	)
-	assertRecoveryProbeFilteredExportFails(
-		t,
-		binaryPath,
-		home,
-		recoveryProbeUnresolvedSession,
-		fixture.lines,
-	)
+	fixture.lines[sourceRequest] = strings.Replace(fixture.lines[sourceRequest], `"tail":["`, `"tail":["missing-reference","`, 1)
+	assertRecoveryProbeFilteredExportFails(t, binaryPath, home, recoveryProbeUnresolvedSession, fixture.lines)
 }
 
 // TestExportPreservesCloseTagQuotationInLegacyClaudeSummaryTrailer appends a
@@ -245,53 +184,25 @@ func TestExportPreservesCloseTagQuotationInLegacyClaudeSummaryTrailer(t *testing
 	home := t.TempDir()
 	fixture := recoveryProbeTranscript(t, recoveryProbeCloseQuoteSession, false)
 	summaryID := `"uuid":"` + injectedProbeUUID(recoveryProbeSummaryIndex) + `"`
-	summaryLine := slices.IndexFunc(
-		fixture.lines,
-		func(line string) bool { return strings.Contains(line, summaryID) },
-	)
+	summaryLine := slices.IndexFunc(fixture.lines, func(line string) bool { return strings.Contains(line, summaryID) })
 	if summaryLine < 0 {
 		t.Fatal("The fixture does not contain the second compact summary.")
 	}
-
 	trailer := recoveryProbeTrailer + `"`
 	if !strings.Contains(fixture.lines[summaryLine], trailer) {
 		t.Fatal("The second compact summary does not end with the fixture trailer.")
 	}
-
-	quoted := strings.Trim(
-		injectedProbeJSON(t, recoveryProbeTrailer+" "+recoveryProbeCloseQuote),
-		`"`,
-	) + `"`
+	quoted := strings.Trim(injectedProbeJSON(t, recoveryProbeTrailer+" "+recoveryProbeCloseQuote), `"`) + `"`
 	fixture.lines[summaryLine] = strings.Replace(fixture.lines[summaryLine], trailer, quoted, 1)
-	transcriptPath := filepath.Join(
-		home,
-		".claude",
-		"projects",
-		strings.ReplaceAll(injectedProbeWorkspace, "/", "-"),
-		recoveryProbeCloseQuoteSession+".jsonl",
-	)
+	transcriptPath := filepath.Join(home, ".claude", "projects", strings.ReplaceAll(injectedProbeWorkspace, "/", "-"), recoveryProbeCloseQuoteSession+".jsonl")
 	installLocalProofTranscript(t, transcriptPath, strings.Join(fixture.lines, "\n")+"\n")
 	environment := environmentWith(localProofProviderEnvironment(t, home)...)
 
 	settingsPath := writeSandboxSemanticSettings(t, "")
 	sandboxDaemon := startLocalProofDaemon(t, binaryPath, home, "--semantic-settings", settingsPath)
-	waitForInjectedProbeMCP(
-		t,
-		binaryPath,
-		sandboxDaemon.environment,
-		injectedProbeClaude,
-		recoveryProbeCloseQuoteSession,
-	)
+	waitForInjectedProbeMCP(t, binaryPath, sandboxDaemon.environment, injectedProbeClaude, recoveryProbeCloseQuoteSession)
 
-	chat := injectedProbeExport{
-		name:      "close tag quotation chat",
-		provider:  injectedProbeClaude,
-		session:   recoveryProbeCloseQuoteSession,
-		only:      injectedProbeChatOnly,
-		maxTokens: "",
-		output:    "",
-	}
-
+	chat := injectedProbeExport{name: "close tag quotation chat", provider: injectedProbeClaude, session: recoveryProbeCloseQuoteSession, only: injectedProbeChatOnly, maxTokens: "", output: ""}
 	bodies := map[string]string{
 		"cli": injectedProbeCLI(t, binaryPath, environment, chat),
 		"mcp": injectedProbeMCPBody(t, binaryPath, sandboxDaemon.environment, chat),
@@ -302,21 +213,9 @@ func TestExportPreservesCloseTagQuotationInLegacyClaudeSummaryTrailer(t *testing
 	}
 }
 
-func assertRecoveryProbeFilteredExportFails(
-	t *testing.T,
-	binaryPath string,
-	home string,
-	session string,
-	lines []string,
-) {
+func assertRecoveryProbeFilteredExportFails(t *testing.T, binaryPath string, home string, session string, lines []string) {
 	t.Helper()
-	transcriptPath := filepath.Join(
-		home,
-		".claude",
-		"projects",
-		strings.ReplaceAll(injectedProbeWorkspace, "/", "-"),
-		session+".jsonl",
-	)
+	transcriptPath := filepath.Join(home, ".claude", "projects", strings.ReplaceAll(injectedProbeWorkspace, "/", "-"), session+".jsonl")
 	installLocalProofTranscript(t, transcriptPath, strings.Join(lines, "\n")+"\n")
 	environment := environmentWith(localProofProviderEnvironment(t, home)...)
 
@@ -327,19 +226,11 @@ func assertRecoveryProbeFilteredExportFails(
 	conversationID := injectedProbeClaude + ":" + session
 	summaryUUID := injectedProbeUUID(recoveryProbeSummaryIndex)
 	cliOutput := filepath.Join(t.TempDir(), recoveryProbeExportFile)
-	filtered := injectedProbeExport{
-		name:      "corrupted chat",
-		provider:  injectedProbeClaude,
-		session:   session,
-		only:      injectedProbeChatOnly,
-		maxTokens: "",
-		output:    cliOutput,
-	}
+	filtered := injectedProbeExport{name: "corrupted chat", provider: injectedProbeClaude, session: session, only: injectedProbeChatOnly, maxTokens: "", output: cliOutput}
 	stdout, stderr, err := runInjectedProbeCLI(t, binaryPath, environment, filtered)
 	if err == nil {
 		t.Errorf("cli chat export with corrupted provenance succeeded:\n%s", stdout)
 	}
-
 	assertLegacyProbeError(t, "cli", stderr, conversationID, summaryUUID)
 	assertLegacyProbeNoFile(t, "cli", cliOutput)
 
@@ -349,54 +240,28 @@ func assertRecoveryProbeFilteredExportFails(
 	if err != nil {
 		t.Fatalf("clyde_export_transcript call failed: %v", err)
 	}
-
 	if response.Result == nil || !response.Result.IsError {
-		t.Errorf(
-			"mcp chat export with corrupted provenance did not return a tool error: %+v %+v",
-			response.Error,
-			response.Result,
-		)
+		t.Errorf("mcp chat export with corrupted provenance did not return a tool error: %+v %+v", response.Error, response.Result)
 	} else {
 		assertLegacyProbeError(t, "mcp", response.Result.text(), conversationID, summaryUUID)
 	}
-
 	assertLegacyProbeNoFile(t, "mcp", mcpOutput)
 }
 
 func assertRecoveryProbeChat(t *testing.T, surface string, body string) {
 	t.Helper()
-
-	for _, kept := range []string{
-		recoveryProbeProseTwo,
-		recoveryProbeAssistantChat,
-		recoveryProbeAnswerOne,
-		recoveryProbeAnswerTwo,
-		recoveryProbeTrailer,
-		injectedProbeLaterAnswer,
-		injectedProbeFinalAnswer,
-	} {
+	for _, kept := range []string{recoveryProbeProseTwo, recoveryProbeAssistantChat, recoveryProbeAnswerOne, recoveryProbeAnswerTwo, recoveryProbeTrailer, injectedProbeLaterAnswer, injectedProbeFinalAnswer} {
 		if !strings.Contains(body, kept) {
 			t.Errorf("%s chat export does not contain %q:\n%s", surface, kept, body)
 		}
 	}
-
 	storedQuotation := strings.ReplaceAll(recoveryProbeQuotation, "</summary>", `<\/summary>`)
 	if !strings.Contains(body, strings.Trim(injectedProbeJSON(t, storedQuotation), `"`)) {
-		t.Errorf(
-			"%s chat export does not contain the retained quotation byte for byte:\n%s",
-			surface,
-			body,
-		)
+		t.Errorf("%s chat export does not contain the retained quotation byte for byte:\n%s", surface, body)
 	}
-
 	if !strings.Contains(body, injectedProbeQuotation) {
-		t.Errorf(
-			"%s chat export does not contain the later user quotation byte for byte:\n%s",
-			surface,
-			body,
-		)
+		t.Errorf("%s chat export does not contain the later user quotation byte for byte:\n%s", surface, body)
 	}
-
 	for _, omitted := range recoveryProbeNonChat {
 		if strings.Contains(body, omitted) {
 			t.Errorf("%s chat export contains non-chat text %q:\n%s", surface, omitted, body)
@@ -411,49 +276,21 @@ func assertRecoveryProbeChat(t *testing.T, surface string, body string) {
 // repeats the first inside a tool result with a nested tool_reference block.
 func recoveryProbeTranscript(t *testing.T, session string, corrupt bool) recoveryProbeFixture {
 	t.Helper()
-	nestedResult := `[` + recoveryTextPart(
-		t,
-		recoveryProbeNestedOutput,
-	) + `,{"tool_name":"Bash","type":"tool_reference"}]`
+	nestedResult := `[` + recoveryTextPart(t, recoveryProbeNestedOutput) + `,{"tool_name":"Bash","type":"tool_reference"}]`
 	firstMessages := []recoveryMessage{
 		recoveryStringMessage(t, "user", recoveryProbeFirstQuestion),
-		recoveryPartsMessage(
-			"assistant",
-			recoveryToolUsePart(t, "toolu_recovery_1", recoveryProbeToolCallOne),
-		),
+		recoveryPartsMessage("assistant", recoveryToolUsePart(t, "toolu_recovery_1", recoveryProbeToolCallOne)),
 		recoveryPartsMessage("user", recoveryToolResultPart("toolu_recovery_1", nestedResult)),
-		recoveryPartsMessage(
-			"assistant",
-			recoveryThinkingPart(t, recoveryProbeThinking),
-			recoveryTextPart(t, recoveryProbeAssistantChat),
-			recoveryToolUsePart(t, "toolu_recovery_2", recoveryProbeToolCallTwo),
-			recoveryToolUsePart(t, "toolu_recovery_3", recoveryProbeToolCallThree),
-		),
-		recoveryPartsMessage(
-			"user",
-			recoveryToolResultPart(
-				"toolu_recovery_2",
-				recoveryJSONString(t, recoveryProbeToolOutputTwo),
-			),
-			recoveryToolResultPart(
-				"toolu_recovery_3",
-				recoveryJSONString(t, recoveryProbeToolOutput3),
-			),
-		),
+		recoveryPartsMessage("assistant", recoveryThinkingPart(t, recoveryProbeThinking), recoveryTextPart(t, recoveryProbeAssistantChat), recoveryToolUsePart(t, "toolu_recovery_2", recoveryProbeToolCallTwo), recoveryToolUsePart(t, "toolu_recovery_3", recoveryProbeToolCallThree)),
+		recoveryPartsMessage("user", recoveryToolResultPart("toolu_recovery_2", recoveryJSONString(t, recoveryProbeToolOutputTwo)), recoveryToolResultPart("toolu_recovery_3", recoveryJSONString(t, recoveryProbeToolOutput3))),
 		recoveryPartsMessage("system", recoveryTextPart(t, recoveryProbeSystemHook)),
 		recoveryStringMessage(t, "user", recoveryProbeQuotation),
 		recoveryPartsMessage("assistant", recoveryTextPart(t, recoveryProbeAnswerOne)),
 		recoveryPartsMessage("user", recoveryTextPart(t, recoveryProbeLastBefore)),
 	}
 	if corrupt {
-		firstMessages[5].stored = strings.Replace(
-			firstMessages[5].stored,
-			recoveryProbeSystemHook,
-			recoveryProbeCorruptedHook,
-			1,
-		)
+		firstMessages[5].stored = strings.Replace(firstMessages[5].stored, recoveryProbeSystemHook, recoveryProbeCorruptedHook, 1)
 	}
-
 	toolResultOne := recoveryProbeNestedOutput + "\n[tool_reference]"
 	firstBody := "### Assistant\n\n" + `{"command":"` + recoveryProbeToolCallOne + `"}` +
 		"\n\n### User\n\n" + toolResultOne +
@@ -465,23 +302,9 @@ func recoveryProbeTranscript(t *testing.T, session string, corrupt bool) recover
 	firstSummary := recoveryProbeSummary(t, recoveryProbeProseOne, firstBody)
 	cut := strings.Index(firstSummary, toolResultOne) + recoveryProbeCutBytes
 	secondMessages := []recoveryMessage{
-		recoveryPartsMessage(
-			"user",
-			recoveryTextPart(t, recoveryProbeReminder),
-			recoveryTextPart(t, firstSummary),
-		),
-		recoveryPartsMessage(
-			"assistant",
-			recoveryThinkingPart(t, recoveryProbeThinkingTwo),
-			recoveryToolUsePart(t, "toolu_recovery_4", recoveryProbeToolCallFour),
-		),
-		recoveryPartsMessage(
-			"user",
-			recoveryToolResultPart(
-				"toolu_recovery_4",
-				recoveryJSONString(t, recoveryProbeToolOutput4),
-			),
-		),
+		recoveryPartsMessage("user", recoveryTextPart(t, recoveryProbeReminder), recoveryTextPart(t, firstSummary)),
+		recoveryPartsMessage("assistant", recoveryThinkingPart(t, recoveryProbeThinkingTwo), recoveryToolUsePart(t, "toolu_recovery_4", recoveryProbeToolCallFour)),
+		recoveryPartsMessage("user", recoveryToolResultPart("toolu_recovery_4", recoveryJSONString(t, recoveryProbeToolOutput4))),
 		recoveryPartsMessage("assistant", recoveryTextPart(t, recoveryProbeAnswerTwo)),
 		recoveryPartsMessage("user", recoveryTextPart(t, recoveryProbeLastSecond)),
 	}
@@ -502,14 +325,8 @@ func recoveryProbeTranscript(t *testing.T, session string, corrupt bool) recover
 	builder.summary(t, 19, 18, secondSummary)
 	builder.after(t)
 	wrapperStart := strings.Index(secondSummary, reorienttag.PreCompactionTranscriptOpen+"\n")
-	wrapperEnd := strings.LastIndex(secondSummary, reorienttag.PreCompactionTranscriptClose) + len(
-		reorienttag.PreCompactionTranscriptClose,
-	)
-
-	return recoveryProbeFixture{
-		lines:   builder.lines,
-		wrapper: secondSummary[wrapperStart:wrapperEnd],
-	}
+	wrapperEnd := strings.LastIndex(secondSummary, reorienttag.PreCompactionTranscriptClose) + len(reorienttag.PreCompactionTranscriptClose)
+	return recoveryProbeFixture{lines: builder.lines, wrapper: secondSummary[wrapperStart:wrapperEnd]}
 }
 
 // recoveryProbeSummary inserts the unframed body into a model summary with the
@@ -517,30 +334,18 @@ func recoveryProbeTranscript(t *testing.T, session string, corrupt bool) recover
 // to two, as Claude Code does when storing compact summaries.
 func recoveryProbeSummary(t *testing.T, prose string, body string) string {
 	t.Helper()
-	delta := `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":` + recoveryJSONString(
-		t,
-		"<summary>\n"+prose+"\n</summary>",
-	) + `}}`
+	delta := `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":` + recoveryJSONString(t, "<summary>\n"+prose+"\n</summary>") + `}}`
 	response := "event: content_block_delta\ndata: " + delta + "\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
-	injected, err := anthropic.InjectIntoSummary(
-		[]byte(response),
-		reorienttag.WrapInjection(body, ""),
-	)
+	injected, err := anthropic.InjectIntoSummary([]byte(response), reorienttag.WrapInjection(body, ""))
 	if err != nil {
 		t.Fatalf("inject the legacy transcript into the summary: %v", err)
 	}
-
 	text := anthropic.ResponseText(injected)
-	inner := text[strings.Index(
-		text,
-		"<summary>",
-	)+len("<summary>") : strings.LastIndex(text, "</summary>")]
-
+	inner := text[strings.Index(text, "<summary>")+len("<summary>") : strings.LastIndex(text, "</summary>")]
 	stored := injectedProbeSummaryPreface + strings.TrimSpace(inner) + "\n\n" + recoveryProbeTrailer
 	for strings.Contains(stored, "\n\n\n") {
 		stored = strings.ReplaceAll(stored, "\n\n\n", "\n\n")
 	}
-
 	return stored
 }
 
@@ -561,7 +366,6 @@ func recoveryStringMessage(t *testing.T, role string, text string) recoveryMessa
 	t.Helper()
 	message := recoveryPartsMessage(role, recoveryTextPart(t, text))
 	message.stored = `{"content":` + recoveryJSONString(t, text) + `,"role":"` + role + `"}`
-
 	return message
 }
 
@@ -577,11 +381,7 @@ func recoveryThinkingPart(t *testing.T, text string) string {
 
 func recoveryToolUsePart(t *testing.T, id string, command string) string {
 	t.Helper()
-
-	return `{"id":"` + id + `","input":{"command":` + recoveryJSONString(
-		t,
-		command,
-	) + `},"name":"Bash","type":"tool_use"}`
+	return `{"id":"` + id + `","input":{"command":` + recoveryJSONString(t, command) + `},"name":"Bash","type":"tool_use"}`
 }
 
 func recoveryToolResultPart(id string, content string) string {
@@ -598,7 +398,6 @@ func recoveryJSONString(t *testing.T, text string) string {
 	if err := encoder.Encode(text); err != nil {
 		t.Fatalf("encode fixture text: %v", err)
 	}
-
 	return strings.TrimSuffix(buffer.String(), "\n")
 }
 
@@ -617,30 +416,15 @@ func (builder *recoveryProbeLines) record(recordType string, index int, parent i
 	if parent >= 0 {
 		parentUUID = injectedProbeUUID(parent)
 	}
-
-	builder.lines = append(
-		builder.lines,
-		injectedProbeRecord(builder.session, recordType, index, parentUUID, fields),
-	)
+	builder.lines = append(builder.lines, injectedProbeRecord(builder.session, recordType, index, parentUUID, fields))
 }
 
-func (builder *recoveryProbeLines) message(
-	index int,
-	role string,
-	messageID string,
-	parts ...string,
-) {
+func (builder *recoveryProbeLines) message(index int, role string, messageID string, parts ...string) {
 	identity := ""
 	if messageID != "" {
 		identity = `,"id":"` + messageID + `"`
 	}
-
-	builder.record(
-		role,
-		index,
-		index-1,
-		`"message":{"content":[`+strings.Join(parts, ",")+`]`+identity+`,"role":"`+role+`"}`,
-	)
+	builder.record(role, index, index-1, `"message":{"content":[`+strings.Join(parts, ",")+`]`+identity+`,"role":"`+role+`"}`)
 }
 
 // firstConversation writes typed records before the first compaction. Request
@@ -648,27 +432,15 @@ func (builder *recoveryProbeLines) message(
 // position 4 spans two tool result records.
 func (builder *recoveryProbeLines) firstConversation(t *testing.T, messages []recoveryMessage) {
 	t.Helper()
-	builder.record(
-		"user",
-		0,
-		-1,
-		`"message":{"content":`+recoveryJSONString(t, recoveryProbeFirstQuestion)+`,"role":"user"}`,
-	)
+	builder.record("user", 0, -1, `"message":{"content":`+recoveryJSONString(t, recoveryProbeFirstQuestion)+`,"role":"user"}`)
 	builder.message(1, "assistant", "msg_recovery_1", messages[1].parts...)
 	builder.message(2, "user", "", messages[2].parts...)
-
 	for offset, part := range messages[3].parts {
 		builder.message(3+offset, "assistant", "msg_recovery_3", part)
 	}
-
 	builder.message(7, "user", "", messages[4].parts[0])
 	builder.message(8, "user", "", messages[4].parts[1])
-	builder.record(
-		"user",
-		9,
-		8,
-		`"message":{"content":`+recoveryJSONString(t, recoveryProbeQuotation)+`,"role":"user"}`,
-	)
+	builder.record("user", 9, 8, `"message":{"content":`+recoveryJSONString(t, recoveryProbeQuotation)+`,"role":"user"}`)
 	builder.message(10, "assistant", "msg_recovery_7", messages[7].parts...)
 	builder.message(11, "user", "", messages[8].parts...)
 }
@@ -684,30 +456,15 @@ func (builder *recoveryProbeLines) secondConversation(messages []recoveryMessage
 
 // requests writes blobs for the listed positions and one api-request record
 // that retains keep references and appends the remaining messages.
-func (builder *recoveryProbeLines) requests(
-	messages []recoveryMessage,
-	blobPositions []int,
-	id string,
-	keep int,
-) {
+func (builder *recoveryProbeLines) requests(messages []recoveryMessage, blobPositions []int, id string, keep int) {
 	for _, position := range blobPositions {
-		builder.lines = append(
-			builder.lines,
-			`{"type":"api-request-blob","sessionId":"`+builder.session+`","hash":"`+messages[position].hash+`","message":`+messages[position].stored+`}`,
-		)
+		builder.lines = append(builder.lines, `{"type":"api-request-blob","sessionId":"`+builder.session+`","hash":"`+messages[position].hash+`","message":`+messages[position].stored+`}`)
 	}
-
 	tail := make([]string, 0, len(messages)-keep)
 	for _, message := range messages[keep:] {
 		tail = append(tail, `"`+message.hash+`"`)
 	}
-
-	builder.lines = append(
-		builder.lines,
-		`{"type":"api-request","sessionId":"`+builder.session+`","id":"`+id+`","keep":`+fmt.Sprint(
-			keep,
-		)+`,"tail":[`+strings.Join(tail, ",")+`]}`,
-	)
+	builder.lines = append(builder.lines, `{"type":"api-request","sessionId":"`+builder.session+`","id":"`+id+`","keep":`+fmt.Sprint(keep)+`,"tail":[`+strings.Join(tail, ",")+`]}`)
 }
 
 // postCompaction writes the request with keep 0 that Claude Code records after
@@ -720,43 +477,13 @@ func (builder *recoveryProbeLines) postCompaction(t *testing.T, id string, text 
 
 func (builder *recoveryProbeLines) summary(t *testing.T, boundary int, parent int, summary string) {
 	t.Helper()
-	builder.record(
-		"system",
-		boundary,
-		-1,
-		`"subtype":"compact_boundary","content":"Conversation compacted","logicalParentUuid":"`+injectedProbeUUID(
-			parent,
-		)+`","compactMetadata":{"trigger":"manual","preTokens":1200}`,
-	)
-	builder.record(
-		"user",
-		boundary+1,
-		boundary,
-		`"isCompactSummary":true,"isVisibleInTranscriptOnly":true,"message":{"role":"user","content":`+injectedProbeJSON(
-			t,
-			summary,
-		)+`}`,
-	)
+	builder.record("system", boundary, -1, `"subtype":"compact_boundary","content":"Conversation compacted","logicalParentUuid":"`+injectedProbeUUID(parent)+`","compactMetadata":{"trigger":"manual","preTokens":1200}`)
+	builder.record("user", boundary+1, boundary, `"isCompactSummary":true,"isVisibleInTranscriptOnly":true,"message":{"role":"user","content":`+injectedProbeJSON(t, summary)+`}`)
 }
 
 func (builder *recoveryProbeLines) after(t *testing.T) {
 	t.Helper()
-	builder.record(
-		"assistant",
-		21,
-		recoveryProbeSummaryIndex,
-		`"message":{"role":"assistant","content":[{"type":"text","text":"`+injectedProbeLaterAnswer+`"}]}`,
-	)
-	builder.record(
-		"user",
-		22,
-		21,
-		`"message":{"role":"user","content":`+injectedProbeJSON(t, injectedProbeQuotation)+`}`,
-	)
-	builder.record(
-		"assistant",
-		23,
-		22,
-		`"message":{"role":"assistant","content":[{"type":"text","text":"`+injectedProbeFinalAnswer+`"}]}`,
-	)
+	builder.record("assistant", 21, recoveryProbeSummaryIndex, `"message":{"role":"assistant","content":[{"type":"text","text":"`+injectedProbeLaterAnswer+`"}]}`)
+	builder.record("user", 22, 21, `"message":{"role":"user","content":`+injectedProbeJSON(t, injectedProbeQuotation)+`}`)
+	builder.record("assistant", 23, 22, `"message":{"role":"assistant","content":[{"type":"text","text":"`+injectedProbeFinalAnswer+`"}]}`)
 }

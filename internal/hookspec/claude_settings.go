@@ -27,14 +27,11 @@ func unmarshalClaudeSettingsDocument(body []byte) (claudeSettingsDocument, error
 	if strings.TrimSpace(string(body)) == "" {
 		return claudeSettingsDocument{fields: fields}, nil
 	}
-
 	if err := json.Unmarshal(body, &fields); err != nil {
 		wrapped := fmt.Errorf("unmarshal Claude Code settings: %w", err)
 		slog.Warn("Claude Code settings unmarshal failed", "err", wrapped)
-
 		return claudeSettingsDocument{}, wrapped
 	}
-
 	return claudeSettingsDocument{fields: fields}, nil
 }
 
@@ -44,35 +41,25 @@ func (document *claudeSettingsDocument) MarshalJSON() ([]byte, error) {
 	if fields == nil {
 		fields = map[string]json.RawMessage{}
 	}
-
 	body, err := json.MarshalIndent(fields, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("marshal Claude Code settings: %w", err)
 	}
-
 	body = append(body, '\n')
-
 	return body, nil
 }
 
-func (document *claudeSettingsDocument) marshalClaudeCodeHookInstalls(
-	installs []RegisteredInstall,
-	signatures [][]string,
-	clydeBin string,
-) error {
+func (document *claudeSettingsDocument) marshalClaudeCodeHookInstalls(installs []RegisteredInstall, signatures [][]string, clydeBin string) error {
 	if document.fields == nil {
 		document.fields = map[string]json.RawMessage{}
 	}
-
 	hooksByEvent, err := document.unmarshalClaudeCodeHooks()
 	if err != nil {
 		return err
 	}
-
 	for eventName, groups := range hooksByEvent {
 		hooksByEvent[eventName] = removeClaudeHookHandlers(groups, signatures)
 	}
-
 	for _, install := range installs {
 		eventName := install.Spec.Event
 		groups := hooksByEvent[eventName]
@@ -80,52 +67,35 @@ func (document *claudeSettingsDocument) marshalClaudeCodeHookInstalls(
 		groups = addClaudeHookHandler(groups, install.Spec.Matcher, handler)
 		hooksByEvent[eventName] = groups
 	}
-
 	body, err := json.Marshal(hooksByEvent)
 	if err != nil {
 		wrapped := fmt.Errorf("marshal Claude Code hooks: %w", err)
 		slog.Warn("Claude Code hooks marshal failed", "err", wrapped)
-
 		return wrapped
 	}
-
 	document.fields["hooks"] = body
-
 	return nil
 }
 
-func (document *claudeSettingsDocument) unmarshalClaudeCodeHooks() (
-	map[string][]rawClaudeHookGroup,
-	error,
-) {
+func (document *claudeSettingsDocument) unmarshalClaudeCodeHooks() (map[string][]rawClaudeHookGroup, error) {
 	hooksByEvent := map[string][]rawClaudeHookGroup{}
 	raw, ok := document.fields["hooks"]
 	if !ok || len(raw) == 0 || string(raw) == "null" {
 		return hooksByEvent, nil
 	}
-
 	if err := json.Unmarshal(raw, &hooksByEvent); err != nil {
 		wrapped := fmt.Errorf("unmarshal Claude Code hooks: %w", err)
 		slog.Warn("Claude Code hooks unmarshal failed", "err", wrapped)
-
 		return nil, wrapped
 	}
-
 	return hooksByEvent, nil
 }
 
-func removeClaudeHookHandlers(
-	groups []rawClaudeHookGroup,
-	signatures [][]string,
-) []rawClaudeHookGroup {
+func removeClaudeHookHandlers(groups []rawClaudeHookGroup, signatures [][]string) []rawClaudeHookGroup {
 	return removeClaudeHookHandlersWithMatcher(groups, signatures, nil)
 }
 
-func removeClaudeHookHandlersWithMatcher(
-	groups []rawClaudeHookGroup,
-	signatures [][]string,
-	knownCommands []string,
-) []rawClaudeHookGroup {
+func removeClaudeHookHandlersWithMatcher(groups []rawClaudeHookGroup, signatures [][]string, knownCommands []string) []rawClaudeHookGroup {
 	out := make([]rawClaudeHookGroup, 0, len(groups))
 	for _, group := range groups {
 		handlers, ok := group.handlers()
@@ -133,30 +103,23 @@ func removeClaudeHookHandlersWithMatcher(
 			out = append(out, group)
 			continue
 		}
-
 		filtered := make([]rawClaudeHookHandler, 0, len(handlers))
 		removed := false
-
 		for _, handler := range handlers {
 			if handler.matchesHookSignature(signatures, knownCommands) {
 				removed = true
 				continue
 			}
-
 			filtered = append(filtered, handler)
 		}
-
 		if removed {
 			group.setHandlers(filtered)
 		}
-
 		if removed && len(filtered) == 0 {
 			continue
 		}
-
 		out = append(out, group)
 	}
-
 	return out
 }
 
@@ -169,20 +132,15 @@ func addClaudeHookHandler(
 		if groups[index].matcher() != matcher {
 			continue
 		}
-
 		handlers, ok := groups[index].handlers()
 		if !ok {
 			continue
 		}
-
 		handlers = append(handlers, handler)
 		groups[index].setHandlers(handlers)
-
 		return groups
 	}
-
 	group := newRawClaudeHookGroup(matcher, []rawClaudeHookHandler{handler})
-
 	return append(groups, group)
 }
 
@@ -193,7 +151,6 @@ func newRawClaudeHookGroup(
 	group := rawClaudeHookGroup{fields: map[string]json.RawMessage{}}
 	group.setMatcher(matcher)
 	group.setHandlers(handlers)
-
 	return group
 }
 
@@ -205,11 +162,9 @@ func newClaudeCommandHookHandler(install InstallSpec, clydeBin string) rawClaude
 	if install.TimeoutSeconds > 0 {
 		handler.setInt("timeout", install.TimeoutSeconds)
 	}
-
 	if install.StatusMessage != "" {
 		handler.setString("statusMessage", install.StatusMessage)
 	}
-
 	return handler
 }
 
@@ -218,9 +173,7 @@ func (group *rawClaudeHookGroup) UnmarshalJSON(body []byte) error {
 	if err := json.Unmarshal(body, &fields); err != nil {
 		return fmt.Errorf("unmarshal Claude Code hook group: %w", err)
 	}
-
 	group.fields = fields
-
 	return nil
 }
 
@@ -229,14 +182,12 @@ func (group *rawClaudeHookGroup) MarshalJSON() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("marshal Claude Code hook group: %w", err)
 	}
-
 	return body, nil
 }
 
 func (group *rawClaudeHookGroup) matcher() string {
 	var matcher string
 	_ = json.Unmarshal(group.fields["matcher"], &matcher)
-
 	return matcher
 }
 
@@ -245,7 +196,6 @@ func (group *rawClaudeHookGroup) handlers() ([]rawClaudeHookHandler, bool) {
 	if err := json.Unmarshal(group.fields["hooks"], &handlers); err != nil {
 		return nil, false
 	}
-
 	return handlers, true
 }
 
@@ -272,9 +222,7 @@ func (handler *rawClaudeHookHandler) UnmarshalJSON(body []byte) error {
 	if err := json.Unmarshal(body, &fields); err != nil {
 		return fmt.Errorf("unmarshal Claude Code hook handler: %w", err)
 	}
-
 	handler.fields = fields
-
 	return nil
 }
 
@@ -283,46 +231,35 @@ func (handler *rawClaudeHookHandler) MarshalJSON() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("marshal Claude Code hook handler: %w", err)
 	}
-
 	return body, nil
 }
 
 func (handler *rawClaudeHookHandler) args() []string {
 	var args []string
 	_ = json.Unmarshal(handler.fields["args"], &args)
-
 	return args
 }
 
 func (handler *rawClaudeHookHandler) command() string {
 	var command string
 	_ = json.Unmarshal(handler.fields["command"], &command)
-
 	return command
 }
 
-func (handler *rawClaudeHookHandler) matchesHookSignature(
-	signatures [][]string,
-	knownCommands []string,
-) bool {
+func (handler *rawClaudeHookHandler) matchesHookSignature(signatures [][]string, knownCommands []string) bool {
 	args := handler.args()
-
 	for _, signature := range signatures {
-		if slices.Equal(args, signature) &&
-			(len(knownCommands) == 0 || knownClydeExecutable(handler.command(), knownCommands)) {
+		if slices.Equal(args, signature) && (len(knownCommands) == 0 || knownClydeExecutable(handler.command(), knownCommands)) {
 			return true
 		}
 	}
-
 	command := handler.command()
 	if command == "" {
 		return false
 	}
-
 	if len(knownCommands) == 0 {
 		return commandHasManagedArgs(command, signatures)
 	}
-
 	return commandHasExactManagedArgs(command, signatures, knownCommands)
 }
 

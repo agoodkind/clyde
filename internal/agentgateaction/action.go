@@ -66,19 +66,15 @@ func (a *Action) EvaluateResponse(
 	if errors.As(err, &exitError) && exitError.ExitCode() == 2 {
 		diagnostic := strings.TrimSpace(stderr.String())
 		if diagnostic == "" {
-			return mitm.ResponseActionResult{}, errors.New(
-				"Agent Gate returned an empty violation diagnostic",
-			)
+			return mitm.ResponseActionResult{}, errors.New("Agent Gate returned an empty violation diagnostic")
 		}
 		return mitm.ResponseActionResult{Feedback: diagnostic}, nil
 	}
 	slog.WarnContext(
 		ctx,
 		"mitm.agent_gate_response.command_failed",
-		"concern",
-		"providers.mitm.wire",
-		"err",
-		err,
+		"concern", "providers.mitm.wire",
+		"err", err,
 	)
 	return mitm.ResponseActionResult{}, fmt.Errorf("run Agent Gate response hook: %w", err)
 }

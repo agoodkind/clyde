@@ -46,13 +46,8 @@ func metricsWindowLabel(window time.Duration) string {
 // without being asked for a window.
 func MetricsWindowsFromRollup(now time.Time) []MetricsWindowReport {
 	return metricsWindowsFromRollupPath(
-		metricsRollupPath(),
-		metricsRollupCheckpointPath(),
-		defaultMetricsWindows,
-		now,
-		loadRollupPricing(),
-		currentRollupSourcePosition(),
-	)
+		metricsRollupPath(), metricsRollupCheckpointPath(), defaultMetricsWindows, now, loadRollupPricing(),
+		currentRollupSourcePosition())
 }
 
 func currentRollupSourcePosition() metricsRollupSourcePosition {
@@ -61,13 +56,11 @@ func currentRollupSourcePosition() metricsRollupSourcePosition {
 	if err != nil {
 		return unknown
 	}
-
 	logPath := slogger.DefaultProcessPath(cfg.Logging, slogger.ProcessRoleDaemon)
 	info, err := os.Stat(logPath)
 	if err != nil {
 		return unknown
 	}
-
 	return rollupSourcePosition(logPath, info)
 }
 
@@ -79,7 +72,6 @@ func loadRollupPricing() adapterruntime.PricingTable {
 	if err != nil {
 		return adapterruntime.NewPricingTable(nil)
 	}
-
 	return adapterruntime.NewPricingTable(cfg.Adapter.ModelPricing())
 }
 
@@ -107,59 +99,39 @@ func metricsWindowsFromRollupPath(
 	if !lastPassAt.IsZero() && rollupSourceCaughtUp(checkpoint.Source, currentSource) {
 		lastPassAt = now
 	}
-
 	coverageSince, hasCoverage := parseRollupTime(checkpoint.CoverageSince)
 
 	reports := make([]MetricsWindowReport, 0, len(durations))
 	loaded, loadErr := loadMetricsRollup(path, windows)
-
 	for i, duration := range durations {
 		report := newRollupReport(windows[i])
 		if loadErr != nil {
 			addMetricsWarning(&report, "unreadable metrics rollup store")
 			report.invalidHistory = true
-			reports = append(
-				reports,
-				MetricsWindowReport{Label: metricsWindowLabel(duration), Report: report},
-			)
+			reports = append(reports, MetricsWindowReport{Label: metricsWindowLabel(duration), Report: report})
 			continue
 		}
-
 		applyRollupWindow(&report, loaded[i], lastPassAt, pricing)
 		if !hasCoverage || coverageSince.After(windows[i].Since) {
 			report.Coverage.Complete = false
-			addMetricsWarning(
-				&report,
-				"historical summary coverage is unavailable before the current log continuation",
-			)
+			addMetricsWarning(&report, "historical summary coverage is unavailable before the current log continuation")
 		}
-
-		reports = append(
-			reports,
-			MetricsWindowReport{Label: metricsWindowLabel(duration), Report: report},
-		)
+		reports = append(reports, MetricsWindowReport{Label: metricsWindowLabel(duration), Report: report})
 	}
-
 	return reports
 }
 
-func rollupSourceCaughtUp(
-	saved metricsRollupSourcePosition,
-	current metricsRollupSourcePosition,
-) bool {
+func rollupSourceCaughtUp(saved metricsRollupSourcePosition, current metricsRollupSourcePosition) bool {
 	return saved.Path != "" && saved == current
 }
 
 // newRollupReport builds the empty report one window starts from.
 func newRollupReport(window MetricsWindow) MetricsHistoryReport {
 	return MetricsHistoryReport{
-		Window:   window,
-		Coverage: MetricsCoverage{Complete: false},
-		Metrics:  emptyMetricsValues(),
-		TimeBreakdown: MetricsTimeBreakdown{
-			Total:  emptyMetricsDuration(),
-			Stages: []MetricsStageDuration{},
-		},
+		Window:                 window,
+		Coverage:               MetricsCoverage{Complete: false},
+		Metrics:                emptyMetricsValues(),
+		TimeBreakdown:          MetricsTimeBreakdown{Total: emptyMetricsDuration(), Stages: []MetricsStageDuration{}},
 		UnattributedDurationMS: nil,
 		Restarts:               0,
 		Warnings:               []string{},
@@ -199,32 +171,18 @@ func applyRollupWindow(
 	} else if !report.historyCoversStart {
 		addMetricsWarning(report, "distilled history starts after the requested window")
 	}
-
 	if !report.liveCoversEnd {
 		if lastPassAt.IsZero() {
 			addMetricsWarning(report, "distiller has not completed a pass yet")
 		} else {
-			addMetricsWarning(
-				report,
-				fmt.Sprintf(
-					"distilled history may be up to %s behind; the next distill pass has not run yet",
-					report.Window.Until.Sub(lastPassAt).Round(time.Second),
-				),
-			)
+			addMetricsWarning(report, fmt.Sprintf(
+				"distilled history may be up to %s behind; the next distill pass has not run yet",
+				report.Window.Until.Sub(lastPassAt).Round(time.Second)))
 		}
 	}
-
 	if loaded.Restarts > 0 {
-		addMetricsWarning(
-			report,
-			fmt.Sprintf(
-				"window spans %d daemon restart(s); totals are summed across them",
-				loaded.Restarts,
-			),
-		)
+		addMetricsWarning(report, fmt.Sprintf("window spans %d daemon restart(s); totals are summed across them", loaded.Restarts))
 	}
-
 	aggregateMetricsRequests(report, loaded.Requests, pricing)
-	report.Coverage.Complete = report.historyCoversStart && report.liveCoversEnd &&
-		!report.invalidHistory
+	report.Coverage.Complete = report.historyCoversStart && report.liveCoversEnd && !report.invalidHistory
 }

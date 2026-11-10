@@ -17,17 +17,13 @@ func TestExtractRequestFeaturesModelID(t *testing.T) {
 		wantModelID string
 	}{
 		{
-			name: "object body with ignored extra fields",
-			body: json.RawMessage(
-				`{"model":"claude-fable-4-20250514","thinking":{"type":"adaptive"},"tools":[{"name":"Read"}]}`,
-			),
+			name:        "object body with ignored extra fields",
+			body:        json.RawMessage(`{"model":"claude-fable-4-20250514","thinking":{"type":"adaptive"},"tools":[{"name":"Read"}]}`),
 			wantModelID: "claude-fable-4-20250514",
 		},
 		{
-			name: "response format ignored",
-			body: json.RawMessage(
-				`{"model":"claude-haiku-4-5-20251001","response_format":{"type":"json_object"}}`,
-			),
+			name:        "response format ignored",
+			body:        json.RawMessage(`{"model":"claude-haiku-4-5-20251001","response_format":{"type":"json_object"}}`),
 			wantModelID: "claude-haiku-4-5-20251001",
 		},
 		{
@@ -38,22 +34,18 @@ func TestExtractRequestFeaturesModelID(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		t.Run(
-			tc.name,
-			func(t *testing.T) {
-				t.Parallel()
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-				got, err := ExtractRequestFeatures(CapturedRequest{RequestBody: tc.body})
-				if err != nil {
-					t.Fatalf("ExtractRequestFeatures: %v", err)
-				}
-
-				want := RequestFeatures{ModelID: tc.wantModelID}
-				if got != want {
-					t.Fatalf("ExtractRequestFeatures() = %+v, want %+v", got, want)
-				}
-			},
-		)
+			got, err := ExtractRequestFeatures(CapturedRequest{RequestBody: tc.body})
+			if err != nil {
+				t.Fatalf("ExtractRequestFeatures: %v", err)
+			}
+			want := RequestFeatures{ModelID: tc.wantModelID}
+			if got != want {
+				t.Fatalf("ExtractRequestFeatures() = %+v, want %+v", got, want)
+			}
+		})
 	}
 }
 
@@ -63,9 +55,7 @@ func TestExtractRequestFeaturesRejectsNonObjectBody(t *testing.T) {
 	t.Parallel()
 
 	for _, body := range []string{"", "null", `"not-json"`, `[1,2]`} {
-		if _, err := ExtractRequestFeatures(CapturedRequest{
-			RequestBody: json.RawMessage(body),
-		}); err == nil {
+		if _, err := ExtractRequestFeatures(CapturedRequest{RequestBody: json.RawMessage(body)}); err == nil {
 			t.Fatalf("ExtractRequestFeatures(%q) error = nil, want non-nil", body)
 		}
 	}
@@ -78,6 +68,5 @@ func mustJSONString(t *testing.T, s string) json.RawMessage {
 	if err != nil {
 		t.Fatalf("marshal json string: %v", err)
 	}
-
 	return raw
 }

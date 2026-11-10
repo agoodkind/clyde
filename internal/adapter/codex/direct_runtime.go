@@ -127,7 +127,6 @@ func runPrepared(
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = http.DefaultClient
 	}
-
 	ConfigureCodexFileLogger(cfg.FileLog)
 
 	cfg.NativePatchRepresentation = nativePatchRepresentationForCursorRoute(resolved)
@@ -144,22 +143,15 @@ func runPrepared(
 			entry := TurnMetadataWorkspace{
 				AssociatedRemoteURLs: TurnMetadataRemoteURLs{Origin: ""},
 
-				LatestGitCommitHash: "",
-				HasChanges:          false,
+				LatestGitCommitHash: "", HasChanges: false,
 			}
 			if cfg.WorkspaceProbe != nil {
 				entry = cfg.WorkspaceProbe.Probe(ctx, ws)
 			}
-
 			turnMeta = turnMeta.WithWorkspace(ws, entry)
 		}
-
 		turnMetaJSON, _ := turnMeta.MarshalCompact()
-		transportPayload.ClientMetadata = ClientMetadataWithTurn(
-			installationID,
-			WindowID(conversationID),
-			turnMetaJSON,
-		)
+		transportPayload.ClientMetadata = ClientMetadataWithTurn(installationID, WindowID(conversationID), turnMetaJSON)
 	}
 
 	httpCfg := HTTPTransportConfig{
@@ -222,21 +214,16 @@ func runPrepared(
 		// falls back to the HTTP/SSE transport here, so Clyde does too.
 		return runHTTPTransportEvents(ctx, httpCfg, transportPayload, emit)
 	}
-
 	return result, err
 }
 
-func nativePatchRepresentationForCursorRoute(
-	resolved *adapterresolver.ResolvedRequest,
-) adapterrender.NativePatchRepresentation {
+func nativePatchRepresentationForCursorRoute(resolved *adapterresolver.ResolvedRequest) adapterrender.NativePatchRepresentation {
 	if resolved == nil {
 		return adapterrender.NativePatchRepresentationRaw
 	}
-
 	route := strings.TrimSpace(resolved.Cursor.NormalizedModel)
 	if strings.HasPrefix(route, "clyde-codex-") {
 		return adapterrender.NativePatchRepresentationJSON
 	}
-
 	return adapterrender.NativePatchRepresentationRaw
 }

@@ -34,63 +34,42 @@ func TestProviderExecuteRequiresPrepare(t *testing.T) {
 
 func TestProviderExecuteCollectBuildsFinalResponse(t *testing.T) {
 	t.Parallel()
-	provider := NewProvider(
-		adapterprovider.Deps{},
-		ProviderOptions{
-			Prepare: func(
-				_ context.Context,
-				req adapterresolver.ResolvedRequest,
-				reqID string,
-			) (
-				PreparedRequest,
-				error,
-			) {
-				resolved := req
-
-				return PreparedRequest{
-					RequestID: reqID,
-					Resolved:  &resolved,
-				}, nil
-			},
-			ExecutePrepared: func(
-				_ context.Context,
-				req PreparedRequest,
-				_ adapterprovider.EventWriter,
-			) (
-				adapterprovider.Result,
-				error,
-			) {
-				resp := &adapteropenai.ChatResponse{
-					ID:                req.RequestID,
-					Object:            "chat.completion",
-					Model:             "claude-test",
-					SystemFingerprint: "fp-test",
-					Choices: []adapteropenai.ChatChoice{
-						{
-							Index: 0,
-							Message: adapteropenai.ChatMessage{
-								Role:    "assistant",
-								Content: []byte(`"ok"`),
-							},
-							FinishReason: "stop",
-						},
-					},
-					Usage: &adapteropenai.Usage{
-						PromptTokens:     3,
-						CompletionTokens: 2,
-						TotalTokens:      5,
-					},
-				}
-
-				return adapterprovider.Result{
-					FinalResponse:     resp,
-					Usage:             *resp.Usage,
-					FinishReason:      "stop",
-					SystemFingerprint: "fp-test",
-				}, nil
-			},
+	provider := NewProvider(adapterprovider.Deps{}, ProviderOptions{
+		Prepare: func(_ context.Context, req adapterresolver.ResolvedRequest, reqID string) (PreparedRequest, error) {
+			resolved := req
+			return PreparedRequest{
+				RequestID: reqID,
+				Resolved:  &resolved,
+			}, nil
 		},
-	)
+		ExecutePrepared: func(_ context.Context, req PreparedRequest, _ adapterprovider.EventWriter) (adapterprovider.Result, error) {
+			resp := &adapteropenai.ChatResponse{
+				ID:                req.RequestID,
+				Object:            "chat.completion",
+				Model:             "claude-test",
+				SystemFingerprint: "fp-test",
+				Choices: []adapteropenai.ChatChoice{{
+					Index: 0,
+					Message: adapteropenai.ChatMessage{
+						Role:    "assistant",
+						Content: []byte(`"ok"`),
+					},
+					FinishReason: "stop",
+				}},
+				Usage: &adapteropenai.Usage{
+					PromptTokens:     3,
+					CompletionTokens: 2,
+					TotalTokens:      5,
+				},
+			}
+			return adapterprovider.Result{
+				FinalResponse:     resp,
+				Usage:             *resp.Usage,
+				FinishReason:      "stop",
+				SystemFingerprint: "fp-test",
+			}, nil
+		},
+	})
 	req := adapterresolver.ResolvedRequest{
 		Provider: adapterresolver.ProviderAnthropic,
 		Model:    "claude-test",
@@ -104,23 +83,18 @@ func TestProviderExecuteCollectBuildsFinalResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute() err = %v", err)
 	}
-
 	if result.FinalResponse == nil {
 		t.Fatalf("FinalResponse is nil")
 	}
-
 	if result.FinalResponse.ID != "req-provider" {
 		t.Fatalf("response id = %q want req-provider", result.FinalResponse.ID)
 	}
-
 	if got := result.FinalResponse.Choices[0].Message.Content; string(got) != `"ok"` {
 		t.Fatalf("content = %s want %q", got, `"ok"`)
 	}
-
 	if result.FinishReason != "stop" {
 		t.Fatalf("finish_reason = %q want stop", result.FinishReason)
 	}
-
 	if result.Usage.PromptTokens != 3 || result.Usage.CompletionTokens != 2 {
 		t.Fatalf("usage = %+v want prompt=3 completion=2", result.Usage)
 	}
@@ -130,42 +104,23 @@ func TestProviderExecuteStreamUsesStreamCallback(t *testing.T) {
 	t.Parallel()
 
 	called := false
-	provider := NewProvider(
-		adapterprovider.Deps{},
-		ProviderOptions{
-			Prepare: func(
-				_ context.Context,
-				req adapterresolver.ResolvedRequest,
-				reqID string,
-			) (
-				PreparedRequest,
-				error,
-			) {
-				resolved := req
-
-				return PreparedRequest{
-					RequestID: reqID,
-					Request:   Request{Stream: req.OpenAI.Stream},
-					Resolved:  &resolved,
-				}, nil
-			},
-			ExecutePrepared: func(
-				_ context.Context,
-				req PreparedRequest,
-				_ adapterprovider.EventWriter,
-			) (
-				adapterprovider.Result,
-				error,
-			) {
-				called = true
-				if req.RequestID != "req-stream" {
-					t.Fatalf("reqID = %q want req-stream", req.RequestID)
-				}
-
-				return adapterprovider.Result{FinishReason: "stop"}, nil
-			},
+	provider := NewProvider(adapterprovider.Deps{}, ProviderOptions{
+		Prepare: func(_ context.Context, req adapterresolver.ResolvedRequest, reqID string) (PreparedRequest, error) {
+			resolved := req
+			return PreparedRequest{
+				RequestID: reqID,
+				Request:   Request{Stream: req.OpenAI.Stream},
+				Resolved:  &resolved,
+			}, nil
 		},
-	)
+		ExecutePrepared: func(_ context.Context, req PreparedRequest, _ adapterprovider.EventWriter) (adapterprovider.Result, error) {
+			called = true
+			if req.RequestID != "req-stream" {
+				t.Fatalf("reqID = %q want req-stream", req.RequestID)
+			}
+			return adapterprovider.Result{FinishReason: "stop"}, nil
+		},
+	})
 	req := adapterresolver.ResolvedRequest{
 		Provider: adapterresolver.ProviderAnthropic,
 		Model:    "claude-test",
@@ -177,11 +132,9 @@ func TestProviderExecuteStreamUsesStreamCallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute() err = %v", err)
 	}
-
 	if !called {
 		t.Fatalf("stream callback was not called")
 	}
-
 	if result.FinishReason != "stop" {
 		t.Fatalf("finish_reason = %q want stop", result.FinishReason)
 	}
@@ -191,48 +144,31 @@ func TestProviderExecutePreparedUsesPreparedCallback(t *testing.T) {
 	t.Parallel()
 
 	called := false
-	provider := NewProvider(
-		adapterprovider.Deps{},
-		ProviderOptions{
-			ExecutePrepared: func(
-				_ context.Context,
-				req PreparedRequest,
-				_ adapterprovider.EventWriter,
-			) (
-				adapterprovider.Result,
-				error,
-			) {
-				called = true
-				if req.RequestID != "req-native" {
-					t.Fatalf("reqID = %q want req-native", req.RequestID)
-				}
-
-				return adapterprovider.Result{FinishReason: "stop"}, nil
-			},
+	provider := NewProvider(adapterprovider.Deps{}, ProviderOptions{
+		ExecutePrepared: func(_ context.Context, req PreparedRequest, _ adapterprovider.EventWriter) (adapterprovider.Result, error) {
+			called = true
+			if req.RequestID != "req-native" {
+				t.Fatalf("reqID = %q want req-native", req.RequestID)
+			}
+			return adapterprovider.Result{FinishReason: "stop"}, nil
 		},
-	)
+	})
 
-	result, err := provider.ExecutePrepared(
-		context.Background(),
-		PreparedRequest{
-			RequestID: "req-native",
-			Request:   Request{Model: "claude-test", Stream: true},
-			Resolved: &adapterresolver.ResolvedRequest{
-				Provider: adapterresolver.ProviderAnthropic,
-				Model:    "claude-test",
-				Alias:    "claude-test",
-			},
+	result, err := provider.ExecutePrepared(context.Background(), PreparedRequest{
+		RequestID: "req-native",
+		Request:   Request{Model: "claude-test", Stream: true},
+		Resolved: &adapterresolver.ResolvedRequest{
+			Provider: adapterresolver.ProviderAnthropic,
+			Model:    "claude-test",
+			Alias:    "claude-test",
 		},
-		nil,
-	)
+	}, nil)
 	if err != nil {
 		t.Fatalf("ExecutePrepared() err = %v", err)
 	}
-
 	if !called {
 		t.Fatalf("prepared callback was not called")
 	}
-
 	if result.FinishReason != "stop" {
 		t.Fatalf("finish_reason = %q want stop", result.FinishReason)
 	}
@@ -242,40 +178,27 @@ func TestProviderPrepareUsesConfiguredPreparation(t *testing.T) {
 	t.Parallel()
 
 	called := false
-	provider := NewProvider(
-		adapterprovider.Deps{},
-		ProviderOptions{
-			Prepare: func(_ context.Context, req adapterresolver.ResolvedRequest, requestID string) (
-				PreparedRequest,
-				error,
-			) {
-				called = true
-				if requestID != "req-responses" {
-					t.Fatalf("request id = %q, want req-responses", requestID)
-				}
-
-				resolved := req
-
-				return PreparedRequest{RequestID: requestID, Resolved: &resolved}, nil
-			},
+	provider := NewProvider(adapterprovider.Deps{}, ProviderOptions{
+		Prepare: func(_ context.Context, req adapterresolver.ResolvedRequest, requestID string) (PreparedRequest, error) {
+			called = true
+			if requestID != "req-responses" {
+				t.Fatalf("request id = %q, want req-responses", requestID)
+			}
+			resolved := req
+			return PreparedRequest{RequestID: requestID, Resolved: &resolved}, nil
 		},
-	)
+	})
 
-	prepared, err := provider.Prepare(
-		WithRequestID(context.Background(), "req-responses"),
-		adapterresolver.ResolvedRequest{
-			Provider: adapterresolver.ProviderAnthropic,
-			Model:    "claude-test",
-		},
-	)
+	prepared, err := provider.Prepare(WithRequestID(context.Background(), "req-responses"), adapterresolver.ResolvedRequest{
+		Provider: adapterresolver.ProviderAnthropic,
+		Model:    "claude-test",
+	})
 	if err != nil {
 		t.Fatalf("Prepare() err = %v", err)
 	}
-
 	if !called {
 		t.Fatal("preparation callback was not called")
 	}
-
 	if prepared.RequestID != "req-responses" {
 		t.Fatalf("prepared request id = %q, want req-responses", prepared.RequestID)
 	}

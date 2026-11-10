@@ -121,7 +121,6 @@ func (s *Session[M]) Touch() {
 	if s == nil || s.state == nil || s.state.now == nil {
 		return
 	}
-
 	s.state.lastActivityNano.Store(s.state.now().UnixNano())
 }
 
@@ -136,9 +135,7 @@ func (s *Session[M]) IdleSince(now time.Time) time.Duration {
 	if s == nil || s.state == nil {
 		return 0
 	}
-
 	last := time.Unix(0, s.state.lastActivityNano.Load())
-
 	return now.Sub(last)
 }
 
@@ -240,30 +237,24 @@ func newRegistry[M Meta](opts Options[M]) *Registry[M] {
 	if log == nil {
 		log = slog.Default()
 	}
-
 	if opts.Component != "" {
 		log = log.With("component", opts.Component)
 	}
-
 	if opts.Concern != "" {
 		log = log.With("concern", opts.Concern)
 	}
-
 	pollEvery := opts.PollEvery
 	if pollEvery <= 0 {
 		pollEvery = defaultPollEvery
 	}
-
 	closerGrace := opts.CloserGrace
 	if closerGrace <= 0 {
 		closerGrace = defaultCloserGrace
 	}
-
 	now := opts.Now
 	if now == nil {
 		now = time.Now
 	}
-
 	r := &Registry[M]{
 		component:     opts.Component,
 		concern:       opts.Concern,
@@ -278,7 +269,6 @@ func newRegistry[M Meta](opts Options[M]) *Registry[M] {
 		parents:       make(map[string][]string),
 	}
 	r.state.Store(uint32(StateOpen))
-
 	return r
 }
 
@@ -292,25 +282,16 @@ func (r *Registry[M]) State() State {
 // ErrRegistryClosed once Drain has put the registry past StateOpen.
 // The returned *Session carries the registered metadata; callers pass
 // it to Release when the underlying owner finishes naturally.
-func (r *Registry[M]) Register(
-	ctx context.Context,
-	kind string,
-	meta M,
-	closer Closer,
-	opts ...RegisterOption,
-) (*Session[M], error) {
+func (r *Registry[M]) Register(ctx context.Context, kind string, meta M, closer Closer, opts ...RegisterOption) (*Session[M], error) {
 	if r.State() != StateOpen {
 		return nil, ErrRegistryClosed
 	}
-
 	cfg := registerCfg{parentID: ""}
-
 	for _, opt := range opts {
 		if opt != nil {
 			opt(&cfg)
 		}
 	}
-
 	id := randomSessionID(r.now)
 	openedAt := r.now()
 	sess := &Session[M]{
@@ -321,12 +302,7 @@ func (r *Registry[M]) Register(
 		Meta:     meta,
 		corr:     correlation.FromContext(ctx),
 		closer:   closer,
-		state: &sessionState{
-			once:             sync.Once{},
-			released:         atomic.Bool{},
-			lastActivityNano: atomic.Int64{},
-			now:              r.now,
-		},
+		state:    &sessionState{once: sync.Once{}, released: atomic.Bool{}, lastActivityNano: atomic.Int64{}, now: r.now},
 	}
 	sess.state.lastActivityNano.Store(openedAt.UnixNano())
 	r.mu.Lock()
@@ -334,15 +310,12 @@ func (r *Registry[M]) Register(
 		r.mu.Unlock()
 		return nil, ErrRegistryClosed
 	}
-
 	r.sessions[id] = sess
 	if cfg.parentID != "" {
 		r.parents[cfg.parentID] = append(r.parents[cfg.parentID], id)
 	}
-
 	r.mu.Unlock()
 	r.emitSessionEvent(ctx, slog.LevelInfo, "livetrack.session.registered", sess, "")
-
 	return sess, nil
 }
 
@@ -358,30 +331,25 @@ func (r *Registry[M]) Release(ctx context.Context, s *Session[M], reason string)
 	if s == nil || s.state == nil {
 		return
 	}
-
 	if !s.state.released.CompareAndSwap(false, true) {
 		return
 	}
-
 	r.mu.Lock()
 	delete(r.sessions, s.ID)
 	if s.ParentID != "" {
 		siblings := r.parents[s.ParentID]
-
 		filtered := siblings[:0]
 		for _, child := range siblings {
 			if child != s.ID {
 				filtered = append(filtered, child)
 			}
 		}
-
 		if len(filtered) == 0 {
 			delete(r.parents, s.ParentID)
 		} else {
 			r.parents[s.ParentID] = filtered
 		}
 	}
-
 	r.mu.Unlock()
 	r.emitSessionEvent(ctx, slog.LevelInfo, "livetrack.session.released", s, reason)
 }
@@ -392,12 +360,10 @@ func (r *Registry[M]) Release(ctx context.Context, s *Session[M], reason string)
 func (r *Registry[M]) Snapshot() []Session[M] {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-
 	out := make([]Session[M], 0, len(r.sessions))
 	for _, sess := range r.sessions {
 		out = append(out, snapshotSession(sess))
 	}
-
 	return out
 }
 
@@ -405,7 +371,6 @@ func (r *Registry[M]) Snapshot() []Session[M] {
 func (r *Registry[M]) Count() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-
 	return len(r.sessions)
 }
 
@@ -419,13 +384,11 @@ func (r *Registry[M]) ActiveCount(grace time.Duration) int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	count := 0
-
 	for _, sess := range r.sessions {
 		if grace <= 0 || sess.IdleSince(now) <= grace {
 			count++
 		}
 	}
-
 	return count
 }
 
@@ -436,30 +399,26 @@ func (r *Registry[M]) CountByPredicate(p Predicate[M]) int {
 	if p == nil {
 		return 0
 	}
-
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	count := 0
-
 	for _, sess := range r.sessions {
 		if p(snapshotSession(sess)) {
 			count++
 		}
 	}
-
 	return count
 }
 
-// ForEach calls callback for every tracked session. The callback receives a
+// ForEach calls f for every tracked session. The callback receives a
 // snapshot value so it cannot mutate registry state through the
 // session pointer.
-func (r *Registry[M]) ForEach(callback func(Session[M])) {
-	if callback == nil {
+func (r *Registry[M]) ForEach(f func(Session[M])) {
+	if f == nil {
 		return
 	}
-
 	for _, sess := range r.Snapshot() {
-		callback(sess)
+		f(sess)
 	}
 }
 
@@ -474,30 +433,25 @@ func (r *Registry[M]) ForceCloseMatching(ctx context.Context, p Predicate[M], re
 	if p == nil {
 		return 0
 	}
-
 	r.mu.Lock()
 	matched := make([]sessionEntry, 0)
 	matchedSessions := make([]*Session[M], 0)
-
 	for _, sess := range r.sessions {
 		if p(snapshotSession(sess)) {
 			matched = append(matched, toSessionEntry(sess))
 			matchedSessions = append(matchedSessions, sess)
 		}
 	}
-
 	for _, sess := range matchedSessions {
 		delete(r.sessions, sess.ID)
 		if sess.ParentID != "" {
 			siblings := r.parents[sess.ParentID]
-
 			filtered := siblings[:0]
 			for _, child := range siblings {
 				if child != sess.ID {
 					filtered = append(filtered, child)
 				}
 			}
-
 			if len(filtered) == 0 {
 				delete(r.parents, sess.ParentID)
 			} else {
@@ -505,9 +459,7 @@ func (r *Registry[M]) ForceCloseMatching(ctx context.Context, p Predicate[M], re
 			}
 		}
 	}
-
 	r.mu.Unlock()
-
 	for i, entry := range matched {
 		r.emitForceCloseEvent(ctx, matchedSessions[i], reason)
 		_ = runCloserBounded(r.closerGrace, entry, reason)
@@ -515,7 +467,6 @@ func (r *Registry[M]) ForceCloseMatching(ctx context.Context, p Predicate[M], re
 			matchedSessions[i].state.released.Store(true)
 		}
 	}
-
 	return len(matched)
 }
 
@@ -559,6 +510,5 @@ func randomSessionID(now func() time.Time) string {
 	if _, err := rand.Read(buf); err != nil {
 		return "fallback-" + now().UTC().Format("20060102T150405.000000000")
 	}
-
 	return hex.EncodeToString(buf)
 }

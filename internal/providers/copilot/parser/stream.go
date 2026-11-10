@@ -62,25 +62,16 @@ func (*Parser) StreamSelected(
 			streamWithToolOutputs(path, selector, opts, yield)
 			return
 		}
-
-		_, err := readCompleteEvents(
-			context.Background(),
-			path,
-			0,
-			0,
-			func(item event) bool {
-				if item.Ephemeral || item.AgentID != selector {
-					return true
-				}
-
-				message, ok := mapEvent(item, opts)
-				if ok {
-					return yield(message, nil)
-				}
-
+		_, err := readCompleteEvents(context.Background(), path, 0, 0, func(item event) bool {
+			if item.Ephemeral || item.AgentID != selector {
 				return true
-			},
-		)
+			}
+			message, ok := mapEvent(item, opts)
+			if ok {
+				return yield(message, nil)
+			}
+			return true
+		})
 		if err != nil {
 			yield(emptyMessage(), err)
 		}
@@ -94,49 +85,33 @@ func streamWithToolOutputs(
 	yield func(transcript.Message, error) bool,
 ) {
 	events := make([]event, 0)
-	_, err := readCompleteEvents(
-		context.Background(),
-		path,
-		0,
-		0,
-		func(item event) bool {
-			if !item.Ephemeral && item.AgentID == selector {
-				events = append(events, item)
-			}
-
-			return true
-		},
-	)
+	_, err := readCompleteEvents(context.Background(), path, 0, 0, func(item event) bool {
+		if !item.Ephemeral && item.AgentID == selector {
+			events = append(events, item)
+		}
+		return true
+	})
 	if err != nil {
 		yield(emptyMessage(), err)
 		return
 	}
-
 	messages := make([]transcript.Message, 0, len(events))
 	locations := make(map[string][]toolLocation)
-
 	for _, item := range events {
 		message, ok := mapEvent(item, opts)
 		if !ok {
 			continue
 		}
-
 		messageIndex := len(messages)
-
 		messages = append(messages, message)
 		for toolIndex, tool := range message.Tools {
-			locations[tool.ID] = append(
-				locations[tool.ID],
-				toolLocation{
-					messageIndex: messageIndex,
-					toolIndex:    toolIndex,
-				},
-			)
+			locations[tool.ID] = append(locations[tool.ID], toolLocation{
+				messageIndex: messageIndex,
+				toolIndex:    toolIndex,
+			})
 		}
 	}
-
 	attachToolOutputs(messages, events, locations)
-
 	for _, message := range messages {
 		if !yield(message, nil) {
 			return
@@ -173,34 +148,21 @@ func mapUserMessage(item event, opts conversation.LoadOptions) (transcript.Messa
 	if json.Unmarshal(item.Data, &data) != nil {
 		return emptyMessage(), false
 	}
-
 	if isSkillSource(data.Source) && !opts.IncludeInjected {
 		if opts.HarnessTally != nil {
 			opts.HarnessTally.Injected++
 		}
-
 		return emptyMessage(), false
 	}
-
 	attachments := mapAttachments(data.Attachments)
 	if data.Content == "" && len(attachments) == 0 {
 		return emptyMessage(), false
 	}
-
 	return transcript.Message{
-		UUID:              item.ID,
-		ParentUUID:        parentID(item),
-		LogicalParentUUID: "",
-		Role:              "user",
-		Visibility:        transcript.MessageVisibilityVisible,
-		Compaction:        nil,
-		Timestamp:         parseTime(item.Timestamp),
-		Text:              data.Content,
-		Thinking:          "",
-		HasTools:          false,
-		Tools:             nil,
-		Attachments:       attachments,
-		TextParts:         nil,
+		UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "user",
+		Visibility: transcript.MessageVisibilityVisible, Compaction: nil,
+		Timestamp: parseTime(item.Timestamp), Text: data.Content, Thinking: "",
+		HasTools: false, Tools: nil, Attachments: attachments, TextParts: nil,
 	}, true
 }
 
@@ -213,44 +175,27 @@ func mapAssistantMessage(item event) (transcript.Message, bool) {
 	if json.Unmarshal(item.Data, &data) != nil {
 		return emptyMessage(), false
 	}
-
 	tools := make([]transcript.ToolCall, 0, len(data.ToolRequests))
 	for _, request := range data.ToolRequests {
-		tools = append(
-			tools,
-			transcript.ToolCall{
-				ID:   request.ToolCallID,
-				Name: request.Name,
-				Input: transcript.ToolInputJSON{
-					Raw: append(json.RawMessage(nil), request.Arguments...),
-				},
-				Display:          firstNonEmpty(request.IntentionSummary, request.ToolTitle),
-				DisplayLang:      "",
-				Output:           "",
-				IsError:          false,
-				Attachments:      nil,
-				Timestamp:        nil,
-				TimestampUnknown: false,
-			},
-		)
+		tools = append(tools, transcript.ToolCall{
+			ID:               request.ToolCallID,
+			Name:             request.Name,
+			Input:            transcript.ToolInputJSON{Raw: append(json.RawMessage(nil), request.Arguments...)},
+			Display:          firstNonEmpty(request.IntentionSummary, request.ToolTitle),
+			DisplayLang:      "",
+			Output:           "",
+			IsError:          false,
+			Attachments:      nil,
+			Timestamp:        nil,
+			TimestampUnknown: false,
+		})
 	}
-
 	message := transcript.Message{
-		UUID:              item.ID,
-		ParentUUID:        parentID(item),
-		LogicalParentUUID: "",
-		Role:              "assistant",
-		Visibility:        transcript.MessageVisibilityVisible,
-		Compaction:        nil,
-		Timestamp:         parseTime(item.Timestamp),
-		Text:              data.Content,
-		Thinking:          data.ReasoningText,
-		HasTools:          len(tools) > 0,
-		Tools:             tools,
-		Attachments:       nil,
-		TextParts:         nil,
+		UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "assistant",
+		Visibility: transcript.MessageVisibilityVisible, Compaction: nil,
+		Timestamp: parseTime(item.Timestamp), Text: data.Content, Thinking: data.ReasoningText,
+		HasTools: len(tools) > 0, Tools: tools, Attachments: nil, TextParts: nil,
 	}
-
 	return message, data.Content != "" || data.ReasoningText != "" || len(tools) > 0
 }
 
@@ -261,21 +206,11 @@ func mapAssistantReasoning(item event) (transcript.Message, bool) {
 	if json.Unmarshal(item.Data, &data) != nil || data.Content == "" {
 		return emptyMessage(), false
 	}
-
 	return transcript.Message{
-		UUID:              item.ID,
-		ParentUUID:        parentID(item),
-		LogicalParentUUID: "",
-		Role:              "assistant",
-		Visibility:        transcript.MessageVisibilityTranscriptOnly,
-		Compaction:        nil,
-		Timestamp:         parseTime(item.Timestamp),
-		Text:              "",
-		Thinking:          data.Content,
-		HasTools:          false,
-		Tools:             nil,
-		Attachments:       nil,
-		TextParts:         nil,
+		UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "assistant",
+		Visibility: transcript.MessageVisibilityTranscriptOnly, Compaction: nil,
+		Timestamp: parseTime(item.Timestamp), Text: "", Thinking: data.Content,
+		HasTools: false, Tools: nil, Attachments: nil, TextParts: nil,
 	}, true
 }
 
@@ -286,29 +221,17 @@ func mapSystemMessage(item event, opts conversation.LoadOptions) (transcript.Mes
 	if json.Unmarshal(item.Data, &data) != nil || data.Content == "" {
 		return emptyMessage(), false
 	}
-
 	if !opts.IncludeSystemPrompts {
 		if opts.HarnessTally != nil {
 			opts.HarnessTally.System++
 		}
-
 		return emptyMessage(), false
 	}
-
 	return transcript.Message{
-		UUID:              item.ID,
-		ParentUUID:        parentID(item),
-		LogicalParentUUID: "",
-		Role:              "system",
-		Visibility:        transcript.MessageVisibilityMetaOnly,
-		Compaction:        nil,
-		Timestamp:         parseTime(item.Timestamp),
-		Text:              data.Content,
-		Thinking:          "",
-		HasTools:          false,
-		Tools:             nil,
-		Attachments:       nil,
-		TextParts:         nil,
+		UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "system",
+		Visibility: transcript.MessageVisibilityMetaOnly, Compaction: nil,
+		Timestamp: parseTime(item.Timestamp), Text: data.Content, Thinking: "",
+		HasTools: false, Tools: nil, Attachments: nil, TextParts: nil,
 	}, true
 }
 
@@ -325,43 +248,24 @@ func mapCompaction(item event) (transcript.Message, bool) {
 	if json.Unmarshal(item.Data, &data) != nil || !data.Success || data.SummaryContent == "" {
 		return emptyMessage(), false
 	}
-
 	metadata := &transcript.CompactionMetadata{
-		Kind:                      transcript.CompactionKindSummary,
-		Trigger:                   compactionTrigger(data.Trigger),
-		PreTokens:                 data.PreCompactionTokens,
-		PostTokens:                data.PostCompactionTokens,
-		TokensSaved:               data.TokensRemoved,
-		MessagesSummarized:        data.PreCompactionMessagesLength,
-		ReplacementHistoryCount:   0,
-		HeadUUID:                  "",
-		AnchorUUID:                "",
-		TailUUID:                  "",
-		ContextItems:              nil,
-		UserContext:               "",
-		Direction:                 "",
-		PreCompactDiscoveredTools: nil,
-		CompactedToolIDs:          nil,
-		ClearedAttachmentUUIDs:    nil,
-		RawCompactMetadata:        nil,
-		RawMicrocompactMetadata:   nil,
-		RawSummarizeMetadata:      nil,
+		Kind:                    transcript.CompactionKindSummary,
+		Trigger:                 compactionTrigger(data.Trigger),
+		PreTokens:               data.PreCompactionTokens,
+		PostTokens:              data.PostCompactionTokens,
+		TokensSaved:             data.TokensRemoved,
+		MessagesSummarized:      data.PreCompactionMessagesLength,
+		ReplacementHistoryCount: 0,
+		HeadUUID:                "", AnchorUUID: "", TailUUID: "", ContextItems: nil,
+		UserContext: "", Direction: "", PreCompactDiscoveredTools: nil,
+		CompactedToolIDs: nil, ClearedAttachmentUUIDs: nil,
+		RawCompactMetadata: nil, RawMicrocompactMetadata: nil, RawSummarizeMetadata: nil,
 	}
-
 	return transcript.Message{
-		UUID:              item.ID,
-		ParentUUID:        parentID(item),
-		LogicalParentUUID: "",
-		Role:              "assistant",
-		Visibility:        transcript.MessageVisibilityTranscriptOnly,
-		Compaction:        metadata,
-		Timestamp:         parseTime(item.Timestamp),
-		Text:              data.SummaryContent,
-		Thinking:          "",
-		HasTools:          false,
-		Tools:             nil,
-		Attachments:       nil,
-		TextParts:         nil,
+		UUID: item.ID, ParentUUID: parentID(item), LogicalParentUUID: "", Role: "assistant",
+		Visibility: transcript.MessageVisibilityTranscriptOnly, Compaction: metadata,
+		Timestamp: parseTime(item.Timestamp), Text: data.SummaryContent, Thinking: "",
+		HasTools: false, Tools: nil, Attachments: nil, TextParts: nil,
 	}, true
 }
 
@@ -385,17 +289,14 @@ func attachToolOutputs(
 		if item.Type != eventToolExecutionComplete {
 			continue
 		}
-
 		var data toolCompletionData
 		if json.Unmarshal(item.Data, &data) != nil || data.ToolCallID == "" {
 			continue
 		}
-
 		output := firstNonEmpty(data.Result.DetailedContent, data.Result.Content)
 		if !data.Success {
 			output = data.Error.Message
 		}
-
 		attachments := mapAttachments(data.Result.BinaryResultsForLLM)
 		for _, location := range locations[data.ToolCallID] {
 			tool := &messages[location.messageIndex].Tools[location.toolIndex]
@@ -410,24 +311,13 @@ func parentID(item event) string {
 	if item.ParentID == nil {
 		return ""
 	}
-
 	return *item.ParentID
 }
 
 func emptyMessage() transcript.Message {
 	return transcript.Message{
-		UUID:              "",
-		ParentUUID:        "",
-		LogicalParentUUID: "",
-		Role:              "",
-		Visibility:        "",
-		Compaction:        nil,
-		Timestamp:         parseTime(""),
-		Text:              "",
-		Thinking:          "",
-		HasTools:          false,
-		Tools:             nil,
-		Attachments:       nil,
-		TextParts:         nil,
+		UUID: "", ParentUUID: "", LogicalParentUUID: "", Role: "",
+		Visibility: "", Compaction: nil, Timestamp: parseTime(""), Text: "",
+		Thinking: "", HasTools: false, Tools: nil, Attachments: nil, TextParts: nil,
 	}
 }

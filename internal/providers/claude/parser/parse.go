@@ -82,17 +82,9 @@ type claudeToolResult struct {
 func (block contentBlock) toolResult() claudeToolResult {
 	output, decode := block.Content.SearchableText()
 	if decode == FieldDecodePartial {
-		slog.Warn(
-			"providers.claude.parser.tool_result_content_partial",
-			"concern",
-			concern,
-			"component",
-			"claude",
-			"tool_use_id",
-			block.ToolUseID,
-		)
+		slog.Warn("providers.claude.parser.tool_result_content_partial",
+			"concern", concern, "component", "claude", "tool_use_id", block.ToolUseID)
 	}
-
 	return claudeToolResult{ToolUseID: block.ToolUseID, Output: output, IsError: block.IsError}
 }
 
@@ -175,12 +167,8 @@ type rawClaudePreservedSegment struct {
 }
 
 var (
-	systemTagRe = regexp.MustCompile(
-		`<(?:system-reminder|local-command[^>]*|command-name|command-message|command-args|` +
-			`local-command-stdout|local-command-caveat)[^>]*>[\s\S]*?</(?:system-reminder|` +
-			`local-command[^>]*|command-name|command-message|command-args|local-command-stdout|local-command-caveat)>`,
-	)
-	noiseTags = []string{
+	systemTagRe = regexp.MustCompile(`<(?:system-reminder|local-command[^>]*|command-name|command-message|command-args|local-command-stdout|local-command-caveat)[^>]*>[\s\S]*?</(?:system-reminder|local-command[^>]*|command-name|command-message|command-args|local-command-stdout|local-command-caveat)>`)
+	noiseTags   = []string{
 		"command-name",
 		"command-message",
 		"command-args",
@@ -206,7 +194,6 @@ var injectedPatterns = func() []*regexp.Regexp {
 	for _, t := range injectedTags {
 		out = append(out, regexp.MustCompile(`(?is)<`+t+`\b[^>]*>.*?</`+t+`>`))
 	}
-
 	return out
 }()
 
@@ -248,7 +235,6 @@ var noisePatterns = func() []*regexp.Regexp {
 	for _, t := range noiseTags {
 		out = append(out, regexp.MustCompile(`(?is)<`+t+`\b[^>]*>.*?</`+t+`>`))
 	}
-
 	return out
 }()
 
@@ -285,21 +271,16 @@ func parseLine(line []byte, opts parseOptions) (transcript.Message, []claudeTool
 	if err != nil {
 		return emptyMessage(), nil, false
 	}
-
 	if entry.Type == EntryTypeSystem {
 		if !opts.IncludeSystemMessages {
 			return emptyMessage(), nil, false
 		}
-
 		systemMessage, ok := parseSystemEntry(entry)
-
 		return systemMessage, nil, ok
 	}
-
 	if entry.Type != EntryTypeUser && entry.Type != EntryTypeAssistant {
 		return emptyMessage(), nil, false
 	}
-
 	if len(entry.Message) == 0 {
 		return emptyMessage(), nil, false
 	}
@@ -321,8 +302,7 @@ func parseLine(line []byte, opts parseOptions) (transcript.Message, []claudeTool
 		Thinking:          "",
 		HasTools:          false,
 		Tools:             nil,
-		Attachments:       nil,
-		TextParts:         nil,
+		Attachments:       nil, TextParts: nil,
 	}
 
 	if entry.Type == EntryTypeUser {
@@ -331,7 +311,6 @@ func parseLine(line []byte, opts parseOptions) (transcript.Message, []claudeTool
 			// tool result entry, skip the turn and keep its results
 			return emptyMessage(), content.Results, false
 		}
-
 		if !entry.IsCompactSummary {
 			m.Text = strings.TrimSpace(stripUserText(content.Text, opts))
 		} else {
@@ -343,7 +322,6 @@ func parseLine(line []byte, opts parseOptions) (transcript.Message, []claudeTool
 				m.Text,
 			)
 		}
-
 		return m, content.Results, m.Text != ""
 	}
 
@@ -367,7 +345,6 @@ func stripUserText(text string, opts parseOptions) string {
 			opts.Tally.Injected += injected
 		}
 	}
-
 	if !opts.PreserveSystemPrompts {
 		stripped, system := stripSystemTags(text)
 		text = stripped
@@ -375,7 +352,6 @@ func stripUserText(text string, opts parseOptions) string {
 			opts.Tally.System += system
 		}
 	}
-
 	return text
 }
 
@@ -384,24 +360,14 @@ func stripSummaryText(text string, opts parseOptions) string {
 	if len(spans) == 0 {
 		return stripUserText(text, opts)
 	}
-
 	pieces := make([]string, 0, 2*len(spans)+1)
 	previousEnd := 0
-
 	for _, span := range spans {
-		pieces = appendSummaryPiece(
-			pieces,
-			strings.TrimSpace(stripUserText(text[previousEnd:span.Start], opts)),
-		)
-		pieces = appendSummaryPiece(
-			pieces,
-			reorienttag.FramedTranscript(stripSummarySegments(span.Segments, opts)),
-		)
+		pieces = appendSummaryPiece(pieces, strings.TrimSpace(stripUserText(text[previousEnd:span.Start], opts)))
+		pieces = appendSummaryPiece(pieces, reorienttag.FramedTranscript(stripSummarySegments(span.Segments, opts)))
 		previousEnd = span.End
 	}
-
 	pieces = appendSummaryPiece(pieces, strings.TrimSpace(stripUserText(text[previousEnd:], opts)))
-
 	return strings.Join(pieces, summaryPieceSeparator)
 }
 
@@ -411,17 +377,14 @@ func stripSummaryText(text string, opts parseOptions) string {
 func stripSummarySegments(segments []reorienttag.Segment, opts parseOptions) []reorienttag.Segment {
 	kept := make([]reorienttag.Segment, 0, len(segments))
 	for _, segment := range segments {
-		if segment.Role == reorienttag.SegmentRoleUser &&
-			segment.Kind == reorienttag.SegmentKindChat {
+		if segment.Role == reorienttag.SegmentRoleUser && segment.Kind == reorienttag.SegmentKindChat {
 			segment.Text = stripUserText(segment.Text, opts)
 			if segment.Text == "" {
 				continue
 			}
 		}
-
 		kept = append(kept, segment)
 	}
-
 	return kept
 }
 
@@ -429,7 +392,6 @@ func appendSummaryPiece(pieces []string, piece string) []string {
 	if piece == "" {
 		return pieces
 	}
-
 	return append(pieces, piece)
 }
 
@@ -439,7 +401,10 @@ func parseSystemEntry(entry TranscriptEntry) (transcript.Message, bool) {
 	case EntrySubtypeCompactBoundary:
 		metadata = claudeBoundaryMetadata(entry.CompactMetadata)
 	case EntrySubtypeMicrocompactBoundary:
-		metadata = claudeMicrocompactMetadata(entry.MicrocompactMetadata, entry.CompactMetadata)
+		metadata = claudeMicrocompactMetadata(
+			entry.MicrocompactMetadata,
+			entry.CompactMetadata,
+		)
 	case EntrySubtypeUnspecified,
 		EntrySubtypeTurnDuration,
 		EntrySubtypeStopHookSummary,
@@ -458,7 +423,6 @@ func parseSystemEntry(entry TranscriptEntry) (transcript.Message, bool) {
 	default:
 		return emptyMessage(), false
 	}
-
 	return transcript.Message{
 		UUID:              entry.UUID,
 		ParentUUID:        entry.ParentUUID,
@@ -471,8 +435,7 @@ func parseSystemEntry(entry TranscriptEntry) (transcript.Message, bool) {
 		Thinking:          "",
 		HasTools:          false,
 		Tools:             nil,
-		Attachments:       nil,
-		TextParts:         nil,
+		Attachments:       nil, TextParts: nil,
 	}, true
 }
 
@@ -480,11 +443,9 @@ func messageVisibility(isMeta bool, transcriptOnly bool) transcript.MessageVisib
 	if isMeta {
 		return transcript.MessageVisibilityMetaOnly
 	}
-
 	if transcriptOnly {
 		return transcript.MessageVisibilityTranscriptOnly
 	}
-
 	return transcript.MessageVisibilityVisible
 }
 
@@ -514,7 +475,6 @@ func claudeBoundaryMetadata(raw json.RawMessage) *transcript.CompactionMetadata 
 	if !ok {
 		return metadata
 	}
-
 	metadata.Trigger = claudeCompactionTrigger(parsed.Trigger)
 	metadata.PreTokens = parsed.PreTokens
 	metadata.PostTokens = parsed.PostTokens
@@ -525,7 +485,6 @@ func claudeBoundaryMetadata(raw json.RawMessage) *transcript.CompactionMetadata 
 		parsed.PreTokens >= parsed.PostTokens {
 		metadata.TokensSaved = parsed.PreTokens - parsed.PostTokens
 	}
-
 	metadata.MessagesSummarized = parsed.MessagesSummarized
 	metadata.ReplacementHistoryCount = parsed.ReplacementHistoryCount
 	metadata.HeadUUID = parsed.PreservedSegment.HeadUUID
@@ -534,7 +493,6 @@ func claudeBoundaryMetadata(raw json.RawMessage) *transcript.CompactionMetadata 
 	metadata.UserContext = parsed.UserContext
 	metadata.Direction = parsed.Direction
 	metadata.PreCompactDiscoveredTools = copyStringSlice(parsed.PreCompactDiscoveredTools)
-
 	return metadata
 }
 
@@ -570,7 +528,6 @@ func claudeMicrocompactMetadata(
 			return metadata
 		}
 	}
-
 	metadata.Trigger = claudeCompactionTrigger(parsed.Trigger)
 	metadata.PreTokens = parsed.PreTokens
 	metadata.PostTokens = parsed.PostTokens
@@ -581,13 +538,13 @@ func claudeMicrocompactMetadata(
 		parsed.PreTokens >= parsed.PostTokens {
 		metadata.TokensSaved = parsed.PreTokens - parsed.PostTokens
 	}
-
 	metadata.MessagesSummarized = parsed.MessagesSummarized
 	metadata.UserContext = parsed.UserContext
 	metadata.Direction = parsed.Direction
 	metadata.CompactedToolIDs = copyStringSlice(parsed.CompactedToolIDs)
-	metadata.ClearedAttachmentUUIDs = copyStringSlice(parsed.ClearedAttachmentUUIDs)
-
+	metadata.ClearedAttachmentUUIDs = copyStringSlice(
+		parsed.ClearedAttachmentUUIDs,
+	)
 	return metadata
 }
 
@@ -598,19 +555,17 @@ func claudeSummaryMetadata(
 	text string,
 ) *transcript.CompactionMetadata {
 	metadata := &transcript.CompactionMetadata{
-		Kind:                    transcript.CompactionKindSummary,
-		Trigger:                 transcript.CompactionTriggerUnknown,
-		PreTokens:               0,
-		PostTokens:              0,
-		TokensSaved:             0,
-		MessagesSummarized:      0,
-		ReplacementHistoryCount: 0,
-		HeadUUID:                "",
-		AnchorUUID:              "",
-		TailUUID:                "",
-		ContextItems: []transcript.CompactedContextItem{
-			claudeSummaryContextItem(messageRaw, contentRaw, text),
-		},
+		Kind:                      transcript.CompactionKindSummary,
+		Trigger:                   transcript.CompactionTriggerUnknown,
+		PreTokens:                 0,
+		PostTokens:                0,
+		TokensSaved:               0,
+		MessagesSummarized:        0,
+		ReplacementHistoryCount:   0,
+		HeadUUID:                  "",
+		AnchorUUID:                "",
+		TailUUID:                  "",
+		ContextItems:              []transcript.CompactedContextItem{claudeSummaryContextItem(messageRaw, contentRaw, text)},
 		UserContext:               "",
 		Direction:                 "",
 		PreCompactDiscoveredTools: nil,
@@ -624,11 +579,9 @@ func claudeSummaryMetadata(
 	if !ok {
 		return metadata
 	}
-
 	metadata.MessagesSummarized = parsed.MessagesSummarized
 	metadata.UserContext = parsed.UserContext
 	metadata.Direction = parsed.Direction
-
 	return metadata
 }
 
@@ -649,12 +602,10 @@ func parseClaudeBoundaryMetadata(
 	if len(raw) == 0 {
 		return emptyRawClaudeBoundaryMetadata(), false
 	}
-
 	var metadata rawClaudeBoundaryMetadata
 	if err := json.Unmarshal(raw, &metadata); err != nil {
 		return emptyRawClaudeBoundaryMetadata(), false
 	}
-
 	return metadata, true
 }
 
@@ -664,12 +615,10 @@ func parseClaudeMicrocompactMetadata(
 	if len(raw) == 0 {
 		return emptyRawClaudeMicrocompactMetadata(), false
 	}
-
 	var metadata rawClaudeMicrocompactMetadata
 	if err := json.Unmarshal(raw, &metadata); err != nil {
 		return emptyRawClaudeMicrocompactMetadata(), false
 	}
-
 	return metadata, true
 }
 
@@ -679,12 +628,10 @@ func parseClaudeSummarizeMetadata(
 	if len(raw) == 0 {
 		return emptyRawClaudeSummarizeMetadata(), false
 	}
-
 	var metadata rawClaudeSummarizeMetadata
 	if err := json.Unmarshal(raw, &metadata); err != nil {
 		return emptyRawClaudeSummarizeMetadata(), false
 	}
-
 	return metadata, true
 }
 
@@ -710,7 +657,6 @@ func claudeSummaryContextItem(
 		MessageClass: transcript.CompactedMessageClassSummary,
 		Raw:          cloneRawMessage(messageRaw),
 	}
-
 	return transcript.CompactedContextItem{
 		Kind:                 transcript.CompactedContextItemKindMessage,
 		Message:              &messageItem,
@@ -735,7 +681,6 @@ func cloneRawMessage(raw json.RawMessage) json.RawMessage {
 	if len(raw) == 0 {
 		return nil
 	}
-
 	return append(json.RawMessage(nil), raw...)
 }
 
@@ -743,7 +688,6 @@ func copyStringSlice(values []string) []string {
 	if len(values) == 0 {
 		return nil
 	}
-
 	return append([]string(nil), values...)
 }
 
@@ -765,14 +709,11 @@ func decodeUserContent(raw json.RawMessage) userContent {
 	if err := json.Unmarshal(raw, &s); err == nil {
 		return userContent{Text: strings.TrimSpace(s), Results: nil}
 	}
-
 	var blocks []contentBlock
 	if err := json.Unmarshal(raw, &blocks); err != nil {
 		return userContent{Text: "", Results: nil}
 	}
-
 	content := userContent{Text: "", Results: nil}
-
 	parts := make([]string, 0, len(blocks))
 	for _, b := range blocks {
 		switch contentBlockType(b.Type) {
@@ -788,9 +729,7 @@ func decodeUserContent(raw json.RawMessage) userContent {
 			// appear.
 		}
 	}
-
 	content.Text = strings.Join(parts, "\n")
-
 	return content
 }
 
@@ -802,7 +741,6 @@ func parseAssistantBlocks(m *transcript.Message, raw json.RawMessage) {
 	}
 
 	var textParts []string
-
 	for _, b := range blocks {
 		switch contentBlockType(b.Type) {
 		case contentBlockText:
@@ -816,27 +754,23 @@ func parseAssistantBlocks(m *transcript.Message, raw json.RawMessage) {
 		case contentBlockToolUse:
 			m.HasTools = true
 			display, displayLang := toolDisplayText(b.Name, b.Input)
-			m.Tools = append(
-				m.Tools,
-				transcript.ToolCall{
-					ID:               b.ID,
-					Name:             b.Name,
-					Input:            b.Input,
-					Display:          display,
-					DisplayLang:      displayLang,
-					Output:           "",
-					IsError:          false,
-					Attachments:      nil,
-					Timestamp:        nil,
-					TimestampUnknown: false,
-				},
-			)
+			m.Tools = append(m.Tools, transcript.ToolCall{
+				ID:               b.ID,
+				Name:             b.Name,
+				Input:            b.Input,
+				Display:          display,
+				DisplayLang:      displayLang,
+				Output:           "",
+				IsError:          false,
+				Attachments:      nil,
+				Timestamp:        nil,
+				TimestampUnknown: false,
+			})
 		case contentBlockToolResult:
 			// Assistant entries should not carry tool results; the
 			// assistant aggregator ignores them if they appear.
 		}
 	}
-
 	m.Text = strings.Join(textParts, "\n\n")
 }
 
@@ -845,19 +779,16 @@ func parseAssistantBlocks(m *transcript.Message, raw json.RawMessage) {
 func stripSystemTags(s string) (string, int) {
 	count := len(systemTagRe.FindAllStringIndex(s, -1))
 	s = systemTagRe.ReplaceAllString(s, "")
-
 	for _, re := range noisePatterns {
 		count += len(re.FindAllStringIndex(s, -1))
 		s = re.ReplaceAllString(s, "")
 	}
-
 	if idx := strings.Index(s, "<"); idx == 0 {
 		if end := strings.Index(s, ">"); end > 0 && end < 80 {
 			s = s[end+1:]
 			count++
 		}
 	}
-
 	return strings.TrimSpace(s), count
 }
 
@@ -867,12 +798,10 @@ func stripSystemTags(s string) (string, int) {
 // pieces were removed.
 func stripInjectedText(s string) (string, int) {
 	count := 0
-
 	for _, re := range injectedPatterns {
 		count += len(re.FindAllStringIndex(s, -1))
 		s = re.ReplaceAllString(s, "")
 	}
-
 	// One cut at the last heading match across every heading type. Cutting
 	// per type would let an earlier quoted heading of one type delete the
 	// user text between it and a later genuine splice of the other type. When
@@ -881,7 +810,6 @@ func stripInjectedText(s string) (string, int) {
 	// retained harness text costs a junk row, a wrong cut costs a person's
 	// words.
 	lastHeading := -1
-
 	for _, headingRe := range injectedContextHeadingRes {
 		for _, match := range headingRe.FindAllStringIndex(s, -1) {
 			if match[0] > lastHeading {
@@ -889,28 +817,22 @@ func stripInjectedText(s string) (string, int) {
 			}
 		}
 	}
-
 	if lastHeading >= 0 {
 		s = s[:lastHeading]
 		count++
 	}
-
 	if strings.Contains(s, "hook feedback:") {
 		var keep []string
-
 		for line := range strings.SplitSeq(s, "\n") {
 			t := strings.TrimSpace(line)
 			if hasInjectedFeedbackPrefix(t) {
 				count++
 				continue
 			}
-
 			keep = append(keep, line)
 		}
-
 		s = strings.Join(keep, "\n")
 	}
-
 	return strings.TrimSpace(s), count
 }
 
@@ -920,6 +842,5 @@ func hasInjectedFeedbackPrefix(line string) bool {
 			return true
 		}
 	}
-
 	return false
 }

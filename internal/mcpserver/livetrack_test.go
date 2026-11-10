@@ -21,19 +21,11 @@ import (
 // after the handler returns.
 func TestToolCallMiddlewareRegistersAndReleases(t *testing.T) {
 	t.Parallel()
-	reg := livetrack.Attach[MCPMeta](
-		livetrack.NewGroup(livetrack.GroupOptions{Log: nil}),
-		livetrack.MemberSpec{
-			Phase:         livetrack.PhaseIngress,
-			QuietRelevant: true,
-			CancelNoWait:  false,
-		},
-		livetrack.Options[MCPMeta]{
-			Component: "test",
-			Concern:   "test.mcp.register",
-			PollEvery: 5 * time.Millisecond,
-		},
-	)
+	reg := livetrack.Attach[MCPMeta](livetrack.NewGroup(livetrack.GroupOptions{Log: nil}), livetrack.MemberSpec{Phase: livetrack.PhaseIngress, QuietRelevant: true, CancelNoWait: false}, livetrack.Options[MCPMeta]{
+		Component: "test",
+		Concern:   "test.mcp.register",
+		PollEvery: 5 * time.Millisecond,
+	})
 
 	var countDuringCall atomic.Int32
 	inner := func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -50,7 +42,6 @@ func TestToolCallMiddlewareRegistersAndReleases(t *testing.T) {
 	if err != nil {
 		t.Fatalf("wrapped handler: %v", err)
 	}
-
 	if result == nil {
 		t.Fatal("expected non-nil result")
 	}
@@ -70,19 +61,11 @@ func TestToolCallMiddlewareRegistersAndReleases(t *testing.T) {
 // correct tool name, op, and server name from the request and closure.
 func TestToolCallMiddlewareMetaFields(t *testing.T) {
 	t.Parallel()
-	reg := livetrack.Attach[MCPMeta](
-		livetrack.NewGroup(livetrack.GroupOptions{Log: nil}),
-		livetrack.MemberSpec{
-			Phase:         livetrack.PhaseIngress,
-			QuietRelevant: true,
-			CancelNoWait:  false,
-		},
-		livetrack.Options[MCPMeta]{
-			Component: "test",
-			Concern:   "test.mcp.meta",
-			PollEvery: 5 * time.Millisecond,
-		},
-	)
+	reg := livetrack.Attach[MCPMeta](livetrack.NewGroup(livetrack.GroupOptions{Log: nil}), livetrack.MemberSpec{Phase: livetrack.PhaseIngress, QuietRelevant: true, CancelNoWait: false}, livetrack.Options[MCPMeta]{
+		Component: "test",
+		Concern:   "test.mcp.meta",
+		PollEvery: 5 * time.Millisecond,
+	})
 
 	var capturedMeta MCPMeta
 	inner := func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -90,7 +73,6 @@ func TestToolCallMiddlewareMetaFields(t *testing.T) {
 		if len(snap) == 1 {
 			capturedMeta = snap[0].Meta
 		}
-
 		return mcp.NewToolResultText("ok"), nil
 	}
 
@@ -107,15 +89,12 @@ func TestToolCallMiddlewareMetaFields(t *testing.T) {
 	if capturedMeta.ServerName != "my-server" {
 		t.Errorf("ServerName: got %q, want %q", capturedMeta.ServerName, "my-server")
 	}
-
 	if capturedMeta.Tool != "clyde_list_conversations" {
 		t.Errorf("Tool: got %q, want %q", capturedMeta.Tool, "clyde_list_conversations")
 	}
-
 	if capturedMeta.Op != "tool_call" {
 		t.Errorf("Op: got %q, want %q", capturedMeta.Op, "tool_call")
 	}
-
 	if capturedMeta.RequestID != "rpc-1" {
 		t.Errorf("RequestID: got %q, want %q", capturedMeta.RequestID, "rpc-1")
 	}
@@ -128,7 +107,6 @@ func TestMCPHookStampsRequestID(t *testing.T) {
 	if len(hooks.OnBeforeCallTool) != 1 {
 		t.Fatalf("before call tool hooks: got %d, want 1", len(hooks.OnBeforeCallTool))
 	}
-
 	hooks.OnBeforeCallTool[0](context.Background(), float64(42), &req)
 	if got := req.Header.Get(mcpRequestIDHeader); got != "42" {
 		t.Fatalf("request id header: got %q, want %q", got, "42")
@@ -141,30 +119,18 @@ func TestMCPHookStampsRequestID(t *testing.T) {
 func TestToolCallMiddlewareRejectsWhenDraining(t *testing.T) {
 	t.Parallel()
 	group := livetrack.NewGroup(livetrack.GroupOptions{Log: nil})
-	reg := livetrack.Attach[MCPMeta](
-		group,
-		livetrack.MemberSpec{
-			Phase:         livetrack.PhaseIngress,
-			QuietRelevant: true,
-			CancelNoWait:  false,
-		},
-		livetrack.Options[MCPMeta]{
-			Component: "test",
-			Concern:   "test.mcp.reject",
-			PollEvery: 5 * time.Millisecond,
-		},
-	)
+	reg := livetrack.Attach[MCPMeta](group, livetrack.MemberSpec{Phase: livetrack.PhaseIngress, QuietRelevant: true, CancelNoWait: false}, livetrack.Options[MCPMeta]{
+		Component: "test",
+		Concern:   "test.mcp.reject",
+		PollEvery: 5 * time.Millisecond,
+	})
 
 	// Drain immediately through the lifecycle group so the registry moves to
 	// Draining and rejects new tool calls.
 	drainCtx, drainCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer drainCancel()
 	go func() {
-		group.Quiesce(
-			drainCtx,
-			"test.drain",
-			livetrack.Budget{Cap: 10 * time.Millisecond, IdleGrace: 0},
-		)
+		group.Quiesce(drainCtx, "test.drain", livetrack.Budget{Cap: 10 * time.Millisecond, IdleGrace: 0})
 	}()
 
 	// Wait until the registry is no longer Open.
@@ -173,7 +139,6 @@ func TestToolCallMiddlewareRejectsWhenDraining(t *testing.T) {
 		if reg.State() != livetrack.StateOpen {
 			break
 		}
-
 		time.Sleep(2 * time.Millisecond)
 	}
 
@@ -192,11 +157,9 @@ func TestToolCallMiddlewareRejectsWhenDraining(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when registry is draining, got nil")
 	}
-
 	if !errors.Is(err, livetrack.ErrRegistryClosed) {
 		t.Fatalf("expected ErrRegistryClosed in error chain, got: %v", err)
 	}
-
 	if innerCalled {
 		t.Fatal("inner handler should not have been called when registry is draining")
 	}
@@ -209,33 +172,24 @@ func TestToolCallMiddlewareRejectsWhenDraining(t *testing.T) {
 func TestServeStdioLockedDrainsOnExit(t *testing.T) {
 	t.Parallel()
 	group := livetrack.NewGroup(livetrack.GroupOptions{Log: nil})
-	reg := livetrack.Attach[MCPMeta](
-		group,
-		livetrack.MemberSpec{
-			Phase:         livetrack.PhaseIngress,
-			QuietRelevant: true,
-			CancelNoWait:  false,
-		},
-		livetrack.Options[MCPMeta]{
-			Component:   "test",
-			Concern:     "test.mcp.drain",
-			PollEvery:   5 * time.Millisecond,
-			CloserGrace: 200 * time.Millisecond,
-		},
-	)
+	reg := livetrack.Attach[MCPMeta](group, livetrack.MemberSpec{
+		Phase:         livetrack.PhaseIngress,
+		QuietRelevant: true,
+		CancelNoWait:  false,
+	}, livetrack.Options[MCPMeta]{
+		Component:   "test",
+		Concern:     "test.mcp.drain",
+		PollEvery:   5 * time.Millisecond,
+		CloserGrace: 200 * time.Millisecond,
+	})
 
 	// Register a long-lived tool call manually so there is something to drain.
 	closer := &testReleaseCloser{released: nil}
-	sess, err := reg.Register(
-		context.Background(),
-		"mcp.tool_call",
-		MCPMeta{
-			ServerName: "test",
-			Tool:       "fake_tool",
-			Op:         "tool_call",
-		},
-		closer,
-	)
+	sess, err := reg.Register(context.Background(), "mcp.tool_call", MCPMeta{
+		ServerName: "test",
+		Tool:       "fake_tool",
+		Op:         "tool_call",
+	}, closer)
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
@@ -249,7 +203,6 @@ func TestServeStdioLockedDrainsOnExit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("os.Pipe: %v", err)
 	}
-
 	t.Cleanup(func() {
 		_ = stdinR.Close()
 		_ = stdinW.Close()
@@ -260,15 +213,7 @@ func TestServeStdioLockedDrainsOnExit(t *testing.T) {
 
 	serveDone := make(chan error, 1)
 	go func() {
-		serveDone <- serveStdioLocked(
-			ctx,
-			mcpSrv,
-			group,
-			200*time.Millisecond,
-			stdinR,
-			&stdout,
-			func() {},
-		)
+		serveDone <- serveStdioLocked(ctx, mcpSrv, group, 200*time.Millisecond, stdinR, &stdout, func() {})
 	}()
 
 	// Cancel the context to make serveStdioLocked exit, then close stdin so
@@ -280,8 +225,7 @@ func TestServeStdioLockedDrainsOnExit(t *testing.T) {
 	select {
 	case serveErr := <-serveDone:
 		// Nil or context.Canceled are both acceptable.
-		if serveErr != nil && !errors.Is(serveErr, context.Canceled) &&
-			!errors.Is(serveErr, io.EOF) {
+		if serveErr != nil && !errors.Is(serveErr, context.Canceled) && !errors.Is(serveErr, io.EOF) {
 			t.Logf("serveStdioLocked returned: %v (non-fatal)", serveErr)
 		}
 	case <-time.After(5 * time.Second):
@@ -293,12 +237,10 @@ func TestServeStdioLockedDrainsOnExit(t *testing.T) {
 	if reg.Count() != 0 {
 		t.Fatalf("registry count after drain: got %d, want 0", reg.Count())
 	}
-
 	// The closer must have been called exactly once.
 	if closer.count.Load() != 1 {
 		t.Fatalf("closer call count: got %d, want 1", closer.count.Load())
 	}
-
 	// The entry was already removed by force-close so Release is a no-op.
 	reg.Release(context.Background(), sess, "test.cleanup")
 }
@@ -310,20 +252,12 @@ func TestServeStdioLockedDrainsOnExit(t *testing.T) {
 func TestForceCloseOnDeadlineCancelsHandlerContext(t *testing.T) {
 	t.Parallel()
 	group := livetrack.NewGroup(livetrack.GroupOptions{Log: nil})
-	reg := livetrack.Attach[MCPMeta](
-		group,
-		livetrack.MemberSpec{
-			Phase:         livetrack.PhaseIngress,
-			QuietRelevant: true,
-			CancelNoWait:  false,
-		},
-		livetrack.Options[MCPMeta]{
-			Component:   "test",
-			Concern:     "test.mcp.forceclose",
-			PollEvery:   5 * time.Millisecond,
-			CloserGrace: 500 * time.Millisecond,
-		},
-	)
+	reg := livetrack.Attach[MCPMeta](group, livetrack.MemberSpec{Phase: livetrack.PhaseIngress, QuietRelevant: true, CancelNoWait: false}, livetrack.Options[MCPMeta]{
+		Component:   "test",
+		Concern:     "test.mcp.forceclose",
+		PollEvery:   5 * time.Millisecond,
+		CloserGrace: 500 * time.Millisecond,
+	})
 
 	// handlerExited signals when the (simulated) handler observes context
 	// cancellation.
@@ -333,16 +267,11 @@ func TestForceCloseOnDeadlineCancelsHandlerContext(t *testing.T) {
 	handlerCtx, handlerCancel := context.WithCancel(context.Background())
 	closer := &contextCancelCloser{cancel: handlerCancel}
 
-	sess, err := reg.Register(
-		context.Background(),
-		"mcp.tool_call",
-		MCPMeta{
-			ServerName: "test",
-			Tool:       "blocking_tool",
-			Op:         "tool_call",
-		},
-		closer,
-	)
+	sess, err := reg.Register(context.Background(), "mcp.tool_call", MCPMeta{
+		ServerName: "test",
+		Tool:       "blocking_tool",
+		Op:         "tool_call",
+	}, closer)
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
@@ -359,11 +288,7 @@ func TestForceCloseOnDeadlineCancelsHandlerContext(t *testing.T) {
 	// force-close count is unit-tested in livetrack/drain_test.go.
 	drainCtx, drainCancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer drainCancel()
-	group.Quiesce(
-		drainCtx,
-		"test.forceclose",
-		livetrack.Budget{Cap: 10 * time.Millisecond, IdleGrace: 0},
-	)
+	group.Quiesce(drainCtx, "test.forceclose", livetrack.Budget{Cap: 10 * time.Millisecond, IdleGrace: 0})
 
 	// The handler goroutine should have observed the cancellation.
 	select {
@@ -388,6 +313,5 @@ func (c *testReleaseCloser) Close(_ string) error {
 	if c.count.Add(1) == 1 && c.released != nil {
 		close(c.released)
 	}
-
 	return nil
 }

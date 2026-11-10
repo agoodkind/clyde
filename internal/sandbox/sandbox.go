@@ -53,21 +53,9 @@ type Roots struct {
 func NewRoots() (Roots, error) {
 	base, err := os.MkdirTemp(RootParent, RootPattern)
 	if err != nil {
-		slog.Error(
-			"sandbox.roots.create_failed",
-			"concern",
-			"process.daemon.lifecycle",
-			"component",
-			"sandbox",
-			"parent",
-			RootParent,
-			"err",
-			err,
-		)
-
+		slog.Error("sandbox.roots.create_failed", "concern", "process.daemon.lifecycle", "component", "sandbox", "parent", RootParent, "err", err)
 		return Roots{}, fmt.Errorf("create the sandbox root directory: %w", err)
 	}
-
 	roots := Roots{
 		Base:    base,
 		State:   filepath.Join(base, stateDirName),
@@ -77,33 +65,12 @@ func NewRoots() (Roots, error) {
 	}
 	for _, dir := range []string{roots.State, roots.Config, roots.Cache, roots.Runtime} {
 		if mkErr := os.MkdirAll(dir, rootDirMode); mkErr != nil {
-			slog.Error(
-				"sandbox.roots.create_failed",
-				"concern",
-				"process.daemon.lifecycle",
-				"component",
-				"sandbox",
-				"path",
-				dir,
-				"err",
-				mkErr,
-			)
+			slog.Error("sandbox.roots.create_failed", "concern", "process.daemon.lifecycle", "component", "sandbox", "path", dir, "err", mkErr)
 			_ = os.RemoveAll(base)
-
 			return Roots{}, fmt.Errorf("create the sandbox directory %s: %w", dir, mkErr)
 		}
 	}
-
-	slog.Debug(
-		"sandbox.roots.created",
-		"concern",
-		"process.daemon.lifecycle",
-		"component",
-		"sandbox",
-		"base",
-		base,
-	)
-
+	slog.Debug("sandbox.roots.created", "concern", "process.daemon.lifecycle", "component", "sandbox", "base", base)
 	return roots, nil
 }
 
@@ -111,62 +78,21 @@ func NewRoots() (Roots, error) {
 func ExistingRoots(base string) (Roots, error) {
 	clean := filepath.Clean(base)
 	if !UnderTempRoot(clean) || !strings.HasPrefix(filepath.Base(clean), RootPattern) {
-		err := fmt.Errorf(
-			"sandbox root %s must be under %s with name prefix %s",
-			base,
-			RootParent,
-			RootPattern,
-		)
-		slog.Error(
-			"sandbox.roots.reuse_rejected",
-			"concern",
-			"process.daemon.lifecycle",
-			"component",
-			"sandbox",
-			"base",
-			base,
-			"err",
-			err,
-		)
-
+		err := fmt.Errorf("sandbox root %s must be under %s with name prefix %s", base, RootParent, RootPattern)
+		slog.Error("sandbox.roots.reuse_rejected", "concern", "process.daemon.lifecycle", "component", "sandbox", "base", base, "err", err)
 		return Roots{}, err
 	}
-
 	info, err := os.Stat(clean)
 	if err != nil {
 		failure := fmt.Errorf("sandbox root %s is not an existing directory: %w", base, err)
-		slog.Error(
-			"sandbox.roots.reuse_missing",
-			"concern",
-			"process.daemon.lifecycle",
-			"component",
-			"sandbox",
-			"base",
-			base,
-			"err",
-			failure,
-		)
-
+		slog.Error("sandbox.roots.reuse_missing", "concern", "process.daemon.lifecycle", "component", "sandbox", "base", base, "err", failure)
 		return Roots{}, failure
 	}
-
 	if !info.IsDir() {
 		failure := fmt.Errorf("sandbox root %s is not an existing directory", base)
-		slog.Error(
-			"sandbox.roots.reuse_missing",
-			"concern",
-			"process.daemon.lifecycle",
-			"component",
-			"sandbox",
-			"base",
-			base,
-			"err",
-			failure,
-		)
-
+		slog.Error("sandbox.roots.reuse_missing", "concern", "process.daemon.lifecycle", "component", "sandbox", "base", base, "err", failure)
 		return Roots{}, failure
 	}
-
 	roots := Roots{
 		Base:    clean,
 		State:   filepath.Join(clean, stateDirName),
@@ -176,32 +102,11 @@ func ExistingRoots(base string) (Roots, error) {
 	}
 	for _, dir := range []string{roots.State, roots.Config, roots.Cache, roots.Runtime} {
 		if mkErr := os.MkdirAll(dir, rootDirMode); mkErr != nil {
-			slog.Error(
-				"sandbox.roots.create_failed",
-				"concern",
-				"process.daemon.lifecycle",
-				"component",
-				"sandbox",
-				"path",
-				dir,
-				"err",
-				mkErr,
-			)
-
+			slog.Error("sandbox.roots.create_failed", "concern", "process.daemon.lifecycle", "component", "sandbox", "path", dir, "err", mkErr)
 			return Roots{}, fmt.Errorf("create sandbox subdirectory %s: %w", dir, mkErr)
 		}
 	}
-
-	slog.Debug(
-		"sandbox.roots.reused",
-		"concern",
-		"process.daemon.lifecycle",
-		"component",
-		"sandbox",
-		"base",
-		clean,
-	)
-
+	slog.Debug("sandbox.roots.reused", "concern", "process.daemon.lifecycle", "component", "sandbox", "base", clean)
 	return roots, nil
 }
 
@@ -225,7 +130,6 @@ func ExportLine(roots Roots) string {
 	for _, variable := range Env(roots) {
 		parts = append(parts, variable.Name+"="+variable.Value)
 	}
-
 	return strings.Join(parts, " ")
 }
 
@@ -256,50 +160,17 @@ var inheritedPathVars = []string{
 func Apply(roots Roots) error {
 	for _, name := range inheritedPathVars {
 		if err := os.Unsetenv(name); err != nil {
-			slog.Error(
-				"sandbox.env.clear_failed",
-				"concern",
-				"process.daemon.lifecycle",
-				"component",
-				"sandbox",
-				"name",
-				name,
-				"err",
-				err,
-			)
-
+			slog.Error("sandbox.env.clear_failed", "concern", "process.daemon.lifecycle", "component", "sandbox", "name", name, "err", err)
 			return fmt.Errorf("clear inherited override %s: %w", name, err)
 		}
 	}
-
 	for _, variable := range Env(roots) {
 		if err := os.Setenv(variable.Name, variable.Value); err != nil {
-			slog.Error(
-				"sandbox.env.set_failed",
-				"concern",
-				"process.daemon.lifecycle",
-				"component",
-				"sandbox",
-				"name",
-				variable.Name,
-				"err",
-				err,
-			)
-
+			slog.Error("sandbox.env.set_failed", "concern", "process.daemon.lifecycle", "component", "sandbox", "name", variable.Name, "err", err)
 			return fmt.Errorf("set %s: %w", variable.Name, err)
 		}
 	}
-
-	slog.Debug(
-		"sandbox.env.applied",
-		"concern",
-		"process.daemon.lifecycle",
-		"component",
-		"sandbox",
-		"base",
-		roots.Base,
-	)
-
+	slog.Debug("sandbox.env.applied", "concern", "process.daemon.lifecycle", "component", "sandbox", "base", roots.Base)
 	return nil
 }
 
@@ -309,22 +180,10 @@ func PreflightRoots(roots Roots) error {
 	for _, root := range []string{roots.Base, roots.State, roots.Config, roots.Cache, roots.Runtime} {
 		if !UnderTempRoot(root) {
 			err := fmt.Errorf("sandbox root %q is not a temp directory", root)
-			slog.Error(
-				"sandbox.preflight.root_rejected",
-				"concern",
-				"process.daemon.lifecycle",
-				"component",
-				"sandbox",
-				"path",
-				root,
-				"err",
-				err,
-			)
-
+			slog.Error("sandbox.preflight.root_rejected", "concern", "process.daemon.lifecycle", "component", "sandbox", "path", root, "err", err)
 			return err
 		}
 	}
-
 	return nil
 }
 
@@ -333,13 +192,11 @@ func PreflightRoots(roots Roots) error {
 // substring is not mistaken for a throwaway one.
 func UnderTempRoot(path string) bool {
 	clean := filepath.Clean(path)
-
 	for _, root := range tempRoots() {
 		if clean == root || strings.HasPrefix(clean, root+string(os.PathSeparator)) {
 			return true
 		}
 	}
-
 	return false
 }
 
@@ -350,6 +207,5 @@ func tempRoots() []string {
 	if osTemp := filepath.Clean(os.TempDir()); osTemp != "" && osTemp != "." {
 		roots = append(roots, osTemp)
 	}
-
 	return roots
 }

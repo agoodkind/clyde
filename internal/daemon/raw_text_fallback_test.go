@@ -38,35 +38,15 @@ enabled_default = false
 func writeRawTextTranscript(t *testing.T, path string, session string, minute int) {
 	t.Helper()
 	record := func(index int, role string, body string) string {
-		head := fmt.Sprintf(
-			`"sessionId":%q,"cwd":"/repo","uuid":"%02d%06d-0000-4000-8000-000000000000","timestamp":"2026-07-01T12:%02d:%02dZ"`,
-			session,
-			minute,
-			index,
-			minute,
-			index,
-		)
+		head := fmt.Sprintf(`"sessionId":%q,"cwd":"/repo","uuid":"%02d%06d-0000-4000-8000-000000000000","timestamp":"2026-07-01T12:%02d:%02dZ"`, session, minute, index, minute, index)
 		if role == "user" {
-			return fmt.Sprintf(
-				`{"type":"user","message":{"role":"user","content":%q},%s}`,
-				body,
-				head,
-			)
+			return fmt.Sprintf(`{"type":"user","message":{"role":"user","content":%q},%s}`, body, head)
 		}
-
-		return fmt.Sprintf(
-			`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":%q}]},%s}`,
-			body,
-			head,
-		)
+		return fmt.Sprintf(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":%q}]},%s}`, body, head)
 	}
 	lines := []string{
 		record(0, "user", "why does the listener rebind on reload"),
-		record(
-			1,
-			"assistant",
-			"The Watcher classifies the CONFIG change before the daemon rebinds.",
-		),
+		record(1, "assistant", "The Watcher classifies the CONFIG change before the daemon rebinds."),
 	}
 	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatalf("write transcript: %v", err)
@@ -82,54 +62,29 @@ func startRawTextDaemon(t *testing.T, daemonConfig string) string {
 	if err != nil {
 		t.Fatalf("create sandbox roots: %v", err)
 	}
-
 	t.Cleanup(func() { _ = os.RemoveAll(roots.Base) })
-
 	for _, variable := range sandbox.Env(roots) {
 		t.Setenv(variable.Name, variable.Value)
 	}
-
 	home := filepath.Join(roots.Base, "home")
 	projectDir := filepath.Join(home, ".claude", "projects", "-repo")
 	if err := os.MkdirAll(projectDir, 0o755); err != nil {
 		t.Fatalf("create project dir: %v", err)
 	}
-
-	writeRawTextTranscript(
-		t,
-		filepath.Join(projectDir, rawTextReadableSession+".jsonl"),
-		rawTextReadableSession,
-		0,
-	)
-	writeRawTextTranscript(
-		t,
-		filepath.Join(projectDir, rawTextUnreadableSession+".jsonl"),
-		rawTextUnreadableSession,
-		1,
-	)
+	writeRawTextTranscript(t, filepath.Join(projectDir, rawTextReadableSession+".jsonl"), rawTextReadableSession, 0)
+	writeRawTextTranscript(t, filepath.Join(projectDir, rawTextUnreadableSession+".jsonl"), rawTextUnreadableSession, 1)
 	t.Setenv("HOME", home)
-
-	for _, name := range []string{
-		"CODEX_HOME",
-		"CODEX_SQLITE_HOME",
-		"CLYDE_CURSOR_PROJECTS_DIRS",
-		"CLYDE_CURSOR_DATA_DIRS",
-		"CLYDE_ZED_DATA_DIRS",
-		"COPILOT_HOME",
-	} {
+	for _, name := range []string{"CODEX_HOME", "CODEX_SQLITE_HOME", "CLYDE_CURSOR_PROJECTS_DIRS", "CLYDE_CURSOR_DATA_DIRS", "CLYDE_ZED_DATA_DIRS", "COPILOT_HOME"} {
 		directory := filepath.Join(roots.Base, "providers", name)
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			t.Fatalf("create %s: %v", directory, err)
 		}
-
 		t.Setenv(name, directory)
 	}
-
 	configPath := filepath.Join(roots.Config, "clyde", "config.toml")
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
 		t.Fatalf("create config dir: %v", err)
 	}
-
 	if err := os.WriteFile(configPath, []byte(daemonConfig), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -150,7 +105,6 @@ func startRawTextDaemon(t *testing.T, daemonConfig string) string {
 			t.Error("daemon did not stop")
 		}
 	})
-
 	return projectDir
 }
 
@@ -158,21 +112,17 @@ func startRawTextDaemon(t *testing.T, daemonConfig string) string {
 // returns want matches. An error other than Unavailable fails the test at once.
 func waitForFirstMatches(t *testing.T, options conversation.SearchConversationsOptions, want int) {
 	t.Helper()
-
 	deadline := time.Now().Add(rawTextSearchTimeout)
 	for time.Now().Before(deadline) {
 		result, err := daemon.SearchConversations(context.Background(), options)
 		if err != nil && status.Code(err) != codes.Unavailable {
 			t.Fatalf("SearchConversations: %v", err)
 		}
-
 		if err == nil && len(result.Matches) == want {
 			return
 		}
-
 		time.Sleep(rawTextPollInterval)
 	}
-
 	t.Fatalf("SearchConversations did not return %d matches within %s", want, rawTextSearchTimeout)
 }
 
@@ -188,7 +138,6 @@ func TestSearchFallsBackToRawTextWhenSemanticSearchIsDisabled(t *testing.T) {
 	if err := os.Remove(unreadable); err != nil {
 		t.Fatalf("remove transcript: %v", err)
 	}
-
 	if err := os.Mkdir(unreadable, 0o700); err != nil {
 		t.Fatalf("replace transcript with a directory: %v", err)
 	}
@@ -197,42 +146,28 @@ func TestSearchFallsBackToRawTextWhenSemanticSearchIsDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SearchConversations with an unreadable transcript: %v", err)
 	}
-
 	if len(result.Matches) != 1 {
 		t.Fatalf("matches = %d, want 1", len(result.Matches))
 	}
-
 	if result.Source != conversation.SearchSourceRawText {
 		t.Fatalf("source = %v, want raw_text", result.Source)
 	}
-
 	match := result.Matches[0]
 	if match.Record.NativeID != rawTextReadableSession {
 		t.Fatalf("match conversation = %q, want %q", match.Record.NativeID, rawTextReadableSession)
 	}
-
 	if match.MessageIndex != 1 || match.Role != "assistant" {
-		t.Fatalf(
-			"match = index %d role %q, want index 1 role assistant",
-			match.MessageIndex,
-			match.Role,
-		)
+		t.Fatalf("match = index %d role %q, want index 1 role assistant", match.MessageIndex, match.Role)
 	}
-
 	if !strings.Contains(match.Snippet, "classifies the CONFIG change") {
 		t.Fatalf("snippet = %q, want the matched assistant text", match.Snippet)
 	}
-
 	if result.HasMore {
 		t.Fatal("HasMore = true, want false")
 	}
 
 	options.Cursor = "opaque-cursor"
-	if _, err := daemon.SearchConversations(context.Background(), options); err == nil ||
-		!strings.Contains(err.Error(), "conversation_search_disabled") {
-		t.Fatalf(
-			"SearchConversations with a cursor returned %v, want the disabled search error",
-			err,
-		)
+	if _, err := daemon.SearchConversations(context.Background(), options); err == nil || !strings.Contains(err.Error(), "conversation_search_disabled") {
+		t.Fatalf("SearchConversations with a cursor returned %v, want the disabled search error", err)
 	}
 }

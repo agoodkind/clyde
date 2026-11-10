@@ -50,7 +50,6 @@ func (h *rolloutHistory) currentWindow() []json.RawMessage {
 	if h == nil {
 		return nil
 	}
-
 	return h.window
 }
 
@@ -59,7 +58,6 @@ func (h *rolloutHistory) lastCompactionWindow() []json.RawMessage {
 	if h == nil {
 		return nil
 	}
-
 	return h.lastWindow
 }
 
@@ -70,7 +68,6 @@ func (h *rolloutHistory) record(envelope historyLine) {
 	if h == nil {
 		return
 	}
-
 	switch historyEnvelopeType(envelope.Type) {
 	case historyEnvelopeResponseItem:
 		h.window = append(h.window, envelope.Payload)
@@ -111,41 +108,31 @@ func InjectedTranscriptIndexes(rawItem json.RawMessage) []int {
 	if json.Unmarshal(rawItem, &item) != nil {
 		return nil
 	}
-
 	indexes := make([]int, 0, 1)
-
 	for index, kind := range item.Metadata.ContentItemKinds {
 		if kind != nil && *kind == InjectedTranscriptContentKind {
 			indexes = append(indexes, index)
 		}
 	}
-
 	return indexes
 }
 
 // annotateInjectedTranscripts annotates output_text parts at marked indexes on
 // assistant messages. An unmarked item stays ordinary unless the resolver
 // proves that Clyde generated its text.
-func annotateInjectedTranscripts(
-	items []transcript.CompactedContextItem,
-	timestamp time.Time,
-	opts HistoryOptions,
-) {
+func annotateInjectedTranscripts(items []transcript.CompactedContextItem, timestamp time.Time, opts HistoryOptions) {
 	for _, item := range items {
 		if item.Kind != transcript.CompactedContextItemKindMessage ||
 			item.Message == nil ||
 			item.Message.Role != injectedTranscriptRole {
 			continue
 		}
-
 		indexes := InjectedTranscriptIndexes(item.Message.Raw)
 		for _, index := range indexes {
-			if index < len(item.Message.Content) &&
-				item.Message.Content[index].Type == injectedTranscriptContentType {
+			if index < len(item.Message.Content) && item.Message.Content[index].Type == injectedTranscriptContentType {
 				annotateInjectedTranscript(item.Message, index, timestamp, opts)
 			}
 		}
-
 		if len(indexes) == 0 && compactedMessageQuotesTranscript(item.Message) {
 			annotateUnmarkedTranscript(item.Message, timestamp, opts)
 		}
@@ -153,78 +140,49 @@ func annotateInjectedTranscripts(
 }
 
 func compactedMessageQuotesTranscript(message *transcript.CompactedMessageItem) bool {
-	return slices.ContainsFunc(
-		message.Content,
-		func(content transcript.CompactedMessageContentItem) bool {
-			return strings.Contains(content.Text, reorienttag.PreCompactionTranscriptOpen)
-		},
-	)
+	return slices.ContainsFunc(message.Content, func(content transcript.CompactedMessageContentItem) bool {
+		return strings.Contains(content.Text, reorienttag.PreCompactionTranscriptOpen)
+	})
 }
 
 // annotateInjectedTranscript attaches framed spans from the part or spans from
 // the resolver. It sets UnresolvedTranscript when both fail because the marker
 // proves that Clyde generated the part.
-func annotateInjectedTranscript(
-	message *transcript.CompactedMessageItem,
-	index int,
-	timestamp time.Time,
-	opts HistoryOptions,
-) {
+func annotateInjectedTranscript(message *transcript.CompactedMessageItem, index int, timestamp time.Time, opts HistoryOptions) {
 	content := &message.Content[index]
 	spans := reorienttag.CompleteTranscriptSpans(content.Text)
 	if len(spans) > 0 {
 		content.TranscriptSpans = spans
 		return
 	}
-
-	resolved, hasTranscript := resolveTranscript(
-		message.Raw,
-		timestamp,
-		opts,
-		opts.history.currentWindow(),
-		index,
-	)
-	if hasTranscript && resolved.PartIndex == index && len(resolved.Spans) > 0 {
+	resolved, ok := resolveTranscript(message.Raw, timestamp, opts, opts.history.currentWindow(), index)
+	if ok && resolved.PartIndex == index && len(resolved.Spans) > 0 {
 		content.TranscriptSpans = resolved.Spans
 		return
 	}
-
 	content.UnresolvedTranscript = true
 }
 
 // annotateUnmarkedTranscript calls the resolver for an unmarked assistant
 // item. It sets TranscriptSpans or UnresolvedTranscript only when the resolver
 // proves generated text.
-func annotateUnmarkedTranscript(
-	message *transcript.CompactedMessageItem,
-	timestamp time.Time,
-	opts HistoryOptions,
-) {
+func annotateUnmarkedTranscript(message *transcript.CompactedMessageItem, timestamp time.Time, opts HistoryOptions) {
 	resolved, ok := resolveTranscript(message.Raw, timestamp, opts, nil, unmarkedPartIndex)
 	if !ok || resolved.PartIndex < 0 || resolved.PartIndex >= len(message.Content) {
 		return
 	}
-
 	content := &message.Content[resolved.PartIndex]
 	if len(resolved.Spans) == 0 {
 		content.UnresolvedTranscript = true
 		return
 	}
-
 	content.TranscriptSpans = resolved.Spans
 }
 
-func resolveTranscript(
-	raw json.RawMessage,
-	timestamp time.Time,
-	opts HistoryOptions,
-	window []json.RawMessage,
-	markedIndex int,
-) (UnmarkedTranscript, bool) {
+func resolveTranscript(raw json.RawMessage, timestamp time.Time, opts HistoryOptions, window []json.RawMessage, markedIndex int) (UnmarkedTranscript, bool) {
 	if opts.ResolveUnmarked == nil {
 		return UnmarkedTranscript{PartIndex: 0, Start: 0, Spans: nil}, false
 	}
-
 	return opts.ResolveUnmarked(TranscriptRequest{
 		RawItem:     raw,
 		Timestamp:   timestamp,
@@ -235,145 +193,80 @@ func resolveTranscript(
 
 // transcriptTextParts returns ordered text parts for an assistant item with a
 // marked part or resolver proof. It returns nil for every other item.
-func transcriptTextParts(
-	raw json.RawMessage,
-	payload responsePayload,
-	timestamp time.Time,
-	opts HistoryOptions,
-) []transcript.MessageTextPart {
+func transcriptTextParts(raw json.RawMessage, payload responsePayload, timestamp time.Time, opts HistoryOptions) []transcript.MessageTextPart {
 	if payload.Role != injectedTranscriptRole {
 		return nil
 	}
-
 	indexes := InjectedTranscriptIndexes(raw)
 	if len(indexes) > 0 {
 		return markedTextParts(raw, payload, indexes, timestamp, opts)
 	}
-
-	if !strings.Contains(
-		concatenatedOutputText(payload.Content),
-		reorienttag.PreCompactionTranscriptOpen,
-	) {
+	if !strings.Contains(concatenatedOutputText(payload.Content), reorienttag.PreCompactionTranscriptOpen) {
 		return nil
 	}
-
 	resolved, ok := resolveTranscript(raw, timestamp, opts, nil, unmarkedPartIndex)
 	if !ok || resolved.PartIndex < 0 || resolved.PartIndex >= len(payload.Content) {
 		return nil
 	}
-
 	return recoveredTextParts(payload.Content, resolved)
 }
 
 // markedTextParts returns the ordered output_text parts and flags each part at
 // a marked index. Each marked part stores spans from its frames or the
 // resolver.
-func markedTextParts(
-	raw json.RawMessage,
-	payload responsePayload,
-	indexes []int,
-	timestamp time.Time,
-	opts HistoryOptions,
-) []transcript.MessageTextPart {
+func markedTextParts(raw json.RawMessage, payload responsePayload, indexes []int, timestamp time.Time, opts HistoryOptions) []transcript.MessageTextPart {
 	parts := make([]transcript.MessageTextPart, 0, len(payload.Content))
 	hasMarkedPart := false
-
 	for index, part := range payload.Content {
 		if part.Type != injectedTranscriptContentType {
 			continue
 		}
-
 		marked := slices.Contains(indexes, index)
 		hasMarkedPart = hasMarkedPart || marked
-		textPart := transcript.MessageTextPart{
-			Text:               part.Text,
-			InjectedTranscript: marked,
-			TranscriptSpans:    nil,
-		}
+		textPart := transcript.MessageTextPart{Text: part.Text, InjectedTranscript: marked, TranscriptSpans: nil}
 		if marked {
 			textPart.TranscriptSpans = markedPartSpans(raw, part.Text, index, timestamp, opts)
 		}
-
 		parts = append(parts, textPart)
 	}
-
 	if !hasMarkedPart {
 		return nil
 	}
-
 	return parts
 }
 
-func markedPartSpans(
-	raw json.RawMessage,
-	text string,
-	index int,
-	timestamp time.Time,
-	opts HistoryOptions,
-) []reorienttag.TranscriptSpan {
+func markedPartSpans(raw json.RawMessage, text string, index int, timestamp time.Time, opts HistoryOptions) []reorienttag.TranscriptSpan {
 	if spans := reorienttag.CompleteTranscriptSpans(text); len(spans) > 0 {
 		return spans
 	}
-
-	resolved, hasTranscript := resolveTranscript(
-		raw,
-		timestamp,
-		opts,
-		opts.history.lastCompactionWindow(),
-		index,
-	)
-	if !hasTranscript || resolved.PartIndex != index {
+	resolved, ok := resolveTranscript(raw, timestamp, opts, opts.history.lastCompactionWindow(), index)
+	if !ok || resolved.PartIndex != index {
 		return nil
 	}
-
 	return resolved.Spans
 }
 
 // recoveredTextParts splits the resolved part at the generated text boundary.
 // Text before that boundary stays ordinary.
-func recoveredTextParts(
-	content []contentPart,
-	resolved UnmarkedTranscript,
-) []transcript.MessageTextPart {
+func recoveredTextParts(content []contentPart, resolved UnmarkedTranscript) []transcript.MessageTextPart {
 	parts := make([]transcript.MessageTextPart, 0, len(content)+1)
 	for index, part := range content {
 		if part.Type != injectedTranscriptContentType {
 			continue
 		}
-
 		if index != resolved.PartIndex {
-			parts = append(
-				parts,
-				transcript.MessageTextPart{
-					Text:               part.Text,
-					InjectedTranscript: false,
-					TranscriptSpans:    nil,
-				},
-			)
+			parts = append(parts, transcript.MessageTextPart{Text: part.Text, InjectedTranscript: false, TranscriptSpans: nil})
 			continue
 		}
-
 		if resolved.Start > 0 {
-			parts = append(
-				parts,
-				transcript.MessageTextPart{
-					Text:               part.Text[:resolved.Start],
-					InjectedTranscript: false,
-					TranscriptSpans:    nil,
-				},
-			)
+			parts = append(parts, transcript.MessageTextPart{Text: part.Text[:resolved.Start], InjectedTranscript: false, TranscriptSpans: nil})
 		}
-
-		parts = append(
-			parts,
-			transcript.MessageTextPart{
-				Text:               part.Text[resolved.Start:],
-				InjectedTranscript: true,
-				TranscriptSpans:    shiftedSpans(resolved.Spans, resolved.Start),
-			},
-		)
+		parts = append(parts, transcript.MessageTextPart{
+			Text:               part.Text[resolved.Start:],
+			InjectedTranscript: true,
+			TranscriptSpans:    shiftedSpans(resolved.Spans, resolved.Start),
+		})
 	}
-
 	return parts
 }
 
@@ -384,7 +277,6 @@ func shiftedSpans(spans []reorienttag.TranscriptSpan, offset int) []reorienttag.
 		span.End -= offset
 		shifted = append(shifted, span)
 	}
-
 	return shifted
 }
 
@@ -402,10 +294,8 @@ func (h *heldAgentMessage) flush(yield func(HistoryMessage, error) bool) bool {
 	if h.message == nil {
 		return true
 	}
-
 	message := *h.message
 	h.message = nil
-
 	return yield(message, nil)
 }
 
@@ -416,39 +306,27 @@ func (h *heldAgentMessage) applyMarkedResponseItem(envelope historyLine, opts Hi
 	if h.message == nil || historyEnvelopeType(envelope.Type) != historyEnvelopeResponseItem {
 		return
 	}
-
 	var payload responsePayload
 	if json.Unmarshal(envelope.Payload, &payload) != nil ||
 		responseItemType(payload.Type) != responseItemMessageType {
 		return
 	}
-
-	parts := transcriptTextParts(
-		envelope.Payload,
-		payload,
-		parseCodexTime(envelope.Timestamp),
-		opts,
-	)
+	parts := transcriptTextParts(envelope.Payload, payload, parseCodexTime(envelope.Timestamp), opts)
 	if len(parts) == 0 {
 		return
 	}
-
-	if strings.TrimSpace(h.message.Text) == strings.TrimSpace(
-		concatenatedOutputText(payload.Content),
-	) {
+	if strings.TrimSpace(h.message.Text) == strings.TrimSpace(concatenatedOutputText(payload.Content)) {
 		h.message.TextParts = parts
 	}
 }
 
 func concatenatedOutputText(parts []contentPart) string {
 	var builder strings.Builder
-
 	for _, part := range parts {
 		if part.Type == injectedTranscriptContentType {
 			builder.WriteString(part.Text)
 		}
 	}
-
 	return builder.String()
 }
 
@@ -456,11 +334,9 @@ func envelopeIsAgentMessage(envelope historyLine) bool {
 	if historyEnvelopeType(envelope.Type) != historyEnvelopeEventMsg {
 		return false
 	}
-
 	var payload eventPayload
 	if json.Unmarshal(envelope.Payload, &payload) != nil {
 		return false
 	}
-
 	return eventMessageType(payload.Type) == eventMessageTypeAgent
 }

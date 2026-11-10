@@ -146,99 +146,63 @@ func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 	if err := validateAdapterCoreConfig(cfg); err != nil {
 		return nil, err
 	}
-
 	if err := validateAdapterLogprobs(cfg.Logprobs); err != nil {
 		return nil, err
 	}
-
 	registry := &Registry{
-		exact:      make(map[string]registryRecord),
-		advertised: make(map[string]ResolvedAlias),
-		passthroughOverrides: make(
-			map[string]config.AdapterPassthroughOverride,
-			len(cfg.PassthroughOverrides),
-		),
-		routes:       make([]routeRule, 0, len(cfg.ModelRoutes)),
-		defaultModel: strings.TrimSpace(cfg.DefaultModel),
-		openAICompat: cfg.OpenAICompatPassthrough,
-		loadedUnix:   clock.Now().Unix(),
+		exact:                make(map[string]registryRecord),
+		advertised:           make(map[string]ResolvedAlias),
+		passthroughOverrides: make(map[string]config.AdapterPassthroughOverride, len(cfg.PassthroughOverrides)),
+		routes:               make([]routeRule, 0, len(cfg.ModelRoutes)),
+		defaultModel:         strings.TrimSpace(cfg.DefaultModel),
+		openAICompat:         cfg.OpenAICompatPassthrough,
+		loadedUnix:           clock.Now().Unix(),
 	}
 	for name, passthrough := range cfg.PassthroughOverrides {
 		registry.passthroughOverrides[strings.ToLower(strings.TrimSpace(name))] = passthrough
 	}
-
 	for _, canonicalID := range slices.Sorted(maps.Keys(cfg.Models)) {
 		declaration := cfg.Models[canonicalID]
 		profile, ok := cfg.ModelProfiles[strings.TrimSpace(declaration.Profile)]
 		if !ok {
-			return nil, fmt.Errorf(
-				"adapter: model %q references unknown profile %q",
-				canonicalID,
-				declaration.Profile,
-			)
+			return nil, fmt.Errorf("adapter: model %q references unknown profile %q", canonicalID, declaration.Profile)
 		}
-
 		if err := registry.addDeclaration(cfg, canonicalID, declaration, profile); err != nil {
 			return nil, err
 		}
 	}
-
 	if registry.defaultModel != "" {
 		if _, ok := registry.exact[modelKey(registry.defaultModel)]; !ok {
-			return nil, fmt.Errorf(
-				"adapter: default_model %q is not an exact model or alias",
-				registry.defaultModel,
-			)
+			return nil, fmt.Errorf("adapter: default_model %q is not an exact model or alias", registry.defaultModel)
 		}
 	}
-
 	for index, configured := range cfg.ModelRoutes {
 		if _, err := path.Match(configured.Match, "model"); err != nil {
-			wrapped := fmt.Errorf(
-				"adapter: model route %d has invalid glob %q: %w",
-				index,
-				configured.Match,
-				err,
-			)
+			wrapped := fmt.Errorf("adapter: model route %d has invalid glob %q: %w", index, configured.Match, err)
 			modelResolveLog.Logger().Warn(
 				"adapter.registry.route_glob_invalid",
-				"route_index",
-				index,
-				"pattern",
-				configured.Match,
-				"err",
-				wrapped,
+				"route_index", index,
+				"pattern", configured.Match,
+				"err", wrapped,
 			)
-
 			return nil, wrapped
 		}
-
-		registry.routes = append(
-			registry.routes,
-			routeRule{
-				pattern:         configured.Match,
-				surfaces:        append([]IngressSurface(nil), configured.Surfaces...),
-				provider:        backendForProvider(configured.Provider),
-				providerEnabled: providerEnabled(cfg, configured.Provider),
-				wireProfile:     defaultWireProfile(cfg, configured.Provider),
-			},
-		)
+		registry.routes = append(registry.routes, routeRule{
+			pattern:         configured.Match,
+			surfaces:        append([]IngressSurface(nil), configured.Surfaces...),
+			provider:        backendForProvider(configured.Provider),
+			providerEnabled: providerEnabled(cfg, configured.Provider),
+			wireProfile:     defaultWireProfile(cfg, configured.Provider),
+		})
 	}
-
 	modelCatalogLog.Logger().Info(
 		"adapter.registry.catalog_loaded",
-		"concern",
-		"adapter.models.catalog",
-		"models",
-		len(cfg.Models),
-		"aliases",
-		len(registry.exact),
-		"routes",
-		len(registry.routes),
-		"advertised",
-		len(registry.advertised),
+		"concern", "adapter.models.catalog",
+		"models", len(cfg.Models),
+		"aliases", len(registry.exact),
+		"routes", len(registry.routes),
+		"advertised", len(registry.advertised),
 	)
-
 	return registry, nil
 }
 
@@ -253,35 +217,19 @@ func (registry *Registry) addDeclaration(
 	if err != nil {
 		return err
 	}
-
 	providerIsEnabled := providerEnabled(cfg, declaration.Provider)
-	if err := registry.addExact(
-		canonicalID,
-		base,
-		providerIsEnabled,
-		"",
-		declaration.Advertise,
-	); err != nil {
+	if err := registry.addExact(canonicalID, base, providerIsEnabled, "", declaration.Advertise); err != nil {
 		return err
 	}
-
 	for _, alias := range declaration.Aliases {
 		resolved, resolveErr := resolvedFromDeclaration(alias.ID, declaration, profile, alias)
 		if resolveErr != nil {
 			return resolveErr
 		}
-
-		if err := registry.addExact(
-			alias.ID,
-			resolved,
-			providerIsEnabled,
-			alias.ReasoningEffort,
-			alias.Advertise,
-		); err != nil {
+		if err := registry.addExact(alias.ID, resolved, providerIsEnabled, alias.ReasoningEffort, alias.Advertise); err != nil {
 			return err
 		}
 	}
-
 	return registry.addGeneratedAliases(declaration, profile, providerIsEnabled)
 }
 
@@ -296,53 +244,35 @@ func resolvedFromDeclaration(
 		wrapped := fmt.Errorf("adapter: model alias %q: %w", alias, err)
 		modelResolveLog.Logger().Warn(
 			"adapter.registry.alias_context_invalid",
-			"alias",
-			alias,
-			"err",
-			wrapped,
+			"alias", alias,
+			"err", wrapped,
 		)
-
 		return ResolvedAlias{}, wrapped
 	}
-
-	thinking, thinkingBudgetTokens, thinkingModes, err := selectThinking(
-		profile.ThinkingProfiles,
-		binding.ThinkingProfile,
-	)
+	thinking, thinkingBudgetTokens, thinkingModes, err := selectThinking(profile.ThinkingProfiles, binding.ThinkingProfile)
 	if err != nil {
 		wrapped := fmt.Errorf("adapter: model alias %q: %w", alias, err)
 		modelResolveLog.Logger().Warn(
 			"adapter.registry.alias_thinking_invalid",
-			"alias",
-			alias,
-			"err",
-			wrapped,
+			"alias", alias,
+			"err", wrapped,
 		)
-
 		return ResolvedAlias{}, wrapped
 	}
-
 	efforts := make([]string, 0, len(profile.ReasoningEfforts))
 	for _, effort := range profile.ReasoningEfforts {
 		efforts = append(efforts, string(effort))
 	}
-
 	effortWireValues := make(map[string]string, len(profile.ReasoningEffortWireValues))
 	for effort, wireValue := range profile.ReasoningEffortWireValues {
 		effortWireValues[string(effort)] = string(wireValue)
 	}
-
-	transportLimits := make(
-		map[config.AdapterModelTransport]int,
-		len(contextProfile.TransportLimits),
-	)
+	transportLimits := make(map[config.AdapterModelTransport]int, len(contextProfile.TransportLimits))
 	for _, limit := range contextProfile.TransportLimits {
 		transportLimits[limit.Transport] = limit.Tokens
 	}
-
 	tools := cloneBool(profile.SupportsTools)
 	vision := cloneBool(profile.SupportsVision)
-
 	return ResolvedAlias{
 		Alias:                strings.TrimSpace(alias),
 		Backend:              backendForProvider(declaration.Provider),
@@ -383,28 +313,19 @@ func resolvedFromDeclaration(
 	}, nil
 }
 
-func selectContext(
-	contexts []config.AdapterModelProfileContext,
-	name string,
-) (config.AdapterModelProfileContext, error) {
+func selectContext(contexts []config.AdapterModelProfileContext, name string) (config.AdapterModelProfileContext, error) {
 	if len(contexts) == 0 {
 		return config.AdapterModelProfileContext{}, fmt.Errorf("profile has no contexts")
 	}
-
 	if strings.TrimSpace(name) == "" {
 		return contexts[0], nil
 	}
-
 	for _, contextProfile := range contexts {
 		if contextProfile.Name == name {
 			return contextProfile, nil
 		}
 	}
-
-	return config.AdapterModelProfileContext{}, fmt.Errorf(
-		"context %q is not declared by the profile",
-		name,
-	)
+	return config.AdapterModelProfileContext{}, fmt.Errorf("context %q is not declared by the profile", name)
 }
 
 func selectThinking(
@@ -418,16 +339,13 @@ func selectThinking(
 			modes = append(modes, mode)
 		}
 	}
-
 	if strings.TrimSpace(name) == "" {
 		return "", 0, modes, nil
 	}
-
 	profile, ok := profiles[name]
 	if !ok {
 		return "", 0, nil, fmt.Errorf("thinking profile %q is not declared by the profile", name)
 	}
-
 	return string(profile.Mode), profile.BudgetTokens, modes, nil
 }
 
@@ -442,24 +360,17 @@ func (registry *Registry) addExact(
 	if id == "" {
 		return fmt.Errorf("adapter: model alias must not be empty")
 	}
-
 	key := modelKey(id)
 	if _, exists := registry.exact[key]; exists {
 		return fmt.Errorf("adapter: duplicate exact model alias %q", id)
 	}
-
 	if resolved.PassthroughOverride != "" {
 		passthrough, ok := registry.passthroughOverrides[modelKey(resolved.PassthroughOverride)]
 		if !ok {
-			return fmt.Errorf(
-				"adapter: passthrough override %q is not configured",
-				resolved.PassthroughOverride,
-			)
+			return fmt.Errorf("adapter: passthrough override %q is not configured", resolved.PassthroughOverride)
 		}
-
 		resolved.PassthroughConfig = passthrough
 	}
-
 	resolved.Alias = id
 	resolved.Advertise = advertise && providerIsEnabled
 	registry.exact[key] = registryRecord{
@@ -470,7 +381,6 @@ func (registry *Registry) addExact(
 	if resolved.Advertise {
 		registry.advertised[key] = resolved
 	}
-
 	return nil
 }
 
@@ -490,46 +400,29 @@ func (registry *Registry) addGeneratedAliases(
 	if len(generated.Dimensions) == 0 {
 		return nil
 	}
-
 	bindings := []aliasBindings{{parts: nil, context: "", effort: "", thinking: ""}}
-
 	for _, dimension := range generated.Dimensions {
 		bindings = expandAliasDimension(bindings, dimension, profile)
 	}
-
 	for _, binding := range bindings {
 		alias := strings.TrimSpace(generated.Prefix)
 		if len(binding.parts) > 0 {
 			alias += "-" + strings.Join(binding.parts, "-")
 		}
-
-		resolved, err := resolvedFromDeclaration(
-			alias,
-			declaration,
-			profile,
-			config.AdapterModelAlias{
-				ID:              alias,
-				Advertise:       false,
-				ReasoningEffort: binding.effort,
-				Context:         binding.context,
-				ThinkingProfile: binding.thinking,
-			},
-		)
+		resolved, err := resolvedFromDeclaration(alias, declaration, profile, config.AdapterModelAlias{
+			ID:              alias,
+			Advertise:       false,
+			ReasoningEffort: binding.effort,
+			Context:         binding.context,
+			ThinkingProfile: binding.thinking,
+		})
 		if err != nil {
 			return err
 		}
-
-		if err := registry.addExact(
-			alias,
-			resolved,
-			providerIsEnabled,
-			binding.effort,
-			generated.Advertise,
-		); err != nil {
+		if err := registry.addExact(alias, resolved, providerIsEnabled, binding.effort, generated.Advertise); err != nil {
 			return err
 		}
 	}
-
 	return nil
 }
 
@@ -549,12 +442,10 @@ func expandAliasDimension(
 				if part == "" {
 					part = contextProfile.Name
 				}
-
 				next.parts = append(next.parts, part)
 				out = append(out, next)
 			}
 		}
-
 		return out
 	case config.AdapterGeneratedAliasDimensionReasoningEffort:
 		out := make([]aliasBindings, 0, len(bindings)*len(profile.ReasoningEfforts))
@@ -566,11 +457,9 @@ func expandAliasDimension(
 				out = append(out, next)
 			}
 		}
-
 		return out
 	case config.AdapterGeneratedAliasDimensionThinkingProfile:
 		names := slices.Sorted(maps.Keys(profile.ThinkingProfiles))
-
 		out := make([]aliasBindings, 0, len(bindings)*len(names))
 		for _, binding := range bindings {
 			for _, name := range names {
@@ -580,7 +469,6 @@ func expandAliasDimension(
 				out = append(out, next)
 			}
 		}
-
 		return out
 	default:
 		return nil
@@ -602,68 +490,41 @@ func (registry *Registry) Resolve(
 	if registry == nil {
 		return ResolvedAlias{}, "", fmt.Errorf("adapter: model registry is nil")
 	}
-
 	requested := strings.TrimSpace(requestedModel)
 	if requested == "" {
 		if registry.defaultModel == "" {
-			return ResolvedAlias{}, "", fmt.Errorf(
-				"model is required and adapter.default_model is not set",
-			)
+			return ResolvedAlias{}, "", fmt.Errorf("model is required and adapter.default_model is not set")
 		}
-
 		requested = registry.defaultModel
 		record, ok := registry.exact[modelKey(requested)]
 		if !ok {
-			return ResolvedAlias{}, "", fmt.Errorf(
-				"adapter.default_model %q is unavailable",
-				requested,
-			)
+			return ResolvedAlias{}, "", fmt.Errorf("adapter.default_model %q is unavailable", requested)
 		}
-
 		return resolveExact(record, requested, requestedEffort)
 	}
-
 	if record, ok := registry.exact[modelKey(requested)]; ok {
 		return resolveExact(record, requested, requestedEffort)
 	}
-
 	for _, route := range registry.routes {
 		matches, err := path.Match(route.pattern, requested)
 		if err != nil {
 			wrapped := fmt.Errorf("match model route %q: %w", route.pattern, err)
 			modelResolveLog.Logger().Warn(
 				"adapter.registry.route_match_failed",
-				"pattern",
-				route.pattern,
-				"model",
-				requested,
-				"err",
-				wrapped,
+				"pattern", route.pattern,
+				"model", requested,
+				"err", wrapped,
 			)
-
 			return ResolvedAlias{}, "", wrapped
 		}
-
 		if !matches || !slices.Contains(route.surfaces, surface) {
 			continue
 		}
-
 		if !route.providerEnabled {
-			return ResolvedAlias{}, "", fmt.Errorf(
-				"model %q selects disabled provider %q",
-				requested,
-				route.provider,
-			)
+			return ResolvedAlias{}, "", fmt.Errorf("model %q selects disabled provider %q", requested, route.provider)
 		}
-
-		return wildcardResolved(
-			requested,
-			route.provider,
-			route.wireProfile,
-			requestedEffort,
-		), requestedEffort, nil
+		return wildcardResolved(requested, route.provider, route.wireProfile, requestedEffort), requestedEffort, nil
 	}
-
 	if registry.openAICompat.BaseURL != "" {
 		var resolved ResolvedAlias
 		resolved.Alias = requested
@@ -672,29 +533,18 @@ func (registry *Registry) Resolve(
 		resolved.Effort = requestedEffort
 		resolved.WireEffort = requestedEffort
 		resolved.OpenAICompatPassthrough = registry.openAICompat
-
 		return resolved, requestedEffort, nil
 	}
-
 	return ResolvedAlias{}, "", newResolveError(
 		ResolveErrorModelNotFound,
 		fmt.Sprintf("unknown model %q", requested),
 	)
 }
 
-func resolveExact(
-	record registryRecord,
-	requested string,
-	requestedEffort string,
-) (ResolvedAlias, string, error) {
+func resolveExact(record registryRecord, requested string, requestedEffort string) (ResolvedAlias, string, error) {
 	if !record.providerEnabled {
-		return ResolvedAlias{}, "", fmt.Errorf(
-			"model %q selects disabled provider %q",
-			requested,
-			record.resolved.Backend,
-		)
+		return ResolvedAlias{}, "", fmt.Errorf("model %q selects disabled provider %q", requested, record.resolved.Backend)
 	}
-
 	effort := requestedEffort
 	bound := string(record.boundEffort)
 	if bound != "" && effort != "" && effort != bound {
@@ -703,15 +553,12 @@ func resolveExact(
 			fmt.Sprintf("effort %q conflicts with effort-bound model %q", effort, requested),
 		)
 	}
-
 	if effort == "" {
 		effort = bound
 	}
-
 	if effort == "" {
 		effort = defaultEffort(record.resolved)
 	}
-
 	if effort != "" && !slices.Contains(record.resolved.Efforts, effort) {
 		return ResolvedAlias{}, "", newResolveError(
 			ResolveErrorInvalidRequest,
@@ -723,7 +570,6 @@ func resolveExact(
 			),
 		)
 	}
-
 	resolved := record.resolved
 	resolved.Alias = requested
 	resolved.Effort = effort
@@ -731,7 +577,6 @@ func resolveExact(
 	if wireValue, ok := resolved.EffortWireValues[effort]; ok {
 		resolved.WireEffort = wireValue
 	}
-
 	return resolved, effort, nil
 }
 
@@ -739,16 +584,10 @@ func defaultEffort(resolved ResolvedAlias) string {
 	if resolved.Effort != "" {
 		return resolved.Effort
 	}
-
 	return resolved.DefaultEffort
 }
 
-func wildcardResolved(
-	requested string,
-	provider BackendID,
-	wireProfile string,
-	effort string,
-) ResolvedAlias {
+func wildcardResolved(requested string, provider BackendID, wireProfile string, effort string) ResolvedAlias {
 	var resolved ResolvedAlias
 	resolved.Alias = requested
 	resolved.Backend = provider
@@ -756,14 +595,11 @@ func wildcardResolved(
 	resolved.WireProfile = strings.TrimSpace(wireProfile)
 	resolved.Effort = effort
 	resolved.WireEffort = effort
-
 	return resolved
 }
 
 // PassthroughOverride returns a configured named OpenAI-compatible upstream.
-func (registry *Registry) PassthroughOverride(
-	name string,
-) (config.AdapterPassthroughOverride, bool) {
+func (registry *Registry) PassthroughOverride(name string) (config.AdapterPassthroughOverride, bool) {
 	passthrough, ok := registry.passthroughOverrides[modelKey(name)]
 	return passthrough, ok
 }
@@ -773,14 +609,11 @@ func (registry *Registry) List() []ResolvedAlias {
 	if registry == nil {
 		return nil
 	}
-
 	aliases := slices.Sorted(maps.Keys(registry.advertised))
-
 	out := make([]ResolvedAlias, 0, len(aliases))
 	for _, alias := range aliases {
 		out = append(out, registry.advertised[alias])
 	}
-
 	return out
 }
 
@@ -789,12 +622,10 @@ func (registry *Registry) Models() map[string]ResolvedAlias {
 	if registry == nil {
 		return nil
 	}
-
 	out := make(map[string]ResolvedAlias, len(registry.exact))
 	for key, record := range registry.exact {
 		out[key] = record.resolved
 	}
-
 	return out
 }
 
@@ -802,45 +633,27 @@ func validateAdapterCoreConfig(cfg config.AdapterConfig) error {
 	if cfg.ClientIdentity.SystemPromptPrefix == "" {
 		return fmt.Errorf("adapter: [adapter.client_identity].system_prompt_prefix must be set")
 	}
-
 	if cfg.ClientIdentity.StainlessPackageVersion == "" {
-		return fmt.Errorf(
-			"adapter: [adapter.client_identity].stainless_package_version must be set",
-		)
+		return fmt.Errorf("adapter: [adapter.client_identity].stainless_package_version must be set")
 	}
-
 	if cfg.ClientIdentity.StainlessRuntime == "" {
 		return fmt.Errorf("adapter: [adapter.client_identity].stainless_runtime must be set")
 	}
-
 	if cfg.ClientIdentity.StainlessRuntimeVersion == "" {
-		return fmt.Errorf(
-			"adapter: [adapter.client_identity].stainless_runtime_version must be set",
-		)
+		return fmt.Errorf("adapter: [adapter.client_identity].stainless_runtime_version must be set")
 	}
-
 	if cfg.ClientIdentity.CCVersion == "" {
 		return fmt.Errorf("adapter: [adapter.client_identity].cc_version must be set")
 	}
-
 	if cfg.ClientIdentity.CCEntrypoint == "" {
 		return fmt.Errorf("adapter: [adapter.client_identity].cc_entrypoint must be set")
 	}
-
 	if cfg.Anthropic.Enabled || cfg.DirectOAuth {
 		if err := cfg.Anthropic.OAuth.ValidateOAuthFields(); err != nil {
-			slog.Warn(
-				"adapter.model.validate_anthropic_oauth_failed",
-				"concern",
-				"adapter.models.resolve",
-				"err",
-				err,
-			)
-
+			slog.Warn("adapter.model.validate_anthropic_oauth_failed", "concern", "adapter.models.resolve", "err", err)
 			return fmt.Errorf("validate anthropic OAuth config: %w", err)
 		}
 	}
-
 	return nil
 }
 
@@ -848,11 +661,9 @@ func validateAdapterLogprobs(logprobs config.AdapterLogprobs) error {
 	if logprobs.Anthropic == "" {
 		return nil
 	}
-
 	if logprobs.Anthropic != "reject" && logprobs.Anthropic != "drop" {
 		return fmt.Errorf("adapter: [adapter.logprobs].anthropic %q invalid", logprobs.Anthropic)
 	}
-
 	return nil
 }
 
@@ -886,7 +697,6 @@ func defaultWireProfile(cfg config.AdapterConfig, provider config.AdapterModelPr
 	if provider != config.AdapterModelProviderAnthropic {
 		return ""
 	}
-
 	return strings.TrimSpace(cfg.Anthropic.DefaultWireProfile)
 }
 
@@ -898,9 +708,7 @@ func cloneBool(value *bool) *bool {
 	if value == nil {
 		return nil
 	}
-
 	cloned := *value
-
 	return &cloned
 }
 

@@ -34,7 +34,6 @@ func writeOriginFixtures(t *testing.T) {
 	if err := os.MkdirAll(projectDir, 0o755); err != nil {
 		t.Fatalf("create project dir: %v", err)
 	}
-
 	// The sidechain fixture sits beside the ordinary transcript rather than under
 	// a subagents/ directory, so it reaches discovery and exercises the index
 	// filter itself. It borrows the user session's id, matching what Claude Code
@@ -56,29 +55,23 @@ func writeOriginFixtures(t *testing.T) {
 func claudeOnlyRegistry() *conversation.Registry {
 	registry := conversation.NewRegistry()
 	registry.Register(claudeparser.New())
-
 	return registry
 }
 
 func refreshedIndexRecords(t *testing.T, includeSubagents bool) []conversation.Record {
 	t.Helper()
-	index := conversation.NewIndex(
-		claudeOnlyRegistry(),
-		config.ConversationConfig{
-			IncludeSubagentConversations: includeSubagents,
-			Semantic:                     config.ConversationSemanticConfig{},
-		},
-	)
+	index := conversation.NewIndex(claudeOnlyRegistry(), config.ConversationConfig{
+		IncludeSubagentConversations: includeSubagents,
+		Semantic:                     config.ConversationSemanticConfig{},
+	})
 	ctx := context.Background()
 	if err := index.Refresh(ctx); err != nil {
 		t.Fatalf("refresh conversation index: %v", err)
 	}
-
 	records, err := index.List(ctx)
 	if err != nil {
 		t.Fatalf("list conversations: %v", err)
 	}
-
 	return records
 }
 
@@ -87,7 +80,6 @@ func nativeIDs(records []conversation.Record) []string {
 	for _, record := range records {
 		out = append(out, record.NativeID)
 	}
-
 	return out
 }
 
@@ -97,7 +89,6 @@ func containsNativeID(records []conversation.Record, nativeID string) bool {
 			return true
 		}
 	}
-
 	return false
 }
 
@@ -109,7 +100,6 @@ func artifactFilenames(records []conversation.Record) []string {
 	for _, record := range records {
 		out = append(out, filepath.Base(record.ArtifactPath))
 	}
-
 	return out
 }
 
@@ -119,7 +109,6 @@ func containsArtifactFilename(records []conversation.Record, filename string) bo
 			return true
 		}
 	}
-
 	return false
 }
 
@@ -132,19 +121,11 @@ func TestIndexHidesSubagentConversationsByDefault(t *testing.T) {
 	records := refreshedIndexRecords(t, false)
 
 	if !containsArtifactFilename(records, originTestUserFilename) {
-		t.Fatalf(
-			"listed artifacts = %v, want the user conversation present",
-			artifactFilenames(records),
-		)
+		t.Fatalf("listed artifacts = %v, want the user conversation present", artifactFilenames(records))
 	}
-
 	if containsArtifactFilename(records, originTestSubagentFilename) {
-		t.Fatalf(
-			"listed artifacts = %v, want the subagent conversation absent",
-			artifactFilenames(records),
-		)
+		t.Fatalf("listed artifacts = %v, want the subagent conversation absent", artifactFilenames(records))
 	}
-
 	// The user conversation keeps its own session id even though a sidechain
 	// transcript borrowed it.
 	if !containsNativeID(records, originTestUserSessionID) {
@@ -160,17 +141,10 @@ func TestIndexExposesSubagentConversationsWhenEnabled(t *testing.T) {
 	records := refreshedIndexRecords(t, true)
 
 	if !containsArtifactFilename(records, originTestUserFilename) {
-		t.Fatalf(
-			"listed artifacts = %v, want the user conversation present",
-			artifactFilenames(records),
-		)
+		t.Fatalf("listed artifacts = %v, want the user conversation present", artifactFilenames(records))
 	}
-
 	if !containsArtifactFilename(records, originTestSubagentFilename) {
-		t.Fatalf(
-			"listed artifacts = %v, want the subagent conversation present",
-			artifactFilenames(records),
-		)
+		t.Fatalf("listed artifacts = %v, want the subagent conversation present", artifactFilenames(records))
 	}
 }
 
@@ -193,25 +167,15 @@ func TestSkipKeepsTheParentOfASidechainTranscript(t *testing.T) {
 	if err := os.MkdirAll(subagentDir, 0o755); err != nil {
 		t.Fatalf("create subagent dir: %v", err)
 	}
-
 	parentBody := `{"sessionId":"` + parentSessionID + `","cwd":"/repo","isSidechain":false,"type":"user","timestamp":"2026-07-01T10:00:00Z","content":"the user's own work"}` + "\n"
-	if err := os.WriteFile(
-		filepath.Join(projectDir, parentSessionID+".jsonl"),
-		[]byte(parentBody),
-		0o600,
-	); err != nil {
+	if err := os.WriteFile(filepath.Join(projectDir, parentSessionID+".jsonl"), []byte(parentBody), 0o600); err != nil {
 		t.Fatalf("write parent transcript: %v", err)
 	}
-
 	// The sidechain siblings borrow the parent's session id, which is exactly the
 	// collision this test exists to rule out.
 	for _, agentFile := range []string{"agent-abc.jsonl", "agent-def.jsonl"} {
 		body := `{"sessionId":"` + parentSessionID + `","cwd":"/repo","isSidechain":true,"agentId":"explorer","type":"user","timestamp":"2026-07-01T10:05:00Z","content":"dispatched work"}` + "\n"
-		if err := os.WriteFile(
-			filepath.Join(subagentDir, agentFile),
-			[]byte(body),
-			0o600,
-		); err != nil {
+		if err := os.WriteFile(filepath.Join(subagentDir, agentFile), []byte(body), 0o600); err != nil {
 			t.Fatalf("write %s: %v", agentFile, err)
 		}
 	}
@@ -219,25 +183,15 @@ func TestSkipKeepsTheParentOfASidechainTranscript(t *testing.T) {
 	records := refreshedIndexRecords(t, false)
 
 	if !containsNativeID(records, parentSessionID) {
-		t.Fatalf(
-			"listed native ids = %v, want the parent conversation still present",
-			nativeIDs(records),
-		)
+		t.Fatalf("listed native ids = %v, want the parent conversation still present", nativeIDs(records))
 	}
-
 	for _, record := range records {
 		if record.NativeID != parentSessionID {
 			continue
 		}
-
 		if record.Origin != conversation.OriginUser {
-			t.Fatalf(
-				"parent origin = %q, want %q; a sibling sidechain file must not reclassify it",
-				record.Origin,
-				conversation.OriginUser,
-			)
+			t.Fatalf("parent origin = %q, want %q; a sibling sidechain file must not reclassify it", record.Origin, conversation.OriginUser)
 		}
-
 		if record.IsSubagent() {
 			t.Fatalf("parent IsSubagent = true, want false")
 		}
@@ -256,32 +210,22 @@ func TestSidechainTranscriptNeverDerivesTheParentConversationID(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write sidechain transcript: %v", err)
 	}
-
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("stat sidechain transcript: %v", err)
 	}
 
-	record, ok := claudeparser.New().ScanRecord(
-		path,
-		conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()},
-	)
+	record, ok := claudeparser.New().ScanRecord(path, conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()})
 	if !ok {
 		t.Fatalf("ScanRecord returned ok=false")
 	}
-
 	collidingID := conversation.DerivedID(conversation.ProviderClaude, parentSessionID, path)
 	if record.ID == collidingID {
 		t.Fatalf("sidechain id = %q, which is the parent conversation's derived id", record.ID)
 	}
-
 	if record.NativeID == parentSessionID {
-		t.Fatalf(
-			"sidechain native id = %q, which belongs to the parent conversation",
-			record.NativeID,
-		)
+		t.Fatalf("sidechain native id = %q, which belongs to the parent conversation", record.NativeID)
 	}
-
 	if record.Origin != conversation.OriginSubagent {
 		t.Fatalf("origin = %q, want %q", record.Origin, conversation.OriginSubagent)
 	}
@@ -302,19 +246,16 @@ func writeClaudeParentAndSidechain(t *testing.T, parentSessionID string) (string
 	if err := os.MkdirAll(subagentDir, 0o755); err != nil {
 		t.Fatalf("create subagent dir: %v", err)
 	}
-
 	parentPath := filepath.Join(projectDir, parentSessionID+".jsonl")
 	parentBody := `{"sessionId":"` + parentSessionID + `","cwd":"/repo","isSidechain":false,"type":"user","timestamp":"2026-07-01T10:00:00Z","content":"the user's own work"}` + "\n"
 	if err := os.WriteFile(parentPath, []byte(parentBody), 0o600); err != nil {
 		t.Fatalf("write parent transcript: %v", err)
 	}
-
 	agentPath := filepath.Join(subagentDir, "agent-abc.jsonl")
 	agentBody := `{"sessionId":"` + parentSessionID + `","cwd":"/repo","isSidechain":true,"agentId":"explorer","type":"user","timestamp":"2026-07-01T10:05:00Z","content":"dispatched work"}` + "\n"
 	if err := os.WriteFile(agentPath, []byte(agentBody), 0o600); err != nil {
 		t.Fatalf("write agent transcript: %v", err)
 	}
-
 	return parentPath, agentPath
 }
 
@@ -341,36 +282,29 @@ func TestResolveOfAParentSessionIDNeverReturnsASidechainSibling(t *testing.T) {
 	if err := os.MkdirAll(subagentDir, 0o755); err != nil {
 		t.Fatalf("create subagent dir: %v", err)
 	}
-
 	parentPath := filepath.Join(projectDir, parentSessionID+".jsonl")
 	parentBody := `{"sessionId":"` + parentSessionID + `","cwd":"/repo","isSidechain":false,"type":"user","message":{"role":"user","content":[{"type":"text","text":"the user's own work"}]}}` + "\n"
 	if err := os.WriteFile(parentPath, []byte(parentBody), 0o600); err != nil {
 		t.Fatalf("write parent transcript: %v", err)
 	}
-
 	agentPath := filepath.Join(subagentDir, "agent-abc.jsonl")
 	agentBody := `{"sessionId":"` + parentSessionID + `","cwd":"/repo","isSidechain":true,"agentId":"explorer","type":"user","message":{"role":"user","content":[{"type":"text","text":"dispatched work"}]}}` + "\n"
 	if err := os.WriteFile(agentPath, []byte(agentBody), 0o600); err != nil {
 		t.Fatalf("write agent transcript: %v", err)
 	}
-
 	parentTime := time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC)
 	if err := os.Chtimes(parentPath, parentTime, parentTime); err != nil {
 		t.Fatalf("stamp parent transcript: %v", err)
 	}
-
 	agentTime := parentTime.Add(time.Hour)
 	if err := os.Chtimes(agentPath, agentTime, agentTime); err != nil {
 		t.Fatalf("stamp agent transcript: %v", err)
 	}
 
-	index := conversation.NewIndex(
-		claudeOnlyRegistry(),
-		config.ConversationConfig{
-			IncludeSubagentConversations: true,
-			Semantic:                     config.ConversationSemanticConfig{},
-		},
-	)
+	index := conversation.NewIndex(claudeOnlyRegistry(), config.ConversationConfig{
+		IncludeSubagentConversations: true,
+		Semantic:                     config.ConversationSemanticConfig{},
+	})
 	ctx := context.Background()
 	if err := index.Refresh(ctx); err != nil {
 		t.Fatalf("refresh conversation index: %v", err)
@@ -380,15 +314,9 @@ func TestResolveOfAParentSessionIDNeverReturnsASidechainSibling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve %q: %v", parentSessionID, err)
 	}
-
 	if record.ArtifactPath != parentPath {
-		t.Fatalf(
-			"resolved artifact = %q, want the user's own transcript %q",
-			record.ArtifactPath,
-			parentPath,
-		)
+		t.Fatalf("resolved artifact = %q, want the user's own transcript %q", record.ArtifactPath, parentPath)
 	}
-
 	if record.IsSubagent() {
 		t.Fatalf("resolved a subagent record for the user's own session id")
 	}
@@ -405,22 +333,15 @@ func TestClaudeDiscoverAdmitsSubagentTranscriptsForClassification(t *testing.T) 
 	if err != nil {
 		t.Fatalf("discover Claude transcripts: %v", err)
 	}
-
 	discovered := make(map[string]bool, len(candidates))
 	for _, candidate := range candidates {
 		discovered[candidate.Path] = true
 	}
-
 	if !discovered[parentPath] {
 		t.Fatalf("discovered %v, want the parent transcript %q", candidates, parentPath)
 	}
-
 	if !discovered[agentPath] {
-		t.Fatalf(
-			"discovered %v, want the sidechain transcript %q admitted for classification",
-			candidates,
-			agentPath,
-		)
+		t.Fatalf("discovered %v, want the sidechain transcript %q admitted for classification", candidates, agentPath)
 	}
 }
 
@@ -434,29 +355,18 @@ func TestClaudeSubagentTranscriptFollowsTheSetting(t *testing.T) {
 
 	hidden := refreshedIndexRecords(t, false)
 	if containsArtifactFilename(hidden, agentFilename) {
-		t.Fatalf(
-			"listed artifacts = %v, want the sidechain transcript hidden by default",
-			artifactFilenames(hidden),
-		)
+		t.Fatalf("listed artifacts = %v, want the sidechain transcript hidden by default", artifactFilenames(hidden))
 	}
-
 	if !containsNativeID(hidden, parentSessionID) {
 		t.Fatalf("listed native ids = %v, want the parent conversation present", nativeIDs(hidden))
 	}
 
 	shown := refreshedIndexRecords(t, true)
 	if !containsArtifactFilename(shown, agentFilename) {
-		t.Fatalf(
-			"listed artifacts = %v, want the sidechain transcript served when opted in",
-			artifactFilenames(shown),
-		)
+		t.Fatalf("listed artifacts = %v, want the sidechain transcript served when opted in", artifactFilenames(shown))
 	}
-
 	if !containsNativeID(shown, parentSessionID) {
-		t.Fatalf(
-			"listed native ids = %v, want the parent conversation still present",
-			nativeIDs(shown),
-		)
+		t.Fatalf("listed native ids = %v, want the parent conversation still present", nativeIDs(shown))
 	}
 }
 
@@ -468,26 +378,17 @@ func TestClaudeSubagentTranscriptFollowsTheSetting(t *testing.T) {
 func TestHiddenSubagentConversationIsOmittedFromTheEngineManifest(t *testing.T) {
 	writeOriginFixtures(t)
 
-	index := conversation.NewIndex(
-		claudeOnlyRegistry(),
-		config.ConversationConfig{
-			IncludeSubagentConversations: false,
-			Semantic:                     config.ConversationSemanticConfig{},
-		},
-	)
+	index := conversation.NewIndex(claudeOnlyRegistry(), config.ConversationConfig{
+		IncludeSubagentConversations: false,
+		Semantic:                     config.ConversationSemanticConfig{},
+	})
 	ctx := context.Background()
 	if err := index.Refresh(ctx); err != nil {
 		t.Fatalf("refresh conversation index: %v", err)
 	}
 
 	client := &fakeConversationSemanticClient{needed: nil}
-	worker := newConversationSemanticSyncWorker(
-		index,
-		staticSemanticSyncClient(client),
-		"collection-test",
-		semanticTestLogger(),
-		semanticTestContentKinds(),
-	)
+	worker := newConversationSemanticSyncWorker(index, staticSemanticSyncClient(client), "collection-test", semanticTestLogger(), semanticTestContentKinds())
 	if err := worker.runPass(ctx); err != nil {
 		t.Fatalf("runPass returned error: %v", err)
 	}
@@ -495,23 +396,15 @@ func TestHiddenSubagentConversationIsOmittedFromTheEngineManifest(t *testing.T) 
 	if len(client.syncCalls) != 1 {
 		t.Fatalf("manifest syncs = %d, want 1", len(client.syncCalls))
 	}
-
 	manifest := client.syncCalls[0].Manifest
-
 	manifestIDs := make([]string, 0, len(manifest))
 	for _, fingerprint := range manifest {
 		manifestIDs = append(manifestIDs, fingerprint.ConversationID)
 	}
-
 	if len(manifest) != 1 {
 		t.Fatalf("manifest ids = %v, want only the user conversation offered", manifestIDs)
 	}
-
-	userConversationID := conversation.DerivedID(
-		conversation.ProviderClaude,
-		originTestUserSessionID,
-		"",
-	)
+	userConversationID := conversation.DerivedID(conversation.ProviderClaude, originTestUserSessionID, "")
 	if manifestIDs[0] != userConversationID {
 		t.Fatalf("manifest ids = %v, want %q", manifestIDs, userConversationID)
 	}
@@ -526,10 +419,7 @@ func TestSkippedSubagentConversationStaysInTheCache(t *testing.T) {
 
 	hidden := refreshedIndexRecords(t, false)
 	if containsArtifactFilename(hidden, originTestSubagentFilename) {
-		t.Fatalf(
-			"listed artifacts = %v, want the subagent conversation absent",
-			artifactFilenames(hidden),
-		)
+		t.Fatalf("listed artifacts = %v, want the subagent conversation absent", artifactFilenames(hidden))
 	}
 
 	cachePath := filepath.Join(config.GlobalCacheDir(), "conversation-index.json")
@@ -537,26 +427,19 @@ func TestSkippedSubagentConversationStaysInTheCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read conversation cache: %v", err)
 	}
-
 	var cache struct {
 		Records []conversation.Record `json:"records"`
 	}
 	if err := json.Unmarshal(data, &cache); err != nil {
 		t.Fatalf("decode conversation cache: %v", err)
 	}
-
 	if !containsArtifactFilename(cache.Records, originTestSubagentFilename) {
-		t.Fatalf(
-			"cached artifacts = %v, want the hidden subagent conversation retained",
-			artifactFilenames(cache.Records),
-		)
+		t.Fatalf("cached artifacts = %v, want the hidden subagent conversation retained", artifactFilenames(cache.Records))
 	}
-
 	for _, record := range cache.Records {
 		if filepath.Base(record.ArtifactPath) != originTestSubagentFilename {
 			continue
 		}
-
 		if record.Origin != conversation.OriginSubagent {
 			t.Fatalf("cached origin = %q, want %q", record.Origin, conversation.OriginSubagent)
 		}

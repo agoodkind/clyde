@@ -74,7 +74,6 @@ func frameHeaderSize(format int) int {
 	if format == frameFormatLengthCRC {
 		return lengthCheckedFrameHeaderBytes
 	}
-
 	return frameHeaderBytes
 }
 
@@ -83,15 +82,12 @@ func appendFrame(buffer []byte, payload []byte, format int) ([]byte, error) {
 	if length > math.MaxUint32 {
 		return nil, fmt.Errorf("row record of %d bytes exceeds the frame limit", length)
 	}
-
 	lengthStart := len(buffer)
 	buffer = binary.LittleEndian.AppendUint32(buffer, uint32(length))
 	if format == frameFormatLengthCRC {
 		buffer = binary.LittleEndian.AppendUint32(buffer, crc32.ChecksumIEEE(buffer[lengthStart:]))
 	}
-
 	buffer = binary.LittleEndian.AppendUint32(buffer, crc32.ChecksumIEEE(payload))
-
 	return append(buffer, payload...), nil
 }
 
@@ -102,11 +98,9 @@ func encodeRecord(record rowRecord, columns []collection.ScalarColumn) ([]byte, 
 	if record.kind == recordDelete {
 		return payload, nil
 	}
-
 	for _, word := range record.code {
 		payload = binary.LittleEndian.AppendUint64(payload, word)
 	}
-
 	payload = appendString(payload, record.relativePath)
 	payload = binary.AppendVarint(payload, int64(record.splitPart))
 	if record.splitRecorded {
@@ -114,10 +108,8 @@ func encodeRecord(record rowRecord, columns []collection.ScalarColumn) ([]byte, 
 	} else {
 		payload = append(payload, 0)
 	}
-
 	payload = binary.AppendVarint(payload, record.dataOffset)
 	payload = binary.AppendVarint(payload, record.dataLength)
-
 	payload = binary.AppendVarint(payload, int64(len(record.cells)))
 	for _, cell := range record.cells {
 		payload = binary.AppendVarint(payload, int64(cell.column))
@@ -125,7 +117,6 @@ func encodeRecord(record rowRecord, columns []collection.ScalarColumn) ([]byte, 
 			payload = append(payload, cellNull)
 			continue
 		}
-
 		payload = append(payload, cellValue)
 		switch columns[cell.column].Type {
 		case collection.ScalarTypeString:
@@ -139,14 +130,9 @@ func encodeRecord(record rowRecord, columns []collection.ScalarColumn) ([]byte, 
 		case collection.ScalarTypeInt64:
 			payload = binary.AppendVarint(payload, cell.value.Int64)
 		default:
-			return nil, fmt.Errorf(
-				"column %s has unsupported type %q",
-				columns[cell.column].Name,
-				columns[cell.column].Type,
-			)
+			return nil, fmt.Errorf("column %s has unsupported type %q", columns[cell.column].Name, columns[cell.column].Type)
 		}
 	}
-
 	return payload, nil
 }
 
@@ -160,10 +146,8 @@ func (reader *decoder) byteValue() byte {
 		reader.err = errMalformedRecord
 		return 0
 	}
-
 	value := reader.data[0]
 	reader.data = reader.data[1:]
-
 	return value
 }
 
@@ -171,15 +155,12 @@ func (reader *decoder) varint() int64 {
 	if reader.err != nil {
 		return 0
 	}
-
 	value, read := binary.Varint(reader.data)
 	if read <= 0 {
 		reader.err = errMalformedRecord
 		return 0
 	}
-
 	reader.data = reader.data[read:]
-
 	return value
 }
 
@@ -189,7 +170,6 @@ func (reader *decoder) count(limit int64) int {
 		reader.err = errMalformedRecord
 		return 0
 	}
-
 	return int(value)
 }
 
@@ -199,7 +179,6 @@ func (reader *decoder) int32Value() int32 {
 		reader.err = errMalformedRecord
 		return 0
 	}
-
 	return int32(value)
 }
 
@@ -208,10 +187,8 @@ func (reader *decoder) stringValue() string {
 	if reader.err != nil {
 		return ""
 	}
-
 	value := string(reader.data[:length])
 	reader.data = reader.data[length:]
-
 	return value
 }
 
@@ -222,15 +199,12 @@ func decodeRecord(payload []byte, columns []collection.ScalarColumn) (rowRecord,
 	if record.kind == recordDelete {
 		return record, reader.err
 	}
-
 	if record.kind != recordUpsert || len(reader.data) < len(record.code)*8 {
 		return record, errMalformedRecord
 	}
-
 	for word := range record.code {
 		record.code[word] = binary.LittleEndian.Uint64(reader.data[word*8:])
 	}
-
 	reader.data = reader.data[len(record.code)*8:]
 	record.relativePath = reader.stringValue()
 	record.splitPart = reader.int32Value()
@@ -241,25 +215,14 @@ func decodeRecord(payload []byte, columns []collection.ScalarColumn) (rowRecord,
 	if reader.err != nil {
 		return record, reader.err
 	}
-
 	record.cells = make([]storedCell, 0, cellCount)
 	for range cellCount {
 		column := reader.count(int64(len(columns) - 1))
 		if reader.err != nil {
 			return record, reader.err
 		}
-
 		columnType := columns[column].Type
-		cell := storedCell{
-			column: column,
-			value: collection.ScalarValue{
-				Type:   columnType,
-				Null:   true,
-				String: "",
-				Bool:   false,
-				Int64:  0,
-			},
-		}
+		cell := storedCell{column: column, value: collection.ScalarValue{Type: columnType, Null: true, String: "", Bool: false, Int64: 0}}
 		if reader.byteValue() == cellValue {
 			cell.value.Null = false
 			switch columnType {
@@ -273,17 +236,14 @@ func decodeRecord(payload []byte, columns []collection.ScalarColumn) (rowRecord,
 				return record, errMalformedRecord
 			}
 		}
-
 		record.cells = append(record.cells, cell)
 	}
-
 	return record, reader.err
 }
 
 func encodeBlob(content string, metadata string) []byte {
 	blob := make([]byte, 0, len(content)+len(metadata)+8)
 	blob = appendString(blob, content)
-
 	return appendString(blob, metadata)
 }
 
@@ -291,6 +251,5 @@ func decodeBlob(blob []byte) (string, string, error) {
 	reader := &decoder{data: blob, err: nil}
 	content := reader.stringValue()
 	metadata := reader.stringValue()
-
 	return content, metadata, reader.err
 }

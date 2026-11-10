@@ -28,12 +28,7 @@ func contextDocuments(targetDate int64, targetText string) []semsearch.SemDoc {
 	return []semsearch.SemDoc{
 		textOrderDocument(0, textOrderAssistant, textOrderEarlierDate, textOrderEarlierText),
 		textOrderDocument(textOrderTargetMessage, textOrderUser, targetDate, targetText),
-		textOrderDocument(
-			textOrderLaterMessage,
-			textOrderAssistant,
-			textOrderLaterDate,
-			textOrderLaterText,
-		),
+		textOrderDocument(textOrderLaterMessage, textOrderAssistant, textOrderLaterDate, textOrderLaterText),
 	}
 }
 
@@ -81,56 +76,29 @@ func TestRepairDatesUserTextAfterContextBlocks(t *testing.T) {
 		},
 	}
 	for position, testCase := range testCases {
-		t.Run(
-			testCase.name,
-			func(t *testing.T) {
-				ctx := context.Background()
-				collectionID := fmt.Sprintf("context-blocks-%d", position)
-				manifest := []semsearch.Fingerprint{
-					{ConversationID: textOrderConversationID, Value: "v1"},
-				}
-				if _, err := client.UpsertConversationDocuments(
-					ctx,
-					collectionID,
-					contextDocuments(undated, testCase.storedText),
-					manifest,
-				); err != nil {
-					t.Fatalf("UpsertConversationDocuments failed: %v.", err)
-				}
-				source := vectorsearch.TimestampSourceRepairSource{
-					ConversationID: textOrderConversationID,
-					Documents:      contextDocuments(testCase.sourceDate, contextTypedText),
-				}
-				report, err := client.RepairTimestampsFromSource(
-					ctx,
-					collectionID,
-					[]vectorsearch.TimestampSourceRepairSource{source},
-					false,
-				)
-				if err != nil {
-					t.Fatalf("RepairTimestampsFromSource failed: %v.", err)
-				}
-				if report.Outcomes[testCase.wantOutcome] != 1 {
-					t.Fatalf(
-						"The repair returned outcomes %v; the expected outcome is %s.",
-						report.Outcomes,
-						testCase.wantOutcome,
-					)
-				}
-				path := fmt.Sprintf("conv/%s/%d", textOrderConversationID, textOrderTargetMessage)
-				stamp, dated := textOrderRowDate(t, address, collectionID, path)
-				if testCase.wantDate == 0 && dated {
-					t.Fatalf("The repair assigned the date %d.", stamp)
-				}
-				if testCase.wantDate != 0 && (!dated || stamp != testCase.wantDate) {
-					t.Fatalf(
-						"The row has date %d with dated=%t; the expected date is %d.",
-						stamp,
-						dated,
-						testCase.wantDate,
-					)
-				}
-			},
-		)
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx := context.Background()
+			collectionID := fmt.Sprintf("context-blocks-%d", position)
+			manifest := []semsearch.Fingerprint{{ConversationID: textOrderConversationID, Value: "v1"}}
+			if _, err := client.UpsertConversationDocuments(ctx, collectionID, contextDocuments(undated, testCase.storedText), manifest); err != nil {
+				t.Fatalf("UpsertConversationDocuments failed: %v.", err)
+			}
+			source := vectorsearch.TimestampSourceRepairSource{ConversationID: textOrderConversationID, Documents: contextDocuments(testCase.sourceDate, contextTypedText)}
+			report, err := client.RepairTimestampsFromSource(ctx, collectionID, []vectorsearch.TimestampSourceRepairSource{source}, false)
+			if err != nil {
+				t.Fatalf("RepairTimestampsFromSource failed: %v.", err)
+			}
+			if report.Outcomes[testCase.wantOutcome] != 1 {
+				t.Fatalf("The repair returned outcomes %v; the expected outcome is %s.", report.Outcomes, testCase.wantOutcome)
+			}
+			path := fmt.Sprintf("conv/%s/%d", textOrderConversationID, textOrderTargetMessage)
+			stamp, dated := textOrderRowDate(t, address, collectionID, path)
+			if testCase.wantDate == 0 && dated {
+				t.Fatalf("The repair assigned the date %d.", stamp)
+			}
+			if testCase.wantDate != 0 && (!dated || stamp != testCase.wantDate) {
+				t.Fatalf("The row has date %d with dated=%t; the expected date is %d.", stamp, dated, testCase.wantDate)
+			}
+		})
 	}
 }

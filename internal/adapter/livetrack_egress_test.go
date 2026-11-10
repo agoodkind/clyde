@@ -17,7 +17,6 @@ type fakeCloser struct {
 func (f *fakeCloser) Close(reason string) error {
 	f.closed = true
 	f.reason = reason
-
 	return nil
 }
 
@@ -26,26 +25,19 @@ func TestRegisterEgressRegistersAndReleasesSession(t *testing.T) {
 	reg := newEgressRegistry(livetrack.NewGroup(livetrack.GroupOptions{Log: nil}))
 	ctx := context.Background()
 
-	egressCtx, sess, release := registerEgress(
-		ctx,
-		reg,
-		egressSessionKindHTTP,
-		EgressMeta{
-			Provider:          "anthropic",
-			UpstreamURL:       "https://api.anthropic.com/v1/messages",
-			UpstreamRequestID: "",
-			AttemptNo:         0,
-			ParentRequestID:   "req-abc",
-		},
-	)
+	egressCtx, sess, release := registerEgress(ctx, reg, egressSessionKindHTTP, EgressMeta{
+		Provider:          "anthropic",
+		UpstreamURL:       "https://api.anthropic.com/v1/messages",
+		UpstreamRequestID: "",
+		AttemptNo:         0,
+		ParentRequestID:   "req-abc",
+	})
 	if egressCtx == nil {
 		t.Fatal("registerEgress returned nil context")
 	}
-
 	if sess == nil {
 		t.Fatal("registerEgress returned nil session")
 	}
-
 	if reg.Count() != 1 {
 		t.Fatalf("expected 1 session, got %d", reg.Count())
 	}
@@ -56,7 +48,6 @@ func TestRegisterEgressRegistersAndReleasesSession(t *testing.T) {
 	if reg.Count() != 0 {
 		t.Fatalf("expected 0 sessions after release, got %d", reg.Count())
 	}
-
 	if egressCtx.Err() == nil {
 		t.Error("context should be canceled after release")
 	}
@@ -66,28 +57,21 @@ func TestRegisterEgressNilRegistryIsNoop(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	egressCtx, sess, release := registerEgress(
-		ctx,
-		nil,
-		egressSessionKindHTTP,
-		EgressMeta{
-			Provider:          "anthropic",
-			UpstreamURL:       "https://api.anthropic.com/v1/messages",
-			UpstreamRequestID: "",
-			AttemptNo:         0,
-			ParentRequestID:   "req-nil",
-		},
-	)
+	egressCtx, sess, release := registerEgress(ctx, nil, egressSessionKindHTTP, EgressMeta{
+		Provider:          "anthropic",
+		UpstreamURL:       "https://api.anthropic.com/v1/messages",
+		UpstreamRequestID: "",
+		AttemptNo:         0,
+		ParentRequestID:   "req-nil",
+	})
 	// Nil registry: should return the original ctx unchanged, nil session,
 	// and a no-op release.
 	if egressCtx != ctx {
 		t.Error("expected original context back for nil registry")
 	}
-
 	if sess != nil {
 		t.Error("expected nil session for nil registry")
 	}
-
 	// release should not panic.
 	release("done")
 }
@@ -99,29 +83,20 @@ func TestRegisterEgressForceCloseViaContextCancel(t *testing.T) {
 	ctx := context.Background()
 
 	// Register a session. The closer cancels the context.
-	egressCtx, _, release := registerEgress(
-		ctx,
-		reg,
-		egressSessionKindHTTP,
-		EgressMeta{
-			Provider:          "anthropic",
-			UpstreamURL:       "https://api.anthropic.com/v1/messages",
-			UpstreamRequestID: "",
-			AttemptNo:         0,
-			ParentRequestID:   "req-force",
-		},
-	)
+	egressCtx, _, release := registerEgress(ctx, reg, egressSessionKindHTTP, EgressMeta{
+		Provider:          "anthropic",
+		UpstreamURL:       "https://api.anthropic.com/v1/messages",
+		UpstreamRequestID: "",
+		AttemptNo:         0,
+		ParentRequestID:   "req-force",
+	})
 	defer release("cleanup")
 
 	// Simulate a wedged provider call by draining through the lifecycle group's
 	// Quiesce with a very short cap, which force-closes the unreleased session.
 	drainCtx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	group.Quiesce(
-		drainCtx,
-		"test.shutdown",
-		livetrack.Budget{Cap: 50 * time.Millisecond, IdleGrace: 0},
-	)
+	group.Quiesce(drainCtx, "test.shutdown", livetrack.Budget{Cap: 50 * time.Millisecond, IdleGrace: 0})
 
 	// Force-close should have canceled the egress context.
 	select {
@@ -138,34 +113,23 @@ func TestRegisterEgressRetryAttemptParentLinkage(t *testing.T) {
 	ctx := context.Background()
 
 	// Register the parent egress session.
-	_, parentSess, releaseParent := registerEgress(
-		ctx,
-		reg,
-		egressSessionKindWebsocket,
-		EgressMeta{
-			Provider:          "codex",
-			UpstreamURL:       "wss://chatgpt.com/backend-api/codex/responses",
-			UpstreamRequestID: "",
-			AttemptNo:         0,
-			ParentRequestID:   "req-retry",
-		},
-	)
+	_, parentSess, releaseParent := registerEgress(ctx, reg, egressSessionKindWebsocket, EgressMeta{
+		Provider:          "codex",
+		UpstreamURL:       "wss://chatgpt.com/backend-api/codex/responses",
+		UpstreamRequestID: "",
+		AttemptNo:         0,
+		ParentRequestID:   "req-retry",
+	})
 	defer releaseParent("parent.done")
 
 	// Register attempt 1 as a nested child.
-	_, attempt1, releaseAttempt1 := registerEgress(
-		ctx,
-		reg,
-		egressSessionKindAttempt,
-		EgressMeta{
-			Provider:          "codex",
-			UpstreamURL:       "wss://chatgpt.com/backend-api/codex/responses",
-			UpstreamRequestID: "",
-			AttemptNo:         1,
-			ParentRequestID:   "req-retry",
-		},
-		livetrack.WithParent(parentSess),
-	)
+	_, attempt1, releaseAttempt1 := registerEgress(ctx, reg, egressSessionKindAttempt, EgressMeta{
+		Provider:          "codex",
+		UpstreamURL:       "wss://chatgpt.com/backend-api/codex/responses",
+		UpstreamRequestID: "",
+		AttemptNo:         1,
+		ParentRequestID:   "req-retry",
+	}, livetrack.WithParent(parentSess))
 	defer releaseAttempt1("attempt1.done")
 
 	if reg.Count() != 2 {

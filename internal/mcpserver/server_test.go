@@ -27,22 +27,15 @@ func TestNewToolCallContextMintsFreshTracePerCall(t *testing.T) {
 	if !first.Valid() || !second.Valid() {
 		t.Fatalf("expected valid correlations, got %#v and %#v", first, second)
 	}
-
 	if first.TraceID == second.TraceID {
 		t.Fatalf("two tool calls share trace id %q, want a fresh trace per call", first.TraceID)
 	}
-
 	if first.SpanID == second.SpanID {
 		t.Fatalf("two tool calls share span id %q, want a fresh span per call", first.SpanID)
 	}
-
 	if first.TraceID == inherited.TraceID {
-		t.Fatalf(
-			"tool call reused the inherited serve trace %q, want a fresh one",
-			inherited.TraceID,
-		)
+		t.Fatalf("tool call reused the inherited serve trace %q, want a fresh one", inherited.TraceID)
 	}
-
 	if first.RequestID != "req-1" || second.RequestID != "req-2" {
 		t.Fatalf("request ids = %q and %q, want req-1 and req-2", first.RequestID, second.RequestID)
 	}

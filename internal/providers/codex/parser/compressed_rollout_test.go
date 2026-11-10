@@ -44,18 +44,10 @@ func newCompressedRolloutFixture(t *testing.T) compressedRolloutFixture {
 	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
 		t.Fatalf("the test could not create the session directory: %v", err)
 	}
-
 	registry := conversation.NewRegistry()
 	registry.Register(parser.New())
-
 	return compressedRolloutFixture{
-		index: conversation.NewIndex(
-			registry,
-			config.ConversationConfig{
-				IncludeSubagentConversations: true,
-				Semantic:                     config.ConversationSemanticConfig{},
-			},
-		),
+		index:      conversation.NewIndex(registry, config.ConversationConfig{IncludeSubagentConversations: true, Semantic: config.ConversationSemanticConfig{}}),
 		sessionDir: sessionDir,
 	}
 }
@@ -81,24 +73,15 @@ func (fixture compressedRolloutFixture) writeCompressed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the test could not create the zstd encoder: %v", err)
 	}
-
 	defer func() { _ = encoder.Close() }()
-	if err := os.WriteFile(
-		fixture.compressedPath(),
-		encoder.EncodeAll([]byte(compressedRolloutBody), nil),
-		0o600,
-	); err != nil {
+	if err := os.WriteFile(fixture.compressedPath(), encoder.EncodeAll([]byte(compressedRolloutBody), nil), 0o600); err != nil {
 		t.Fatalf("the test could not write the compressed rollout: %v", err)
 	}
 }
 
 func (fixture compressedRolloutFixture) writeCorrupt(t *testing.T) {
 	t.Helper()
-	if err := os.WriteFile(
-		fixture.compressedPath(),
-		[]byte(corruptRolloutContent),
-		0o600,
-	); err != nil {
+	if err := os.WriteFile(fixture.compressedPath(), []byte(corruptRolloutContent), 0o600); err != nil {
 		t.Fatalf("the test could not write the compressed rollout: %v", err)
 	}
 }
@@ -110,12 +93,7 @@ func (fixture compressedRolloutFixture) writeTruncated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the test could not read the compressed rollout: %v", err)
 	}
-
-	if err := os.WriteFile(
-		fixture.compressedPath(),
-		compressed[:len(compressed)/2],
-		0o600,
-	); err != nil {
+	if err := os.WriteFile(fixture.compressedPath(), compressed[:len(compressed)/2], 0o600); err != nil {
 		t.Fatalf("the test could not write the compressed rollout: %v", err)
 	}
 }
@@ -125,34 +103,26 @@ func (fixture compressedRolloutFixture) refreshedRecord(t *testing.T) conversati
 	if err := fixture.index.Refresh(context.Background()); err != nil {
 		t.Fatalf("the conversation index could not refresh: %v", err)
 	}
-
 	record, found := fixture.index.RecordByID("codex:" + compressedRolloutThreadID)
 	if !found {
 		t.Fatal("the conversation index did not find the expected conversation")
 	}
-
 	return record
 }
 
-func (fixture compressedRolloutFixture) recordWithRemovedPlainPath(
-	t *testing.T,
-) conversation.Record {
+func (fixture compressedRolloutFixture) recordWithRemovedPlainPath(t *testing.T) conversation.Record {
 	t.Helper()
 	fixture.writePlain(t)
 	record := fixture.refreshedRecord(t)
 	removeRollout(t, fixture.plainPath())
-
 	return record
 }
 
-func (fixture compressedRolloutFixture) recordWithRemovedCompressedPath(
-	t *testing.T,
-) conversation.Record {
+func (fixture compressedRolloutFixture) recordWithRemovedCompressedPath(t *testing.T) conversation.Record {
 	t.Helper()
 	fixture.writeCompressed(t)
 	record := fixture.refreshedRecord(t)
 	removeRollout(t, fixture.compressedPath())
-
 	return record
 }
 
@@ -190,19 +160,12 @@ func TestIndexReadsCompressedCodexRollouts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the conversation index could not read the context window: %v", err)
 	}
-
 	wantExport, err := plain.index.Export(plainRecord, compressedRolloutExportOptions())
 	if err != nil {
 		t.Fatalf("the conversation index could not export the conversation: %v", err)
 	}
-
-	if !strings.Contains(wantContext, "first answer about retention") ||
-		!strings.Contains(string(wantExport), "second answer about snapshots") {
-		t.Fatalf(
-			"the context window or export from the plain rollout lacks the expected text: %q, %q",
-			wantContext,
-			wantExport,
-		)
+	if !strings.Contains(wantContext, "first answer about retention") || !strings.Contains(string(wantExport), "second answer about snapshots") {
+		t.Fatalf("the context window or export from the plain rollout lacks the expected text: %q, %q", wantContext, wantExport)
 	}
 
 	tests := []struct {
@@ -215,7 +178,6 @@ func TestIndexReadsCompressedCodexRollouts(t *testing.T) {
 			record: func(fixture compressedRolloutFixture, t *testing.T) conversation.Record {
 				t.Helper()
 				fixture.writeCompressed(t)
-
 				return fixture.refreshedRecord(t)
 			},
 			wantStore: compressedRolloutFixture.compressedPath,
@@ -226,7 +188,6 @@ func TestIndexReadsCompressedCodexRollouts(t *testing.T) {
 				t.Helper()
 				record := fixture.recordWithRemovedPlainPath(t)
 				fixture.writeCompressed(t)
-
 				return record
 			},
 			wantStore: compressedRolloutFixture.plainPath,
@@ -237,7 +198,6 @@ func TestIndexReadsCompressedCodexRollouts(t *testing.T) {
 				t.Helper()
 				record := fixture.recordWithRemovedCompressedPath(t)
 				fixture.writePlain(t)
-
 				return record
 			},
 			wantStore: compressedRolloutFixture.compressedPath,
@@ -248,61 +208,33 @@ func TestIndexReadsCompressedCodexRollouts(t *testing.T) {
 				t.Helper()
 				fixture.writePlain(t)
 				fixture.writeCompressed(t)
-
 				return fixture.refreshedRecord(t)
 			},
 			wantStore: compressedRolloutFixture.plainPath,
 		},
 	}
 	for _, testCase := range tests {
-		t.Run(
-			testCase.name,
-			func(t *testing.T) {
-				fixture := newCompressedRolloutFixture(t)
-				record := testCase.record(fixture, t)
-				if record.ID != plainRecord.ID || record.ArtifactPath != testCase.wantStore(
-					fixture,
-				) {
-					t.Fatalf(
-						"the record does not match the expected conversation identity or artifact path: %q, %q",
-						record.ID,
-						record.ArtifactPath,
-					)
-				}
-
-				gotContext, err := fixture.index.HitContextWindow(
-					record,
-					compressedRolloutCenter,
-					1,
-					1,
-					"",
-				)
-				if err != nil {
-					t.Fatalf("the conversation index could not read the context window: %v", err)
-				}
-
-				if gotContext != wantContext {
-					t.Fatalf(
-						"the context window differs from the plain rollout baseline: %q, %q",
-						gotContext,
-						wantContext,
-					)
-				}
-
-				gotExport, err := fixture.index.Export(record, compressedRolloutExportOptions())
-				if err != nil {
-					t.Fatalf("the conversation index could not export the conversation: %v", err)
-				}
-
-				if string(gotExport) != string(wantExport) {
-					t.Fatalf(
-						"the export differs from the plain rollout baseline: %q, %q",
-						gotExport,
-						wantExport,
-					)
-				}
-			},
-		)
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newCompressedRolloutFixture(t)
+			record := testCase.record(fixture, t)
+			if record.ID != plainRecord.ID || record.ArtifactPath != testCase.wantStore(fixture) {
+				t.Fatalf("the record does not match the expected conversation identity or artifact path: %q, %q", record.ID, record.ArtifactPath)
+			}
+			gotContext, err := fixture.index.HitContextWindow(record, compressedRolloutCenter, 1, 1, "")
+			if err != nil {
+				t.Fatalf("the conversation index could not read the context window: %v", err)
+			}
+			if gotContext != wantContext {
+				t.Fatalf("the context window differs from the plain rollout baseline: %q, %q", gotContext, wantContext)
+			}
+			gotExport, err := fixture.index.Export(record, compressedRolloutExportOptions())
+			if err != nil {
+				t.Fatalf("the conversation index could not export the conversation: %v", err)
+			}
+			if string(gotExport) != string(wantExport) {
+				t.Fatalf("the export differs from the plain rollout baseline: %q, %q", gotExport, wantExport)
+			}
+		})
 	}
 }
 
@@ -333,39 +265,18 @@ func TestIndexReportsUnreadableCompressedCodexRollouts(t *testing.T) {
 		},
 	}
 	for _, testCase := range tests {
-		t.Run(
-			testCase.name,
-			func(t *testing.T) {
-				fixture := newCompressedRolloutFixture(t)
-				record := fixture.recordWithRemovedPlainPath(t)
-				testCase.replace(fixture, t)
-				wantErr := testCase.wantErr(fixture)
-				if _, err := fixture.index.HitContextWindow(
-					record,
-					compressedRolloutCenter,
-					1,
-					1,
-					"",
-				); err == nil ||
-					!strings.Contains(err.Error(), wantErr) {
-					t.Fatalf(
-						"reading the context window did not return the expected error: %v",
-						err,
-					)
-				}
-
-				if _, err := fixture.index.Export(
-					record,
-					compressedRolloutExportOptions(),
-				); err == nil ||
-					!strings.Contains(err.Error(), wantErr) {
-					t.Fatalf(
-						"exporting the conversation did not return the expected error: %v",
-						err,
-					)
-				}
-			},
-		)
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newCompressedRolloutFixture(t)
+			record := fixture.recordWithRemovedPlainPath(t)
+			testCase.replace(fixture, t)
+			wantErr := testCase.wantErr(fixture)
+			if _, err := fixture.index.HitContextWindow(record, compressedRolloutCenter, 1, 1, ""); err == nil || !strings.Contains(err.Error(), wantErr) {
+				t.Fatalf("reading the context window did not return the expected error: %v", err)
+			}
+			if _, err := fixture.index.Export(record, compressedRolloutExportOptions()); err == nil || !strings.Contains(err.Error(), wantErr) {
+				t.Fatalf("exporting the conversation did not return the expected error: %v", err)
+			}
+		})
 	}
 }
 
@@ -375,21 +286,10 @@ func TestCorruptCompressedRolloutKeepsFilenameIdentity(t *testing.T) {
 	fixture.writeCorrupt(t)
 	record := fixture.refreshedRecord(t)
 	if record.ArtifactPath != fixture.compressedPath() {
-		t.Fatalf(
-			"the record does not match the expected conversation identity or artifact path: %q, %q",
-			record.ID,
-			record.ArtifactPath,
-		)
+		t.Fatalf("the record does not match the expected conversation identity or artifact path: %q, %q", record.ID, record.ArtifactPath)
 	}
-
-	identity, _, identified := codexstore.RolloutIdentityFromFilename(
-		filepath.Base(fixture.compressedPath()),
-	)
+	identity, _, identified := codexstore.RolloutIdentityFromFilename(filepath.Base(fixture.compressedPath()))
 	if !identified || identity != compressedRolloutThreadID {
-		t.Fatalf(
-			"the compressed filename did not produce the expected thread identity: %q, %t",
-			identity,
-			identified,
-		)
+		t.Fatalf("the compressed filename did not produce the expected thread identity: %q, %t", identity, identified)
 	}
 }

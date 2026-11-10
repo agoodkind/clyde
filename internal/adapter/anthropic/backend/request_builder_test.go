@@ -21,15 +21,11 @@ import (
 // alias derivation reproduces the prior ResolvedAlias.Alias behavior.
 func resolvedForTest(model adaptermodel.ResolvedAlias) *adapterresolver.ResolvedRequest {
 	resolved := &adapterresolver.ResolvedRequest{
-		Provider: adaptermodel.BackendAnthropic,
-		Family:   model.Profile,
-		Model:    model.WireModel,
-		Effort:   adapterresolver.Effort(model.Effort),
-		ContextBudget: adapterresolver.ContextBudget{
-			InputTokens:  model.Context,
-			OutputTokens: model.MaxOutputTokens,
-			TotalTokens:  model.Context,
-		},
+		Provider:             adaptermodel.BackendAnthropic,
+		Family:               model.Profile,
+		Model:                model.WireModel,
+		Effort:               adapterresolver.Effort(model.Effort),
+		ContextBudget:        adapterresolver.ContextBudget{InputTokens: model.Context, OutputTokens: model.MaxOutputTokens, TotalTokens: model.Context},
 		Thinking:             model.Thinking,
 		ThinkingBudgetTokens: model.ThinkingBudgetTokens,
 		Instructions:         model.Instructions,
@@ -40,7 +36,6 @@ func resolvedForTest(model adaptermodel.ResolvedAlias) *adapterresolver.Resolved
 	}
 	resolved.Cursor.NormalizedModel = model.Alias
 	resolved.OpenAI.Model = model.Alias
-
 	return resolved
 }
 
@@ -64,7 +59,6 @@ func requestBuilderConfig() BuildRequestConfig {
 
 func requestBuilderChatRequest() adapteropenai.ChatRequest {
 	maxTokens := 4096
-
 	return adapteropenai.ChatRequest{
 		Model: "clyde-opus-4-7",
 		Messages: []adapteropenai.ChatMessage{
@@ -93,7 +87,6 @@ func TestBuildRequestPreservesWildcardReasoningEffort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
-
 	if out.OutputConfig == nil || out.OutputConfig.Effort != "future-tier" {
 		t.Fatalf("OutputConfig = %+v, want future-tier", out.OutputConfig)
 	}
@@ -119,7 +112,6 @@ func TestBuildRequestForwardsConfiguredExactReasoningEffort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
-
 	if out.OutputConfig == nil || out.OutputConfig.Effort != "future-tier" {
 		t.Fatalf("OutputConfig = %+v, want configured exact effort", out.OutputConfig)
 	}
@@ -146,7 +138,6 @@ func TestBuildRequestHonorsProfileOutputAboveLegacyCap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
-
 	if out.MaxTokens != requestedMax {
 		t.Fatalf("MaxTokens = %d, want %d", out.MaxTokens, requestedMax)
 	}
@@ -163,12 +154,10 @@ func TestRequestedOutputTokensPreservesResponsesCapPrecedence(t *testing.T) {
 	if got := requestedOutputTokens(request); got == nil || *got != maxOutputTokens {
 		t.Fatalf("max_output_tokens precedence = %v, want %d", got, maxOutputTokens)
 	}
-
 	request.MaxOutputTokens = nil
 	if got := requestedOutputTokens(request); got == nil || *got != maxTokens {
 		t.Fatalf("max_tokens precedence = %v, want %d", got, maxTokens)
 	}
-
 	request.MaxTokens = nil
 	if got := requestedOutputTokens(request); got == nil || *got != maxCompletionTokens {
 		t.Fatalf("max_completion_tokens fallback = %v, want %d", got, maxCompletionTokens)
@@ -194,7 +183,6 @@ func TestBuildRequestCarriesResolvedWireProfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
-
 	field := reflect.ValueOf(out.FeatureVector).FieldByName("WireProfile")
 	if !field.IsValid() || field.Kind() != reflect.String || field.String() != model.WireProfile {
 		t.Fatalf("FeatureVector wire profile = %v, want %q", field, model.WireProfile)
@@ -236,30 +224,19 @@ func TestBuildRequestDerivesFeatureVector(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		t.Run(
-			tc.name,
-			func(t *testing.T) {
-				req := requestBuilderChatRequest()
-				cfg := requestBuilderConfig()
+		t.Run(tc.name, func(t *testing.T) {
+			req := requestBuilderChatRequest()
+			cfg := requestBuilderConfig()
 
-				out, err := BuildRequest(
-					context.Background(),
-					req,
-					resolvedForTest(tc.model),
-					"",
-					cfg,
-					"req-test",
-				)
-				if err != nil {
-					t.Fatalf("BuildRequest: %v", err)
-				}
-
-				want := anthropic.WireFlavorFeatureVector{ModelID: tc.wantModelID}
-				if out.FeatureVector != want {
-					t.Fatalf("FeatureVector = %+v, want %+v", out.FeatureVector, want)
-				}
-			},
-		)
+			out, err := BuildRequest(context.Background(), req, resolvedForTest(tc.model), "", cfg, "req-test")
+			if err != nil {
+				t.Fatalf("BuildRequest: %v", err)
+			}
+			want := anthropic.WireFlavorFeatureVector{ModelID: tc.wantModelID}
+			if out.FeatureVector != want {
+				t.Fatalf("FeatureVector = %+v, want %+v", out.FeatureVector, want)
+			}
+		})
 	}
 }
 
@@ -276,38 +253,25 @@ func TestBuildRequestEmitsMetadataAndContextManagement(t *testing.T) {
 	cfg := requestBuilderConfig()
 	cfg.Identity = anthropicID()
 
-	out, err := BuildRequest(
-		context.Background(),
-		req,
-		resolvedForTest(model),
-		adaptermodel.EffortMedium,
-		cfg,
-		"req-test",
-	)
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), adaptermodel.EffortMedium, cfg, "req-test")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
-
 	if out.Metadata == nil {
 		t.Fatal("Metadata is nil")
 	}
-
 	if !strings.Contains(out.Metadata.UserID, `"device_id":"dev-1"`) {
 		t.Errorf("Metadata.UserID missing device_id: %s", out.Metadata.UserID)
 	}
-
 	if !strings.Contains(out.Metadata.UserID, `"account_uuid":"acct-1"`) {
 		t.Errorf("Metadata.UserID missing account_uuid: %s", out.Metadata.UserID)
 	}
-
 	if !strings.Contains(out.Metadata.UserID, `"session_id":"sess-1"`) {
 		t.Errorf("Metadata.UserID missing session_id: %s", out.Metadata.UserID)
 	}
-
 	if out.ContextManagement == nil || len(out.ContextManagement.Edits) != 1 {
 		t.Fatalf("ContextManagement missing or wrong length: %+v", out.ContextManagement)
 	}
-
 	edit := out.ContextManagement.Edits[0]
 	if edit.Type != "clear_thinking_20251015" || edit.Keep != "all" {
 		t.Errorf("clear_thinking edit shape wrong: %+v", edit)
@@ -322,23 +286,12 @@ func TestBuildRequestSkipsContextManagementWhenThinkingOff(t *testing.T) {
 		WireModel:       "claude-haiku-4-5",
 		MaxOutputTokens: 4096,
 	}
-	out, err := BuildRequest(
-		context.Background(),
-		req,
-		resolvedForTest(model),
-		"",
-		requestBuilderConfig(),
-		"req-test",
-	)
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), "", requestBuilderConfig(), "req-test")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
-
 	if out.ContextManagement != nil {
-		t.Errorf(
-			"ContextManagement should be nil when thinking is off, got %+v",
-			out.ContextManagement,
-		)
+		t.Errorf("ContextManagement should be nil when thinking is off, got %+v", out.ContextManagement)
 	}
 }
 
@@ -351,26 +304,16 @@ func TestBuildRequestThinkingDisplaySummarizedWhenEnabled(t *testing.T) {
 		Thinking:        adaptermodel.ThinkingEnabled,
 	}
 
-	out, err := BuildRequest(
-		context.Background(),
-		req,
-		resolvedForTest(model),
-		"",
-		requestBuilderConfig(),
-		"req-test",
-	)
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), "", requestBuilderConfig(), "req-test")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
-
 	if out.Thinking == nil {
 		t.Fatal("Thinking is nil")
 	}
-
 	if out.Thinking.Type != "enabled" {
 		t.Fatalf("Thinking.Type = %q want enabled", out.Thinking.Type)
 	}
-
 	if out.Thinking.Display != "summarized" {
 		t.Fatalf("Thinking.Display = %q want summarized", out.Thinking.Display)
 	}
@@ -392,26 +335,16 @@ func TestBuildRequestPassesThinkingAdaptiveThrough(t *testing.T) {
 		Thinking:        adaptermodel.ThinkingAdaptive,
 	}
 
-	out, err := BuildRequest(
-		context.Background(),
-		req,
-		resolvedForTest(model),
-		adaptermodel.EffortMedium,
-		requestBuilderConfig(),
-		"req-test",
-	)
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), adaptermodel.EffortMedium, requestBuilderConfig(), "req-test")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
-
 	if out.Thinking == nil {
 		t.Fatal("Thinking is nil")
 	}
-
 	if out.Thinking.Type != "adaptive" {
 		t.Fatalf("Thinking.Type = %q want adaptive", out.Thinking.Type)
 	}
-
 	if out.Thinking.Display != "summarized" {
 		t.Fatalf("Thinking.Display = %q want summarized", out.Thinking.Display)
 	}
@@ -432,31 +365,18 @@ func TestBuildRequestPassesThinkingEnabledThrough(t *testing.T) {
 		ThinkingBudgetTokens: 7000,
 	}
 
-	out, err := BuildRequest(
-		context.Background(),
-		req,
-		resolvedForTest(model),
-		adaptermodel.EffortMedium,
-		requestBuilderConfig(),
-		"req-test",
-	)
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), adaptermodel.EffortMedium, requestBuilderConfig(), "req-test")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
-
 	if out.Thinking == nil {
 		t.Fatal("Thinking is nil")
 	}
-
 	if out.Thinking.Type != "enabled" {
 		t.Fatalf("Thinking.Type = %q want enabled", out.Thinking.Type)
 	}
-
 	if out.Thinking.BudgetTokens != 7000 {
-		t.Fatalf(
-			"Thinking.BudgetTokens = %d want configured budget 7000",
-			out.Thinking.BudgetTokens,
-		)
+		t.Fatalf("Thinking.BudgetTokens = %d want configured budget 7000", out.Thinking.BudgetTokens)
 	}
 }
 
@@ -470,22 +390,13 @@ func TestBuildRequestAllowsThinkingBudgetAtOutputBoundary(t *testing.T) {
 		ThinkingBudgetTokens: 15999,
 	}
 
-	out, err := BuildRequest(
-		context.Background(),
-		req,
-		resolvedForTest(model),
-		"",
-		requestBuilderConfig(),
-		"req-boundary",
-	)
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), "", requestBuilderConfig(), "req-boundary")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
-
 	if out.Thinking == nil || out.Thinking.BudgetTokens != 15999 {
 		t.Fatalf("Thinking = %+v, want budget 15999", out.Thinking)
 	}
-
 	if out.MaxTokens > model.MaxOutputTokens {
 		t.Fatalf("MaxTokens = %d, exceeds profile cap %d", out.MaxTokens, model.MaxOutputTokens)
 	}
@@ -500,26 +411,16 @@ func TestBuildRequestHaikuEnabledStaysManual(t *testing.T) {
 		Thinking:        adaptermodel.ThinkingEnabled,
 	}
 
-	out, err := BuildRequest(
-		context.Background(),
-		req,
-		resolvedForTest(model),
-		"",
-		requestBuilderConfig(),
-		"req-test",
-	)
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), "", requestBuilderConfig(), "req-test")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
-
 	if out.Thinking == nil {
 		t.Fatal("Thinking is nil")
 	}
-
 	if out.Thinking.Type != "enabled" {
 		t.Fatalf("Thinking.Type = %q want enabled", out.Thinking.Type)
 	}
-
 	if out.Thinking.BudgetTokens != 15999 {
 		t.Fatalf("Thinking.BudgetTokens = %d want 15999", out.Thinking.BudgetTokens)
 	}
@@ -534,26 +435,16 @@ func TestBuildRequestThinkingAdaptiveKeepsSummarizedDisplay(t *testing.T) {
 		Thinking:        adaptermodel.ThinkingAdaptive,
 	}
 
-	out, err := BuildRequest(
-		context.Background(),
-		req,
-		resolvedForTest(model),
-		"",
-		requestBuilderConfig(),
-		"req-test",
-	)
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), "", requestBuilderConfig(), "req-test")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
-
 	if out.Thinking == nil {
 		t.Fatal("Thinking is nil")
 	}
-
 	if out.Thinking.Type != "adaptive" {
 		t.Fatalf("Thinking.Type = %q want adaptive", out.Thinking.Type)
 	}
-
 	if out.Thinking.Display != "summarized" {
 		t.Fatalf("Thinking.Display = %q want summarized", out.Thinking.Display)
 	}
@@ -568,26 +459,16 @@ func TestBuildRequestThinkingDisabledHasNoDisplay(t *testing.T) {
 		Thinking:        adaptermodel.ThinkingDisabled,
 	}
 
-	out, err := BuildRequest(
-		context.Background(),
-		req,
-		resolvedForTest(model),
-		"",
-		requestBuilderConfig(),
-		"req-test",
-	)
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), "", requestBuilderConfig(), "req-test")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
-
 	if out.Thinking == nil {
 		t.Fatal("Thinking is nil")
 	}
-
 	if out.Thinking.Type != "disabled" {
 		t.Fatalf("Thinking.Type = %q want disabled", out.Thinking.Type)
 	}
-
 	if out.Thinking.Display != "" {
 		t.Fatalf("Thinking.Display = %q want empty", out.Thinking.Display)
 	}
@@ -607,11 +488,9 @@ func TestBuildRequestAddsModelInstructionsBeforeCallerSystem(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
-
 	if len(out.SystemBlocks) != 3 {
 		t.Fatalf("SystemBlocks len = %d want 3", len(out.SystemBlocks))
 	}
-
 	if got := out.SystemBlocks[2].Text; got != "model base instructions" {
 		t.Fatalf("caller system block = %q want model instructions prepended", got)
 	}
@@ -631,19 +510,15 @@ func TestBuildRequestAddsJSONPromptWithoutDuplicatingPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
-
 	if len(out.SystemBlocks) != 3 {
 		t.Fatalf("SystemBlocks len = %d want 3", len(out.SystemBlocks))
 	}
-
 	if out.SystemBlocks[1].Text != "prefix" {
 		t.Fatalf("prefix block = %q want prefix", out.SystemBlocks[1].Text)
 	}
-
 	if strings.Contains(out.SystemBlocks[2].Text, "prefix") {
 		t.Fatalf("caller system should not duplicate prefix: %q", out.SystemBlocks[2].Text)
 	}
-
 	if !strings.Contains(out.SystemBlocks[2].Text, "Return JSON only.") {
 		t.Fatalf("caller system missing JSON prompt: %q", out.SystemBlocks[2].Text)
 	}
@@ -682,72 +557,44 @@ func TestBuildRequestSystemPrefixBlockOrderingAndCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
-
 	if len(out.SystemBlocks) != 3 {
 		t.Fatalf("SystemBlocks len = %d want 3 (billing, prefix, caller)", len(out.SystemBlocks))
 	}
-
 	if out.SystemBlocks[0].Text == "" {
 		t.Fatalf("billing block missing: %+v", out.SystemBlocks[0])
 	}
-
 	if out.SystemBlocks[0].CacheControl != nil {
-		t.Fatalf(
-			"billing block must not carry cache_control: %+v",
-			out.SystemBlocks[0].CacheControl,
-		)
+		t.Fatalf("billing block must not carry cache_control: %+v", out.SystemBlocks[0].CacheControl)
 	}
-
 	if out.SystemBlocks[1].Text != "prefix" {
 		t.Fatalf("prefix block text = %q want %q", out.SystemBlocks[1].Text, "prefix")
 	}
-
 	if out.SystemBlocks[1].CacheControl == nil {
 		t.Fatal("prefix block missing cache_control")
 	}
-
 	if out.SystemBlocks[1].CacheControl.Type != "ephemeral" {
-		t.Errorf(
-			"prefix cache_control.type = %q want ephemeral",
-			out.SystemBlocks[1].CacheControl.Type,
-		)
+		t.Errorf("prefix cache_control.type = %q want ephemeral", out.SystemBlocks[1].CacheControl.Type)
 	}
-
 	if out.SystemBlocks[1].CacheControl.TTL != "1h" {
 		t.Errorf("prefix cache_control.ttl = %q want 1h", out.SystemBlocks[1].CacheControl.TTL)
 	}
-
 	if out.SystemBlocks[1].CacheControl.Scope != "global" {
-		t.Errorf(
-			"prefix cache_control.scope = %q want global",
-			out.SystemBlocks[1].CacheControl.Scope,
-		)
+		t.Errorf("prefix cache_control.scope = %q want global", out.SystemBlocks[1].CacheControl.Scope)
 	}
-
 	if out.SystemBlocks[2].Text != "caller system text" {
 		t.Fatalf("caller block text = %q want caller system text", out.SystemBlocks[2].Text)
 	}
-
 	if out.SystemBlocks[2].CacheControl == nil {
 		t.Fatal("caller block missing cache_control")
 	}
-
 	if out.SystemBlocks[2].CacheControl.Type != "ephemeral" {
-		t.Errorf(
-			"caller cache_control.type = %q want ephemeral",
-			out.SystemBlocks[2].CacheControl.Type,
-		)
+		t.Errorf("caller cache_control.type = %q want ephemeral", out.SystemBlocks[2].CacheControl.Type)
 	}
-
 	if out.SystemBlocks[2].CacheControl.TTL != "1h" {
 		t.Errorf("caller cache_control.ttl = %q want 1h", out.SystemBlocks[2].CacheControl.TTL)
 	}
-
 	if out.SystemBlocks[2].CacheControl.Scope != "" {
-		t.Errorf(
-			"caller cache_control.scope = %q want empty (scope only on prefix)",
-			out.SystemBlocks[2].CacheControl.Scope,
-		)
+		t.Errorf("caller cache_control.scope = %q want empty (scope only on prefix)", out.SystemBlocks[2].CacheControl.Scope)
 	}
 }
 
@@ -770,20 +617,14 @@ func TestBuildRequestEmptyPrefixOmitsPrefixBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
-
 	if len(out.SystemBlocks) != 2 {
 		t.Fatalf("SystemBlocks len = %d want 2 (billing, caller)", len(out.SystemBlocks))
 	}
-
 	for i, block := range out.SystemBlocks {
 		if block.Text == "prefix" {
-			t.Errorf(
-				"SystemBlocks[%d] unexpectedly contains prefix text with empty prefix configured",
-				i,
-			)
+			t.Errorf("SystemBlocks[%d] unexpectedly contains prefix text with empty prefix configured", i)
 		}
 	}
-
 	if out.SystemBlocks[1].Text != "only caller" {
 		t.Fatalf("caller block text = %q want only caller", out.SystemBlocks[1].Text)
 	}
@@ -805,21 +646,14 @@ func TestBuildRequestPrefixBlockEmittedWithoutCallerSystem(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
-
 	if len(out.SystemBlocks) != 2 {
 		t.Fatalf("SystemBlocks len = %d want 2 (billing, prefix)", len(out.SystemBlocks))
 	}
-
 	if out.SystemBlocks[1].Text != "prefix" {
 		t.Fatalf("prefix block text = %q want prefix", out.SystemBlocks[1].Text)
 	}
-
-	if out.SystemBlocks[1].CacheControl == nil ||
-		out.SystemBlocks[1].CacheControl.Type != "ephemeral" {
-		t.Errorf(
-			"prefix block must carry ephemeral cache_control: %+v",
-			out.SystemBlocks[1].CacheControl,
-		)
+	if out.SystemBlocks[1].CacheControl == nil || out.SystemBlocks[1].CacheControl.Type != "ephemeral" {
+		t.Errorf("prefix block must carry ephemeral cache_control: %+v", out.SystemBlocks[1].CacheControl)
 	}
 }
 
@@ -841,7 +675,6 @@ func TestBuildRequestStripsPrefixWhenCallerAlreadyPrepended(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-
 	systemMsg := adapteropenai.ChatMessage{Role: "system", Content: body}
 	req.Messages = append([]adapteropenai.ChatMessage{systemMsg}, req.Messages...)
 
@@ -849,19 +682,15 @@ func TestBuildRequestStripsPrefixWhenCallerAlreadyPrepended(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
-
 	if len(out.SystemBlocks) != 3 {
 		t.Fatalf("SystemBlocks len = %d want 3", len(out.SystemBlocks))
 	}
-
 	if out.SystemBlocks[1].Text != "prefix" {
 		t.Fatalf("prefix block text = %q want prefix", out.SystemBlocks[1].Text)
 	}
-
 	if got := out.SystemBlocks[2].Text; strings.HasPrefix(got, "prefix") {
 		t.Fatalf("caller block must not start with prefix after dedupe: %q", got)
 	}
-
 	if got := out.SystemBlocks[2].Text; got != "the rest of the caller system" {
 		t.Fatalf("caller block text = %q want %q", got, "the rest of the caller system")
 	}
@@ -887,23 +716,14 @@ func TestBuildRequestCachingDisabledDropsCacheMarkers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
-
 	if len(out.SystemBlocks) != 3 {
 		t.Fatalf("SystemBlocks len = %d want 3", len(out.SystemBlocks))
 	}
-
 	if out.SystemBlocks[1].CacheControl != nil {
-		t.Errorf(
-			"prefix block must not carry cache_control with caching disabled: %+v",
-			out.SystemBlocks[1].CacheControl,
-		)
+		t.Errorf("prefix block must not carry cache_control with caching disabled: %+v", out.SystemBlocks[1].CacheControl)
 	}
-
 	if out.SystemBlocks[2].CacheControl != nil {
-		t.Errorf(
-			"caller block must not carry cache_control with caching disabled: %+v",
-			out.SystemBlocks[2].CacheControl,
-		)
+		t.Errorf("caller block must not carry cache_control with caching disabled: %+v", out.SystemBlocks[2].CacheControl)
 	}
 }
 
@@ -925,32 +745,21 @@ func TestBuildRequestNormalizesPromptCacheTTLAndScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
-
 	if len(out.SystemBlocks) < 2 {
 		t.Fatalf("SystemBlocks len = %d want >= 2", len(out.SystemBlocks))
 	}
-
 	prefixBlock := out.SystemBlocks[1]
 	if prefixBlock.Text != "prefix" {
 		t.Fatalf("expected prefix block at index 1, got %q", prefixBlock.Text)
 	}
-
 	if prefixBlock.CacheControl == nil {
 		t.Fatal("prefix block missing cache_control")
 	}
-
 	if prefixBlock.CacheControl.TTL != "" {
-		t.Errorf(
-			"ttl = %q want empty after normalization of out-of-spec value",
-			prefixBlock.CacheControl.TTL,
-		)
+		t.Errorf("ttl = %q want empty after normalization of out-of-spec value", prefixBlock.CacheControl.TTL)
 	}
-
 	if prefixBlock.CacheControl.Scope != "" {
-		t.Errorf(
-			"scope = %q want empty after normalization of out-of-spec value",
-			prefixBlock.CacheControl.Scope,
-		)
+		t.Errorf("scope = %q want empty after normalization of out-of-spec value", prefixBlock.CacheControl.Scope)
 	}
 }
 
@@ -972,7 +781,6 @@ func TestBuildRequestJSONPromptAppendsAfterCallerSystemBelowPrefix(t *testing.T)
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-
 	systemMsg := adapteropenai.ChatMessage{Role: "system", Content: body}
 	req.Messages = append([]adapteropenai.ChatMessage{systemMsg}, req.Messages...)
 
@@ -980,28 +788,22 @@ func TestBuildRequestJSONPromptAppendsAfterCallerSystemBelowPrefix(t *testing.T)
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
-
 	if len(out.SystemBlocks) != 3 {
 		t.Fatalf("SystemBlocks len = %d want 3", len(out.SystemBlocks))
 	}
-
 	if out.SystemBlocks[1].Text != "prefix" {
 		t.Fatalf("prefix block text = %q want prefix", out.SystemBlocks[1].Text)
 	}
-
 	if strings.Contains(out.SystemBlocks[1].Text, "Return JSON only.") {
 		t.Fatalf("JSON prompt must not be merged into prefix block: %q", out.SystemBlocks[1].Text)
 	}
-
 	caller := out.SystemBlocks[2].Text
 	if !strings.Contains(caller, callerSystem) {
 		t.Errorf("caller block missing caller system %q: %q", callerSystem, caller)
 	}
-
 	if !strings.Contains(caller, "Return JSON only.") {
 		t.Errorf("caller block missing JSON prompt: %q", caller)
 	}
-
 	if idxCaller := strings.Index(caller, callerSystem); idxCaller >= 0 {
 		idxJSON := strings.Index(caller, "Return JSON only.")
 		if idxJSON < idxCaller {
@@ -1027,18 +829,10 @@ func TestBuildRequestForwardsTemperature(t *testing.T) {
 	req := requestBuilderChatRequest()
 	req.Temperature = floatPtr(0.4)
 
-	out, err := BuildRequest(
-		context.Background(),
-		req,
-		resolvedForTest(samplingModel()),
-		"",
-		requestBuilderConfig(),
-		"req-temp",
-	)
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(samplingModel()), "", requestBuilderConfig(), "req-temp")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
-
 	if out.Temperature == nil || *out.Temperature != 0.4 {
 		t.Fatalf("Temperature = %v want 0.4", out.Temperature)
 	}
@@ -1048,18 +842,10 @@ func TestBuildRequestClampsTemperatureAboveOne(t *testing.T) {
 	req := requestBuilderChatRequest()
 	req.Temperature = floatPtr(1.7)
 
-	out, err := BuildRequest(
-		context.Background(),
-		req,
-		resolvedForTest(samplingModel()),
-		"",
-		requestBuilderConfig(),
-		"req-temp-clamp",
-	)
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(samplingModel()), "", requestBuilderConfig(), "req-temp-clamp")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
-
 	if out.Temperature == nil || *out.Temperature != 1.0 {
 		t.Fatalf("Temperature = %v want clamped 1.0", out.Temperature)
 	}
@@ -1069,18 +855,10 @@ func TestBuildRequestForwardsTopP(t *testing.T) {
 	req := requestBuilderChatRequest()
 	req.TopP = floatPtr(0.9)
 
-	out, err := BuildRequest(
-		context.Background(),
-		req,
-		resolvedForTest(samplingModel()),
-		"",
-		requestBuilderConfig(),
-		"req-topp",
-	)
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(samplingModel()), "", requestBuilderConfig(), "req-topp")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
-
 	if out.TopP == nil || *out.TopP != 0.9 {
 		t.Fatalf("TopP = %v want 0.9", out.TopP)
 	}
@@ -1090,18 +868,10 @@ func TestBuildRequestParsesStopString(t *testing.T) {
 	req := requestBuilderChatRequest()
 	req.Stop = json.RawMessage(`"STOP"`)
 
-	out, err := BuildRequest(
-		context.Background(),
-		req,
-		resolvedForTest(samplingModel()),
-		"",
-		requestBuilderConfig(),
-		"req-stop-string",
-	)
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(samplingModel()), "", requestBuilderConfig(), "req-stop-string")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
-
 	if len(out.StopSequences) != 1 || out.StopSequences[0] != "STOP" {
 		t.Fatalf("StopSequences = %v want [STOP]", out.StopSequences)
 	}
@@ -1111,18 +881,10 @@ func TestBuildRequestParsesStopArray(t *testing.T) {
 	req := requestBuilderChatRequest()
 	req.Stop = json.RawMessage(`["a","b"]`)
 
-	out, err := BuildRequest(
-		context.Background(),
-		req,
-		resolvedForTest(samplingModel()),
-		"",
-		requestBuilderConfig(),
-		"req-stop-array",
-	)
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(samplingModel()), "", requestBuilderConfig(), "req-stop-array")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
-
 	if len(out.StopSequences) != 2 || out.StopSequences[0] != "a" || out.StopSequences[1] != "b" {
 		t.Fatalf("StopSequences = %v want [a b]", out.StopSequences)
 	}
@@ -1132,18 +894,10 @@ func TestBuildRequestIgnoresNullStop(t *testing.T) {
 	req := requestBuilderChatRequest()
 	req.Stop = json.RawMessage(`null`)
 
-	out, err := BuildRequest(
-		context.Background(),
-		req,
-		resolvedForTest(samplingModel()),
-		"",
-		requestBuilderConfig(),
-		"req-stop-null",
-	)
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(samplingModel()), "", requestBuilderConfig(), "req-stop-null")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
-
 	if out.StopSequences != nil {
 		t.Fatalf("StopSequences = %v want nil for null stop", out.StopSequences)
 	}
@@ -1156,34 +910,18 @@ func TestBuildRequestIgnoresNullStop(t *testing.T) {
 func TestBuildRequestOmitsSamplingWhenAbsent(t *testing.T) {
 	req := requestBuilderChatRequest()
 
-	out, err := BuildRequest(
-		context.Background(),
-		req,
-		resolvedForTest(samplingModel()),
-		"",
-		requestBuilderConfig(),
-		"req-no-sampling",
-	)
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(samplingModel()), "", requestBuilderConfig(), "req-no-sampling")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
-
 	if out.Temperature != nil || out.TopP != nil || out.StopSequences != nil {
-		t.Fatalf(
-			"expected no sampling fields, got temp=%v topP=%v stop=%v",
-			out.Temperature,
-			out.TopP,
-			out.StopSequences,
-		)
+		t.Fatalf("expected no sampling fields, got temp=%v topP=%v stop=%v", out.Temperature, out.TopP, out.StopSequences)
 	}
-
 	encoded, err := json.Marshal(out)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-
 	body := string(encoded)
-
 	for _, key := range []string{"temperature", "top_p", "stop_sequences"} {
 		if strings.Contains(body, key) {
 			t.Fatalf("absent sampling field %q leaked into wire JSON: %q", key, body)

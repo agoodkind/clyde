@@ -17,7 +17,6 @@ import (
 func (op Operation[I, P]) cobraCommand(f *cli.Factory) *cobra.Command {
 	var useBuilder strings.Builder
 	useBuilder.WriteString(op.Name.CLI())
-
 	for _, arg := range op.Args {
 		useBuilder.WriteString(" ")
 		useBuilder.WriteString(arg.placeholder())
@@ -49,21 +48,16 @@ func (op Operation[I, P]) cobraCommand(f *cli.Factory) *cobra.Command {
 			if i >= len(args) {
 				continue
 			}
-
 			arg.bind(&in, args[i])
 		}
-
 		for _, apply := range applies {
 			apply(&in)
 		}
-
 		payload, err := op.Prepare(in)
 		if err != nil {
 			return logFail(cmd.Context(), SurfaceCLI, "invalid_input", op.Name.Canonical, err)
 		}
-
 		prepared = payload
-
 		return nil
 	}
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
@@ -72,38 +66,21 @@ func (op Operation[I, P]) cobraCommand(f *cli.Factory) *cobra.Command {
 			if err != nil {
 				return err
 			}
-
-			result, err := op.runResult(
-				withCopy(withSurface(cmd.Context(), SurfaceCLI), factoryCopy(f)),
-				prepared,
-			)
+			result, err := op.runResult(withCopy(withSurface(cmd.Context(), SurfaceCLI), factoryCopy(f)), prepared)
 			if err != nil {
 				return err
 			}
-
-			return renderCLIResult(
-				withCopy(cmd.Context(), factoryCopy(f)),
-				f.IOStreams.Out,
-				f.IOStreams.Err,
-				format,
-				op.outputKind,
-				result,
-			)
+			return renderCLIResult(withCopy(cmd.Context(), factoryCopy(f)), f.IOStreams.Out, f.IOStreams.Err, format, op.outputKind, result)
 		}
-
 		sink := NewCLISink(f.IOStreams.Out)
-
 		return op.Run(cmd.Context(), prepared, SurfaceCLI, sink)
 	}
-
 	for _, child := range op.Children {
 		if !child.surfaceSet().CLI {
 			continue
 		}
-
 		cmd.AddCommand(child.cobraCommand(f))
 	}
-
 	return cmd
 }
 
@@ -113,7 +90,6 @@ func factoryCopy(f *cli.Factory) bool {
 	if f == nil || f.Copy == nil {
 		return false
 	}
-
 	return f.Copy()
 }
 
@@ -122,22 +98,13 @@ func outputFormatForCommand(cmd *cobra.Command) (output.Format, error) {
 	if flag == nil {
 		flag = cmd.InheritedFlags().Lookup(output.FlagName)
 	}
-
 	if flag == nil {
 		return output.FormatText, nil
 	}
-
 	format, err := output.ParseFormat(flag.Value.String())
 	if err != nil {
-		return "", logFail(
-			cmd.Context(),
-			SurfaceCLI,
-			"parse_output_format_failed",
-			output.FlagName,
-			err,
-		)
+		return "", logFail(cmd.Context(), SurfaceCLI, "parse_output_format_failed", output.FlagName, err)
 	}
-
 	return format, nil
 }
 
@@ -153,7 +120,6 @@ func (op Operation[I, P]) longHelp() string {
 	case op.Short != "":
 		b.WriteString(op.Short)
 	}
-
 	if len(op.Args) > 0 {
 		requiredArgs := make([]Arg[I], 0, len(op.Args))
 		for _, arg := range op.Args {
@@ -161,42 +127,33 @@ func (op Operation[I, P]) longHelp() string {
 				requiredArgs = append(requiredArgs, arg)
 			}
 		}
-
 		if len(requiredArgs) == 0 {
 			return b.String()
 		}
-
 		width := 0
-
 		for _, arg := range requiredArgs {
 			if len(arg.placeholder()) > width {
 				width = len(arg.placeholder())
 			}
 		}
-
 		if b.Len() > 0 {
 			b.WriteString("\n\n")
 		}
-
 		b.WriteString("Arguments:")
-
 		for _, arg := range requiredArgs {
 			fmt.Fprintf(&b, "\n  %-*s  %s", width, arg.placeholder(), arg.Description)
 		}
 	}
-
 	return b.String()
 }
 
 func requiredArgCount[I Input](args []Arg[I]) int {
 	required := 0
-
 	for _, arg := range args {
 		if arg.Required {
 			required++
 		}
 	}
-
 	return required
 }
 
@@ -210,49 +167,37 @@ func registerFlag[I Input](cmd *cobra.Command, param Param[I]) func(in *I) {
 		shim := &enumValue{allowed: param.Values, value: &current}
 		cmd.Flags().Var(shim, param.flagName(), param.Description)
 		bind := param.bindString
-
 		return func(in *I) { bind(in, current) }
 	case KindString:
 		holder := new(string)
 		cmd.Flags().StringVar(holder, param.flagName(), param.DefaultStr, param.Description)
 		bind := param.bindString
-
 		return func(in *I) { bind(in, *holder) }
 	case KindInt:
 		holder := new(int)
 		cmd.Flags().IntVar(holder, param.flagName(), param.DefaultInt, param.Description)
 		bind := param.bindInt
-
 		return func(in *I) { bind(in, *holder) }
 	case KindBool:
 		holder := new(bool)
 		cmd.Flags().BoolVar(holder, param.flagName(), param.DefaultBool, param.Description)
 		bind := param.bindBool
-
 		return func(in *I) { bind(in, *holder) }
 	case KindFloat:
 		holder := new(float64)
 		cmd.Flags().Float64Var(holder, param.flagName(), param.DefaultFloat, param.Description)
 		bind := param.bindFloat
-
 		return func(in *I) { bind(in, *holder) }
 	case KindStringList:
 		holder := new([]string)
-		cmd.Flags().StringSliceVar(
-			holder,
-			param.flagName(),
-			param.DefaultStrSlice,
-			param.Description,
-		)
+		cmd.Flags().StringSliceVar(holder, param.flagName(), param.DefaultStrSlice, param.Description)
 		bind := param.bindStrSlice
-
 		return func(in *I) { bind(in, *holder) }
 	case KindEnumList:
 		holder := new([]string)
 		shim := &sliceEnumValue{allowed: param.Values, values: holder}
 		cmd.Flags().Var(shim, param.flagName(), param.Description)
 		bind := param.bindStrSlice
-
 		return func(in *I) { bind(in, *holder) }
 	default:
 		return func(in *I) {}
@@ -272,7 +217,6 @@ func (e *enumValue) String() string {
 	if e.value == nil {
 		return ""
 	}
-
 	return *e.value
 }
 
@@ -283,7 +227,6 @@ func (e *enumValue) Set(raw string) error {
 		*e.value = candidate
 		return nil
 	}
-
 	return fmt.Errorf("unsupported value %q (allowed: %s)", raw, strings.Join(e.allowed, ", "))
 }
 
@@ -294,7 +237,6 @@ func (e *enumValue) Type() string {
 	if len(e.allowed) > 0 {
 		return strings.Join(e.allowed, "|")
 	}
-
 	return "string"
 }
 
@@ -311,7 +253,6 @@ func (v *sliceEnumValue) String() string {
 	if v.values == nil {
 		return ""
 	}
-
 	return strings.Join(*v.values, ",")
 }
 
@@ -323,18 +264,11 @@ func (v *sliceEnumValue) Set(raw string) error {
 		if candidate == "" {
 			continue
 		}
-
 		if !enumContains(v.allowed, candidate) {
-			return fmt.Errorf(
-				"unsupported value %q (allowed: %s)",
-				candidate,
-				strings.Join(v.allowed, ", "),
-			)
+			return fmt.Errorf("unsupported value %q (allowed: %s)", candidate, strings.Join(v.allowed, ", "))
 		}
-
 		*v.values = append(*v.values, candidate)
 	}
-
 	return nil
 }
 
@@ -344,6 +278,5 @@ func (v *sliceEnumValue) Type() string {
 	if len(v.allowed) > 0 {
 		return strings.Join(v.allowed, "|")
 	}
-
 	return "strings"
 }

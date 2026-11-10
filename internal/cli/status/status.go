@@ -47,94 +47,40 @@ func NewCmd(f *cli.Factory) *cobra.Command {
 			if interval < minimumInterval {
 				interval = minimumInterval
 			}
-
 			return run(cmd.Context(), f, cmd, once, interval)
 		},
 	}
 	cmd.Flags().BoolVar(&once, "once", false, "print one snapshot even on a terminal")
-	cmd.Flags().DurationVar(
-		&interval,
-		"interval",
-		defaultInterval,
-		"refresh interval for the terminal view",
-	)
-
+	cmd.Flags().DurationVar(&interval, "interval", defaultInterval, "refresh interval for the terminal view")
 	return cmd
 }
 
-func run(
-	ctx context.Context,
-	f *cli.Factory,
-	cmd *cobra.Command,
-	once bool,
-	interval time.Duration,
-) error {
+func run(ctx context.Context, f *cli.Factory, cmd *cobra.Command, once bool, interval time.Duration) error {
 	format := resolveFormat(cmd)
 	if format == output.FormatJSON {
-		if err := lmstatus.WriteJSON(
-			f.IOStreams.Out,
-			buildSnapshot(gatherSnapshot(ctx), f.Build.Version),
-		); err != nil {
-			slog.ErrorContext(
-				ctx,
-				"cli.status.write_failed",
-				"concern",
-				"cmd.dispatch",
-				"component",
-				"cli",
-				"err",
-				err,
-			)
-
+		if err := lmstatus.WriteJSON(f.IOStreams.Out, buildSnapshot(gatherSnapshot(ctx), f.Build.Version)); err != nil {
+			slog.ErrorContext(ctx, "cli.status.write_failed", "concern", "cmd.dispatch", "component", "cli", "err", err)
 			return fmt.Errorf("write status snapshot: %w", err)
 		}
-
 		return nil
 	}
-
 	stdout, isFile := f.IOStreams.Out.(*os.File)
 	live := !once && isFile && term.IsTerminal(int(stdout.Fd()))
 	if !live {
 		body := lmstatus.Dump(buildSnapshot(gatherSnapshot(ctx), f.Build.Version)) + "\n"
 		if err := response.WriteResult(ctx, f.IOStreams.Out, body); err != nil {
-			slog.ErrorContext(
-				ctx,
-				"cli.status.write_failed",
-				"concern",
-				"cmd.dispatch",
-				"component",
-				"cli",
-				"err",
-				err,
-			)
-
+			slog.ErrorContext(ctx, "cli.status.write_failed", "concern", "cmd.dispatch", "component", "cli", "err", err)
 			return fmt.Errorf("write status snapshot: %w", err)
 		}
-
 		return nil
 	}
-
 	source := func() (lmstatus.Snapshot, error) {
 		return buildSnapshot(gatherSnapshot(ctx), f.Build.Version), nil
 	}
-	if err := lmstatus.Run(
-		source,
-		lmstatus.Options{Interval: interval, Once: false, Now: clock.Now},
-	); err != nil {
-		slog.ErrorContext(
-			ctx,
-			"cli.status.view_failed",
-			"concern",
-			"cmd.dispatch",
-			"component",
-			"cli",
-			"err",
-			err,
-		)
-
+	if err := lmstatus.Run(source, lmstatus.Options{Interval: interval, Once: false, Now: clock.Now}); err != nil {
+		slog.ErrorContext(ctx, "cli.status.view_failed", "concern", "cmd.dispatch", "component", "cli", "err", err)
 		return fmt.Errorf("run the status view: %w", err)
 	}
-
 	return nil
 }
 
@@ -145,12 +91,10 @@ func resolveFormat(cmd *cobra.Command) output.Format {
 	if flag == nil {
 		return output.FormatText
 	}
-
 	format, err := output.ParseFormat(flag.Value.String())
 	if err != nil {
 		return output.FormatText
 	}
-
 	return format
 }
 
@@ -169,15 +113,9 @@ type statusSnapshot struct {
 
 func gatherSnapshot(ctx context.Context) statusSnapshot {
 	snapshot := statusSnapshot{
-		readAt: clock.Now(),
-		report: daemonsvc.InspectStatus(ctx),
-		freshness: conversation.SearchFreshness{
-			Manifest:     0,
-			Needed:       0,
-			Embedded:     0,
-			Pending:      0,
-			LastSyncUnix: 0,
-		},
+		readAt:       clock.Now(),
+		report:       daemonsvc.InspectStatus(ctx),
+		freshness:    conversation.SearchFreshness{Manifest: 0, Needed: 0, Embedded: 0, Pending: 0, LastSyncUnix: 0},
 		freshnessErr: nil,
 		providers:    daemonsvc.ProviderStatsSnapshot{Providers: nil, LoadedAtUnix: 0},
 		providersErr: nil,
@@ -187,6 +125,5 @@ func gatherSnapshot(ctx context.Context) statusSnapshot {
 	snapshot.freshness, snapshot.freshnessErr = daemonsvc.GetSearchFreshness(ctx)
 	snapshot.providers, snapshot.providersErr = daemonsvc.CurrentProviderStats(ctx)
 	snapshot.mitm, snapshot.mitmErr = daemonsvc.GetMITMStatus(ctx)
-
 	return snapshot
 }

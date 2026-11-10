@@ -72,14 +72,7 @@ func writeLinuxFixtureCert(t *testing.T, path string) {
 	if err != nil {
 		t.Fatalf("create cert: %v", err)
 	}
-	if err := os.WriteFile(
-		path,
-		pem.EncodeToMemory(&pem.Block{
-			Type:  "CERTIFICATE",
-			Bytes: der,
-		}),
-		0o600,
-	); err != nil {
+	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
 		t.Fatalf("write fixture cert: %v", err)
 	}
 }
@@ -100,11 +93,7 @@ func TestLinuxStatusInstalledMatchingFingerprintReportsClean(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	registry := truststore.NewLinuxRegistry(truststore.LinuxRegistryOptions{
-		Runner:         nil,
-		InstallPath:    installPath,
-		CommandTimeout: time.Second,
-	})
+	registry := truststore.NewLinuxRegistry(truststore.LinuxRegistryOptions{Runner: nil, InstallPath: installPath, CommandTimeout: time.Second})
 	status, err := registry.Status(certPath)
 	if err != nil {
 		t.Fatalf("Status: %v", err)
@@ -113,11 +102,8 @@ func TestLinuxStatusInstalledMatchingFingerprintReportsClean(t *testing.T) {
 		t.Fatalf("expected Installed=true; got %#v", status)
 	}
 	if !status.FingerprintsMatch() {
-		t.Fatalf(
-			"expected FingerprintsMatch=true: on_disk=%q installed=%q",
-			status.OnDiskFingerprint,
-			status.InstalledFingerprint,
-		)
+		t.Fatalf("expected FingerprintsMatch=true: on_disk=%q installed=%q",
+			status.OnDiskFingerprint, status.InstalledFingerprint)
 	}
 }
 
@@ -181,14 +167,10 @@ func TestLinuxInstallRunsInstallAndUpdateCACertificates(t *testing.T) {
 		}
 	}
 	firstArgs := strings.Join(runner.calls[0].args, " ")
-	if !strings.Contains(firstArgs, "/usr/bin/install") ||
-		!strings.Contains(firstArgs, installPath) {
+	if !strings.Contains(firstArgs, "/usr/bin/install") || !strings.Contains(firstArgs, installPath) {
 		t.Fatalf("first call must run /usr/bin/install into installPath: %s", firstArgs)
 	}
-	if secondArgs := strings.Join(runner.calls[1].args, " "); !strings.Contains(
-		secondArgs,
-		updateCACertificatesPath,
-	) {
+	if secondArgs := strings.Join(runner.calls[1].args, " "); !strings.Contains(secondArgs, updateCACertificatesPath) {
 		t.Fatalf("second call must run update-ca-certificates: %s", secondArgs)
 	}
 }
@@ -242,10 +224,7 @@ func TestLinuxUninstallRemovesFileAndRefreshesBundle(t *testing.T) {
 	if !strings.Contains(rmArgs, "/bin/rm") || !strings.Contains(rmArgs, installPath) {
 		t.Fatalf("first call must run /bin/rm on installPath: %s", rmArgs)
 	}
-	if updateArgs := strings.Join(runner.calls[1].args, " "); !strings.Contains(
-		updateArgs,
-		"--fresh",
-	) {
+	if updateArgs := strings.Join(runner.calls[1].args, " "); !strings.Contains(updateArgs, "--fresh") {
 		t.Fatalf("update-ca-certificates must run with --fresh: %s", updateArgs)
 	}
 }

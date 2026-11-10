@@ -20,81 +20,45 @@ const filterDimensionCount = 10
 func searchFilter(filter semsearch.SearchFilter) *collection.Filter {
 	children := make([]collection.Filter, 0, filterDimensionCount)
 	if len(filter.Providers) > 0 {
-		children = append(
-			children,
-			collection.ColumnIn(providerColumn, collection.StringValues(filter.Providers)),
-		)
+		children = append(children, collection.ColumnIn(providerColumn, collection.StringValues(filter.Providers)))
 	}
-
 	if len(filter.WorkspaceRoots) > 0 {
-		children = append(
-			children,
-			collection.ColumnIn(
-				workspaceRootColumn,
-				collection.StringValues(filter.WorkspaceRoots),
-			),
-		)
+		children = append(children, collection.ColumnIn(workspaceRootColumn, collection.StringValues(filter.WorkspaceRoots)))
 	}
-
 	if len(filter.Roles) > 0 {
-		children = append(
-			children,
-			collection.ColumnIn(roleColumn, collection.StringValues(lowercaseAll(filter.Roles))),
-		)
+		children = append(children, collection.ColumnIn(roleColumn, collection.StringValues(lowercaseAll(filter.Roles))))
 	}
-
 	if len(filter.ConversationIDs) > 0 {
-		children = append(
-			children,
-			collection.ColumnIn(
-				conversationIDColumn,
-				collection.StringValues(filter.ConversationIDs),
-			),
-		)
+		children = append(children, collection.ColumnIn(conversationIDColumn, collection.StringValues(filter.ConversationIDs)))
 	}
-
 	if filter.ParentConversationID != "" {
-		children = append(
-			children,
-			collection.ColumnEquals(
-				parentConversationIDColumn,
-				collection.StringScalar(filter.ParentConversationID),
-			),
-		)
+		children = append(children, collection.ColumnEquals(parentConversationIDColumn, collection.StringScalar(filter.ParentConversationID)))
 	}
-
 	if filter.FromUnix != nil || filter.UntilUnix != nil {
 		// Exclude the zero-time marker that older rows use for unknown timestamps.
 		lower := time.Time{}.Unix() + 1
 		if filter.FromUnix != nil && *filter.FromUnix > lower {
 			lower = *filter.FromUnix
 		}
-
 		var upper *int64
 		if filter.UntilUnix != nil {
 			bound := *filter.UntilUnix
 			upper = &bound
 		}
-
 		children = append(children, collection.ColumnRange(timestampUnixColumn, &lower, upper))
 	}
-
 	if filter.MessageIndexFrom > 0 {
 		lower := int64(filter.MessageIndexFrom)
 		children = append(children, collection.ColumnRange(messageIndexColumn, &lower, nil))
 	}
-
 	if filter.MessageIndexUntil > 0 {
 		upper := int64(filter.MessageIndexUntil)
 		children = append(children, collection.ColumnRange(messageIndexColumn, nil, &upper))
 	}
-
 	if len(children) == 0 {
 		return nil
 	}
-
 	tree := collection.AllOf(children...)
-
 	return &tree
 }
 
@@ -103,6 +67,5 @@ func lowercaseAll(values []string) []string {
 	for _, value := range values {
 		lowered = append(lowered, strings.ToLower(value))
 	}
-
 	return lowered
 }

@@ -28,47 +28,21 @@ func TestSharedLayoutFirstWriteCreatesAndLoadsCollections(t *testing.T) {
 	address := milvustest.Start(t)
 	shared := openClient(t, address, vectorsearch.LayoutShared)
 	ctx := context.Background()
-	docs := []semsearch.SemDoc{
-		{
-			ConversationID:       firstWriteConversationID,
-			ParentConversationID: "",
-			MessageIndex:         0,
-			Role:                 "user",
-			TimestampUnix:        firstWriteTimestamp,
-			Text:                 firstWriteText,
-			Tools:                nil,
-			Thinking:             "",
-			WorkspaceRoot:        "/work/0",
-			Archived:             false,
-			LoadRules:            "",
-		},
-	}
+	docs := []semsearch.SemDoc{{
+		ConversationID: firstWriteConversationID, ParentConversationID: "", MessageIndex: 0, Role: "user",
+		TimestampUnix: firstWriteTimestamp, Text: firstWriteText, Tools: nil, Thinking: "",
+		WorkspaceRoot: "/work/0", Archived: false, LoadRules: "",
+	}}
 	manifest := []semsearch.Fingerprint{{ConversationID: firstWriteConversationID, Value: "v1"}}
-	if _, err := shared.UpsertConversationDocuments(
-		ctx,
-		firstWriteCollectionID,
-		docs,
-		manifest,
-	); err != nil {
+	if _, err := shared.UpsertConversationDocuments(ctx, firstWriteCollectionID, docs, manifest); err != nil {
 		t.Fatalf("write to a new shared collection: %v", err)
 	}
 	time.Sleep(visibilityWait)
-	hits, err := shared.SearchConversations(
-		ctx,
-		firstWriteCollectionID,
-		"restic forget policy daily snapshots",
-		3,
-		semsearch.SearchFilter{},
-		0,
-	)
+	hits, err := shared.SearchConversations(ctx, firstWriteCollectionID, "restic forget policy daily snapshots", 3, semsearch.SearchFilter{}, 0)
 	if err != nil {
 		t.Fatalf("search the new shared collection: %v", err)
 	}
-	if len(hits) == 0 || hits[0].ConversationID != firstWriteConversationID ||
-		hits[0].TimestampUnix != firstWriteTimestamp {
-		t.Fatalf(
-			"search did not return the written message first with its timestamp; hits: %+v",
-			hits,
-		)
+	if len(hits) == 0 || hits[0].ConversationID != firstWriteConversationID || hits[0].TimestampUnix != firstWriteTimestamp {
+		t.Fatalf("search did not return the written message first with its timestamp; hits: %+v", hits)
 	}
 }

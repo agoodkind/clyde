@@ -31,28 +31,23 @@ func mapAttachments(rawAttachments []json.RawMessage) []transcript.Attachment {
 		if json.Unmarshal(raw, &metadata) != nil || metadata.Type == "" {
 			continue
 		}
-
-		attachments = append(
-			attachments,
-			transcript.Attachment{
-				Kind: metadata.Type,
-				DisplayName: firstNonEmpty(
-					metadata.DisplayName,
-					metadata.Title,
-					metadata.Name,
-					metadata.JobName,
-				),
-				Path:           firstNonEmpty(metadata.Path, metadata.FilePath),
-				URL:            metadata.URL,
-				MIMEType:       metadata.MIMEType,
-				SizeBytes:      metadata.ByteLength,
-				Description:    firstNonEmpty(metadata.Description, metadata.Message),
-				AssetReference: metadata.AssetID,
-				OmittedReason:  metadata.OmittedReason,
-				Text:           metadata.Text,
-			},
-		)
+		attachments = append(attachments, transcript.Attachment{
+			Kind: metadata.Type,
+			DisplayName: firstNonEmpty(
+				metadata.DisplayName,
+				metadata.Title,
+				metadata.Name,
+				metadata.JobName,
+			),
+			Path:           firstNonEmpty(metadata.Path, metadata.FilePath),
+			URL:            metadata.URL,
+			MIMEType:       metadata.MIMEType,
+			SizeBytes:      metadata.ByteLength,
+			Description:    firstNonEmpty(metadata.Description, metadata.Message),
+			AssetReference: metadata.AssetID,
+			OmittedReason:  metadata.OmittedReason,
+			Text:           metadata.Text,
+		})
 	}
-
 	return attachments
 }

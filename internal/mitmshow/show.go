@@ -101,9 +101,7 @@ type ShowOutput struct {
 }
 
 // uuidPattern matches the canonical 8-4-4-4-12 UUID shape, case insensitive.
-var uuidPattern = regexp.MustCompile(
-	`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`,
-)
+var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // ClassifyID detects an id's shape so the caller can label the kind in
 // output. The detector is intentionally tolerant: an unrecognized shape
@@ -114,15 +112,12 @@ func ClassifyID(id string) IDKind {
 	if strings.HasPrefix(id, "chatcmpl-") {
 		return IDKindClyde
 	}
-
 	if strings.HasPrefix(id, "req_") {
 		return IDKindUpstream
 	}
-
 	if uuidPattern.MatchString(id) {
 		return IDKindCursor
 	}
-
 	return IDKindAny
 }
 
@@ -132,7 +127,6 @@ func Lookup(ctx context.Context, cfg *config.Config, inputID string) (ShowOutput
 	if inputID == "" {
 		return ShowOutput{}, errors.New("id must not be empty")
 	}
-
 	sources := resolveSources(cfg)
 	kind := ClassifyID(inputID)
 
@@ -157,8 +151,7 @@ func Lookup(ctx context.Context, cfg *config.Config, inputID string) (ShowOutput
 
 	passes := []LookupPass{firstPass}
 
-	if kind != IDKindUpstream && correlation.UpstreamRequestID != "" &&
-		correlation.UpstreamRequestID != inputID {
+	if kind != IDKindUpstream && correlation.UpstreamRequestID != "" && correlation.UpstreamRequestID != inputID {
 		secondPass := runOnePass(ctx, sources, correlation.UpstreamRequestID)
 		mergeCorrelation(&correlation, secondPass.Found)
 		passes = append(passes, secondPass)
@@ -189,31 +182,15 @@ type sourceSet struct {
 func resolveSources(cfg *config.Config) sourceSet {
 	concernRoot := slogger.DefaultConcernRoot(cfg.Logging, slogger.ProcessRoleDaemon)
 	daemonLog := slogger.DefaultProcessPath(cfg.Logging, slogger.ProcessRoleDaemon)
-
 	return sourceSet{
-		adapterAnthropicReq: filepath.Join(
-			concernRoot,
-			slogger.ConcernRelPath(slogger.ConcernAdapterProviderAnthReq),
-		),
-		adapterHTTPErrors: filepath.Join(
-			concernRoot,
-			slogger.ConcernRelPath(slogger.ConcernAdapterHTTPErrors),
-		),
-		adapterChatDir: filepath.Join(concernRoot, "adapter", "chat"),
-		daemonLog:      daemonLog,
-		mitmWire: filepath.Join(
-			concernRoot,
-			slogger.ConcernRelPath(slogger.ConcernProviderMITMWire),
-		),
-		mitmErrors: filepath.Join(
-			concernRoot,
-			slogger.ConcernRelPath(slogger.ConcernProviderMITMErrors),
-		),
-		mitmLifecycle: filepath.Join(
-			concernRoot,
-			slogger.ConcernRelPath(slogger.ConcernProviderMITMLifecycle),
-		),
-		captureDBPath: strings.TrimSpace(cfg.MITM.CaptureStore.DBPath),
+		adapterAnthropicReq: filepath.Join(concernRoot, slogger.ConcernRelPath(slogger.ConcernAdapterProviderAnthReq)),
+		adapterHTTPErrors:   filepath.Join(concernRoot, slogger.ConcernRelPath(slogger.ConcernAdapterHTTPErrors)),
+		adapterChatDir:      filepath.Join(concernRoot, "adapter", "chat"),
+		daemonLog:           daemonLog,
+		mitmWire:            filepath.Join(concernRoot, slogger.ConcernRelPath(slogger.ConcernProviderMITMWire)),
+		mitmErrors:          filepath.Join(concernRoot, slogger.ConcernRelPath(slogger.ConcernProviderMITMErrors)),
+		mitmLifecycle:       filepath.Join(concernRoot, slogger.ConcernRelPath(slogger.ConcernProviderMITMLifecycle)),
+		captureDBPath:       strings.TrimSpace(cfg.MITM.CaptureStore.DBPath),
 	}
 }
 
@@ -223,11 +200,7 @@ func runOnePass(ctx context.Context, sources sourceSet, id string) LookupPass {
 	pass := LookupPass{
 		ID:       id,
 		Sections: []Section{},
-		Capture: CaptureSection{
-			Source: "mitm capture store",
-			Path:   sources.captureDBPath,
-			Rows:   []CaptureRow{},
-		},
+		Capture:  CaptureSection{Source: "mitm capture store", Path: sources.captureDBPath, Rows: []CaptureRow{}},
 		Found: Correlation{
 			ClydeRequestID:    "",
 			CursorRequestID:   "",
@@ -236,57 +209,26 @@ func runOnePass(ctx context.Context, sources sourceSet, id string) LookupPass {
 		},
 	}
 
-	pass.Sections = append(
-		pass.Sections,
-		searchFile(
-			"adapter anthropic provider request log",
-			sources.adapterAnthropicReq,
-			id,
-			sourceKindAdapter,
-			&pass.Found,
-		),
-	)
-	pass.Sections = append(
-		pass.Sections,
-		searchFile(
-			"adapter http errors log",
-			sources.adapterHTTPErrors,
-			id,
-			sourceKindAdapter,
-			&pass.Found,
-		),
-	)
+	pass.Sections = append(pass.Sections, searchFile(
+		"adapter anthropic provider request log", sources.adapterAnthropicReq, id, sourceKindAdapter, &pass.Found,
+	))
+	pass.Sections = append(pass.Sections, searchFile(
+		"adapter http errors log", sources.adapterHTTPErrors, id, sourceKindAdapter, &pass.Found,
+	))
 	pass.Sections = append(pass.Sections, searchChatDir(sources.adapterChatDir, id, &pass.Found))
-	pass.Sections = append(
-		pass.Sections,
-		searchFile("clyde daemon log", sources.daemonLog, id, sourceKindAdapter, &pass.Found),
-	)
-	pass.Sections = append(
-		pass.Sections,
-		searchFile("mitm wire concern log", sources.mitmWire, id, sourceKindCapture, &pass.Found),
-	)
-	pass.Sections = append(
-		pass.Sections,
-		searchFile(
-			"mitm errors concern log",
-			sources.mitmErrors,
-			id,
-			sourceKindCapture,
-			&pass.Found,
-		),
-	)
-	pass.Sections = append(
-		pass.Sections,
-		searchFile(
-			"mitm lifecycle concern log",
-			sources.mitmLifecycle,
-			id,
-			sourceKindCapture,
-			&pass.Found,
-		),
-	)
+	pass.Sections = append(pass.Sections, searchFile(
+		"clyde daemon log", sources.daemonLog, id, sourceKindAdapter, &pass.Found,
+	))
+	pass.Sections = append(pass.Sections, searchFile(
+		"mitm wire concern log", sources.mitmWire, id, sourceKindCapture, &pass.Found,
+	))
+	pass.Sections = append(pass.Sections, searchFile(
+		"mitm errors concern log", sources.mitmErrors, id, sourceKindCapture, &pass.Found,
+	))
+	pass.Sections = append(pass.Sections, searchFile(
+		"mitm lifecycle concern log", sources.mitmLifecycle, id, sourceKindCapture, &pass.Found,
+	))
 	pass.Capture = searchCaptureStore(ctx, sources.captureDBPath, id, &pass.Found)
-
 	return pass
 }
 
@@ -309,21 +251,17 @@ func searchFile(name, path, id string, kind sourceKind, found *Correlation) Sect
 	if err != nil {
 		return section
 	}
-
 	defer func() { _ = file.Close() }()
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
-
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.Contains(line, id) {
 			continue
 		}
-
 		section.Matches = append(section.Matches, line)
 		updateCorrelation(line, kind, found)
 	}
-
 	return section
 }
 
@@ -335,22 +273,18 @@ func searchChatDir(dir, id string, found *Correlation) Section {
 	if err != nil {
 		return section
 	}
-
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
-
 		name := entry.Name()
 		if !strings.HasSuffix(name, ".jsonl") {
 			continue
 		}
-
 		filePath := filepath.Join(dir, name)
 		fileSection := searchFile(name, filePath, id, sourceKindAdapter, found)
 		section.Matches = append(section.Matches, fileSection.Matches...)
 	}
-
 	return section
 }
 
@@ -363,44 +297,17 @@ func searchCaptureStore(ctx context.Context, dbPath, id string, found *Correlati
 	if dbPath == "" {
 		return section
 	}
-
 	if _, statErr := os.Stat(dbPath); statErr != nil {
 		if !errors.Is(statErr, fs.ErrNotExist) {
-			slog.WarnContext(
-				ctx,
-				"mitmshow.capture_stat_failed",
-				"concern",
-				"providers.mitm.lifecycle",
-				"component",
-				"daemon",
-				"path",
-				dbPath,
-				"err",
-				statErr,
-			)
+			slog.WarnContext(ctx, "mitmshow.capture_stat_failed", "concern", "providers.mitm.lifecycle", "component", "daemon", "path", dbPath, "err", statErr)
 		}
-
 		return section
 	}
-
 	db, openErr := sql.Open("sqlite3", "file:"+dbPath+"?mode=ro&immutable=1&_busy_timeout=5000")
 	if openErr != nil {
-		slog.WarnContext(
-			ctx,
-			"mitmshow.capture_open_failed",
-			"concern",
-			"providers.mitm.lifecycle",
-			"component",
-			"daemon",
-			"path",
-			dbPath,
-			"err",
-			openErr,
-		)
-
+		slog.WarnContext(ctx, "mitmshow.capture_open_failed", "concern", "providers.mitm.lifecycle", "component", "daemon", "path", dbPath, "err", openErr)
 		return section
 	}
-
 	defer func() { _ = db.Close() }()
 	rows, queryErr := db.QueryContext(
 		ctx,
@@ -409,91 +316,29 @@ func searchCaptureStore(ctx context.Context, dbPath, id string, found *Correlati
 		 FROM requests
 		 WHERE request_id=? OR upstream_request_id=? OR session_id=? OR trace_id=?
 		 ORDER BY ts DESC`,
-		id,
-		id,
-		id,
-		id,
+		id, id, id, id,
 	)
 	if queryErr != nil {
-		slog.WarnContext(
-			ctx,
-			"mitmshow.capture_query_failed",
-			"concern",
-			"providers.mitm.lifecycle",
-			"component",
-			"daemon",
-			"path",
-			dbPath,
-			"err",
-			queryErr,
-		)
-
+		slog.WarnContext(ctx, "mitmshow.capture_query_failed", "concern", "providers.mitm.lifecycle", "component", "daemon", "path", dbPath, "err", queryErr)
 		return section
 	}
-
 	defer func() { _ = rows.Close() }()
-
 	for rows.Next() {
-		row, ok := scanCaptureRow(ctx, rows, dbPath)
-		if !ok {
+		var row CaptureRow
+		if scanErr := rows.Scan(
+			&row.Timestamp, &row.Client, &row.Provider, &row.Concern, &row.Host, &row.Method, &row.Path, &row.Status,
+			&row.RequestID, &row.UpstreamRequestID, &row.SessionID, &row.TraceID,
+		); scanErr != nil {
+			slog.WarnContext(ctx, "mitmshow.capture_scan_failed", "concern", "providers.mitm.lifecycle", "component", "daemon", "path", dbPath, "err", scanErr)
 			continue
 		}
-
 		section.Rows = append(section.Rows, row)
 		updateCorrelationFromCaptureRow(row, found)
 	}
-
 	if rowsErr := rows.Err(); rowsErr != nil {
-		slog.WarnContext(
-			ctx,
-			"mitmshow.capture_rows_failed",
-			"concern",
-			"providers.mitm.lifecycle",
-			"component",
-			"daemon",
-			"path",
-			dbPath,
-			"err",
-			rowsErr,
-		)
+		slog.WarnContext(ctx, "mitmshow.capture_rows_failed", "concern", "providers.mitm.lifecycle", "component", "daemon", "path", dbPath, "err", rowsErr)
 	}
-
 	return section
-}
-
-func scanCaptureRow(ctx context.Context, rows *sql.Rows, dbPath string) (CaptureRow, bool) {
-	var row CaptureRow
-	if scanErr := rows.Scan(
-		&row.Timestamp,
-		&row.Client,
-		&row.Provider,
-		&row.Concern,
-		&row.Host,
-		&row.Method,
-		&row.Path,
-		&row.Status,
-		&row.RequestID,
-		&row.UpstreamRequestID,
-		&row.SessionID,
-		&row.TraceID,
-	); scanErr != nil {
-		slog.WarnContext(
-			ctx,
-			"mitmshow.capture_scan_failed",
-			"concern",
-			"providers.mitm.lifecycle",
-			"component",
-			"daemon",
-			"path",
-			dbPath,
-			"err",
-			scanErr,
-		)
-
-		return row, false
-	}
-
-	return row, true
 }
 
 // updateCorrelationFromCaptureRow fills any still-empty correlation slot from a
@@ -503,11 +348,9 @@ func updateCorrelationFromCaptureRow(row CaptureRow, found *Correlation) {
 	if found.TraceID == "" && row.TraceID != "" {
 		found.TraceID = row.TraceID
 	}
-
 	if found.CursorRequestID == "" && row.RequestID != "" {
 		found.CursorRequestID = row.RequestID
 	}
-
 	if found.UpstreamRequestID == "" && row.UpstreamRequestID != "" {
 		found.UpstreamRequestID = row.UpstreamRequestID
 	}
@@ -532,19 +375,15 @@ func updateCorrelation(line string, kind sourceKind, found *Correlation) {
 	if err := json.Unmarshal([]byte(line), &fields); err != nil {
 		return
 	}
-
 	if fields.TraceID != "" && found.TraceID == "" {
 		found.TraceID = fields.TraceID
 	}
-
 	if fields.CursorRequestID != "" && found.CursorRequestID == "" {
 		found.CursorRequestID = fields.CursorRequestID
 	}
-
 	if fields.UpstreamRequestID != "" && found.UpstreamRequestID == "" {
 		found.UpstreamRequestID = fields.UpstreamRequestID
 	}
-
 	if fields.RequestID != "" {
 		switch kind {
 		case sourceKindAdapter:
@@ -566,15 +405,12 @@ func mergeCorrelation(dst *Correlation, src Correlation) {
 	if dst.ClydeRequestID == "" {
 		dst.ClydeRequestID = src.ClydeRequestID
 	}
-
 	if dst.CursorRequestID == "" {
 		dst.CursorRequestID = src.CursorRequestID
 	}
-
 	if dst.UpstreamRequestID == "" {
 		dst.UpstreamRequestID = src.UpstreamRequestID
 	}
-
 	if dst.TraceID == "" {
 		dst.TraceID = src.TraceID
 	}
@@ -584,7 +420,6 @@ func mergeCorrelation(dst *Correlation, src Correlation) {
 func RenderText(output ShowOutput) string {
 	var builder strings.Builder
 	writeText(&builder, output)
-
 	return builder.String()
 }
 
@@ -592,40 +427,20 @@ func RenderText(output ShowOutput) string {
 // line, then matched lines or "no matches".
 func writeText(out io.Writer, output ShowOutput) {
 	_, _ = fmt.Fprintf(out, "input id  : %s\n", output.Query)
-
 	_, _ = fmt.Fprintf(out, "id kind   : %s\n", output.Kind)
 	for index, pass := range output.Passes {
 		if index > 0 {
-			_, _ = fmt.Fprintf(
-				out,
-				"\n### expansion pass for upstream_request_id %s ###\n",
-				pass.ID,
-			)
+			_, _ = fmt.Fprintf(out, "\n### expansion pass for upstream_request_id %s ###\n", pass.ID)
 		}
-
 		for _, section := range pass.Sections {
 			writeSection(out, section)
 		}
-
 		writeCaptureSection(out, pass.Capture)
 	}
-
 	_, _ = fmt.Fprintf(out, "\n=== correlation ===\n")
-	_, _ = fmt.Fprintf(
-		out,
-		"  clyde_request_id   : %s\n",
-		emptyAsUnset(output.Correlation.ClydeRequestID),
-	)
-	_, _ = fmt.Fprintf(
-		out,
-		"  cursor_request_id  : %s\n",
-		emptyAsUnset(output.Correlation.CursorRequestID),
-	)
-	_, _ = fmt.Fprintf(
-		out,
-		"  upstream_request_id: %s\n",
-		emptyAsUnset(output.Correlation.UpstreamRequestID),
-	)
+	_, _ = fmt.Fprintf(out, "  clyde_request_id   : %s\n", emptyAsUnset(output.Correlation.ClydeRequestID))
+	_, _ = fmt.Fprintf(out, "  cursor_request_id  : %s\n", emptyAsUnset(output.Correlation.CursorRequestID))
+	_, _ = fmt.Fprintf(out, "  upstream_request_id: %s\n", emptyAsUnset(output.Correlation.UpstreamRequestID))
 	_, _ = fmt.Fprintf(out, "  trace_id           : %s\n", emptyAsUnset(output.Correlation.TraceID))
 }
 
@@ -636,7 +451,6 @@ func writeSection(out io.Writer, section Section) {
 		_, _ = fmt.Fprintln(out, "no matches")
 		return
 	}
-
 	for _, line := range section.Matches {
 		_, _ = fmt.Fprintln(out, line)
 	}
@@ -649,21 +463,12 @@ func writeCaptureSection(out io.Writer, capture CaptureSection) {
 		_, _ = fmt.Fprintln(out, "no matches")
 		return
 	}
-
 	for _, row := range capture.Rows {
 		_, _ = fmt.Fprintf(
-			out,
-			"%s %s %s %s %s %d req=%s upstream=%s session=%s trace=%s\n",
-			row.Provider,
-			row.Client,
-			row.Concern,
-			row.Method,
-			row.Path,
-			row.Status,
-			emptyAsUnset(row.RequestID),
-			emptyAsUnset(row.UpstreamRequestID),
-			emptyAsUnset(row.SessionID),
-			emptyAsUnset(row.TraceID),
+			out, "%s %s %s %s %s %d req=%s upstream=%s session=%s trace=%s\n",
+			row.Provider, row.Client, row.Concern, row.Method, row.Path, row.Status,
+			emptyAsUnset(row.RequestID), emptyAsUnset(row.UpstreamRequestID),
+			emptyAsUnset(row.SessionID), emptyAsUnset(row.TraceID),
 		)
 	}
 }
@@ -672,6 +477,5 @@ func emptyAsUnset(value string) string {
 	if value == "" {
 		return "unset"
 	}
-
 	return value
 }

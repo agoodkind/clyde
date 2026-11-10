@@ -45,45 +45,23 @@ func reconcileDocuments() ([]semsearch.SemDoc, []semsearch.Fingerprint) {
 	for conversationIndex := range reconcileConversations {
 		conversationID := fmt.Sprintf("codex:reconcile-%02d", conversationIndex)
 		for messageIndex := range reconcileMessages {
-			text := fmt.Sprintf(
-				"Conversation %d message %d records that etcd member %d restarted.",
-				conversationIndex,
-				messageIndex,
-				messageIndex,
-			)
-			doc := repairDoc(
-				conversationID,
-				text,
-				1_790_000_000+int64(conversationIndex*100+messageIndex),
-			)
+			text := fmt.Sprintf("Conversation %d message %d records that etcd member %d restarted.", conversationIndex, messageIndex, messageIndex)
+			doc := repairDoc(conversationID, text, 1_790_000_000+int64(conversationIndex*100+messageIndex))
 			doc.MessageIndex = int32(messageIndex)
 			docs = append(docs, doc)
 		}
-		manifest = append(
-			manifest,
-			semsearch.Fingerprint{ConversationID: conversationID, Value: "v1"},
-		)
+		manifest = append(manifest, semsearch.Fingerprint{ConversationID: conversationID, Value: "v1"})
 	}
 	return docs, manifest
 }
 
-func sortedRowIDs(
-	t *testing.T,
-	ctx context.Context,
-	client *milvusclient.Client,
-	collectionName string,
-) []string {
+func sortedRowIDs(t *testing.T, ctx context.Context, client *milvusclient.Client, collectionName string) []string {
 	t.Helper()
-	resultSet, err := client.Query(
-		ctx,
-		milvusclient.NewQueryOption(collectionName).WithFilter(`id != ""`).WithOutputFields("id").
-			WithLimit(
-				reconcileQueryLimit,
-			).
-			WithConsistencyLevel(
-				entity.ClStrong,
-			),
-	)
+	resultSet, err := client.Query(ctx, milvusclient.NewQueryOption(collectionName).
+		WithFilter(`id != ""`).
+		WithOutputFields("id").
+		WithLimit(reconcileQueryLimit).
+		WithConsistencyLevel(entity.ClStrong))
 	if err != nil {
 		t.Fatalf("read row IDs of %s: %v", collectionName, err)
 	}
@@ -126,12 +104,7 @@ func TestCopySharedRepairsEveryDifferenceInOneRound(t *testing.T) {
 	ctx := context.Background()
 	source := openRepairClient(t, address, vectorsearch.LayoutSingle)
 	docs, manifest := reconcileDocuments()
-	if _, err := source.UpsertConversationDocuments(
-		ctx,
-		reconcileSourceCollectionID,
-		docs,
-		manifest,
-	); err != nil {
+	if _, err := source.UpsertConversationDocuments(ctx, reconcileSourceCollectionID, docs, manifest); err != nil {
 		t.Fatalf("write single layout: %v", err)
 	}
 	time.Sleep(repairVisibilityWait)
@@ -175,10 +148,7 @@ func TestCopySharedRepairsEveryDifferenceInOneRound(t *testing.T) {
 	}
 	run(false, 1)
 
-	client, err := milvusclient.New(
-		ctx,
-		&milvusclient.ClientConfig{Address: address, DBName: "default"},
-	)
+	client, err := milvusclient.New(ctx, &milvusclient.ClientConfig{Address: address, DBName: "default"})
 	if err != nil {
 		t.Fatalf("connect test client: %v", err)
 	}
@@ -192,10 +162,7 @@ func TestCopySharedRepairsEveryDifferenceInOneRound(t *testing.T) {
 	missing := ids[:reconcileMissingRows]
 	mismatched := ids[reconcileMissingRows : reconcileMissingRows+reconcileMismatchedRows]
 	extra := ids[reconcileMissingRows+reconcileMismatchedRows : reconcileMissingRows+reconcileMismatchedRows+reconcileExtraRows]
-	if _, err := client.Delete(
-		ctx,
-		milvusclient.NewDeleteOption(targetName).WithExpr(idExpression(missing)),
-	); err != nil {
+	if _, err := client.Delete(ctx, milvusclient.NewDeleteOption(targetName).WithExpr(idExpression(missing))); err != nil {
 		t.Fatalf("delete target rows: %v", err)
 	}
 	edited := make([]string, 0, len(mismatched))
@@ -203,82 +170,37 @@ func TestCopySharedRepairsEveryDifferenceInOneRound(t *testing.T) {
 		edited = append(edited, `{"edited":true}`)
 	}
 	update := milvusclient.NewColumnBasedInsertOption(targetName).
-		WithVarcharColumn(
-			"id",
-			mismatched,
-		).
-		WithVarcharColumn(
-			"metadata",
-			edited,
-		).
-		WithPartialUpdate(
-			true,
-		)
+		WithVarcharColumn("id", mismatched).
+		WithVarcharColumn("metadata", edited).
+		WithPartialUpdate(true)
 	if _, err := client.Upsert(ctx, update); err != nil {
 		t.Fatalf("change target metadata: %v", err)
 	}
-	if _, err := client.Delete(
-		ctx,
-		milvusclient.NewDeleteOption(sourceName).WithExpr(idExpression(extra)),
-	); err != nil {
+	if _, err := client.Delete(ctx, milvusclient.NewDeleteOption(sourceName).WithExpr(idExpression(extra))); err != nil {
 		t.Fatalf("delete source rows: %v", err)
 	}
 	time.Sleep(repairVisibilityWait)
 
 	sourceRows := len(docs) - reconcileExtraRows
 	output := run(true, 1)
-	wantSummary := fmt.Sprintf(
-		"Verified %d source rows: the shared copy stores %d rows",
-		sourceRows,
-		sourceRows,
-	)
+	wantSummary := fmt.Sprintf("Verified %d source rows: the shared copy stores %d rows", sourceRows, sourceRows)
 	if !strings.Contains(output, wantSummary) {
-		t.Fatalf(
-			"copy-shared --verify-only printed %q; expected it to contain %q",
-			output,
-			wantSummary,
-		)
+		t.Fatalf("copy-shared --verify-only printed %q; expected it to contain %q", output, wantSummary)
 	}
 	sourceIDs := sortedRowIDs(t, ctx, client, sourceName)
 	targetIDs := sortedRowIDs(t, ctx, client, targetName)
 	if !slices.Equal(sourceIDs, targetIDs) {
-		t.Fatalf(
-			"target stores %d row IDs after the repair; expected the %d source row IDs",
-			len(targetIDs),
-			len(sourceIDs),
-		)
+		t.Fatalf("target stores %d row IDs after the repair; expected the %d source row IDs", len(targetIDs), len(sourceIDs))
 	}
-	wantSummaryRecords := fmt.Sprintf(
-		"Copied %d conversation fingerprint records.",
-		len(wantRecords),
-	)
+	wantSummaryRecords := fmt.Sprintf("Copied %d conversation fingerprint records.", len(wantRecords))
 	if !strings.Contains(output, wantSummaryRecords) {
-		t.Fatalf(
-			"copy-shared --verify-only printed %q; expected it to contain %q",
-			output,
-			wantSummaryRecords,
-		)
+		t.Fatalf("copy-shared --verify-only printed %q; expected it to contain %q", output, wantSummaryRecords)
 	}
-	if got := checkpointtest.Records(t, recordDir(reconcileTargetCollectionID)); !maps.Equal(
-		got,
-		wantRecords,
-	) {
-		t.Fatalf(
-			"target stores %d fingerprint records; expected the %d source records %v",
-			len(got),
-			len(wantRecords),
-			wantRecords,
-		)
+	if got := checkpointtest.Records(t, recordDir(reconcileTargetCollectionID)); !maps.Equal(got, wantRecords) {
+		t.Fatalf("target stores %d fingerprint records; expected the %d source records %v", len(got), len(wantRecords), wantRecords)
 	}
-	if got := checkpointtest.Records(t, recordDir(reconcileSourceCollectionID)); !maps.Equal(
-		got,
-		wantRecords,
-	) {
-		t.Fatalf(
-			"source stores %d fingerprint records after the copy; expected %d",
-			len(got),
-			len(wantRecords),
-		)
+	if got := checkpointtest.Records(t, recordDir(reconcileSourceCollectionID)); !maps.Equal(got, wantRecords) {
+		t.Fatalf("source stores %d fingerprint records after the copy; expected %d", len(got), len(wantRecords))
 	}
 }
 
@@ -286,22 +208,12 @@ func TestCopySharedRepairsEveryDifferenceInOneRound(t *testing.T) {
 // under a plain numbered file name in the source collection's record directory
 // under the daemon checkpoint directory. It returns fingerprints by conversation
 // ID.
-func writeSourceRecords(
-	t *testing.T,
-	collectionID string,
-	manifest []semsearch.Fingerprint,
-) map[string]string {
+func writeSourceRecords(t *testing.T, collectionID string, manifest []semsearch.Fingerprint) map[string]string {
 	t.Helper()
 	directory := recordDir(collectionID)
 	records := make(map[string]string, len(manifest))
 	for position, fingerprint := range manifest {
-		checkpointtest.WriteRecord(
-			t,
-			directory,
-			fmt.Sprintf("record-%03d.json", position),
-			fingerprint.ConversationID,
-			fingerprint.Value,
-		)
+		checkpointtest.WriteRecord(t, directory, fmt.Sprintf("record-%03d.json", position), fingerprint.ConversationID, fingerprint.Value)
 		records[fingerprint.ConversationID] = fingerprint.Value
 	}
 	return records
@@ -310,8 +222,5 @@ func writeSourceRecords(
 // recordDir returns the record directory for a collection under the daemon
 // checkpoint directory.
 func recordDir(collectionID string) string {
-	return filepath.Join(
-		daemonsvc.ConversationCheckpointDir(),
-		vectorsearch.CollectionName(collectionID),
-	)
+	return filepath.Join(daemonsvc.ConversationCheckpointDir(), vectorsearch.CollectionName(collectionID))
 }

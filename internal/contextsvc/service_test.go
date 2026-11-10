@@ -19,27 +19,21 @@ func TestGetRecentTurns_returnsTailTruncated(t *testing.T) {
 	source := seedConversation(workspaceRef)
 	srv := newWithSource(source)
 
-	got, err := srv.GetRecentTurns(
-		context.Background(),
-		&contextpb.GetRecentTurnsRequest{
-			WorkspaceRef:    workspaceRef,
-			TurnBudget:      2,
-			MaxCharsPerTurn: 20,
-		},
-	)
+	got, err := srv.GetRecentTurns(context.Background(), &contextpb.GetRecentTurnsRequest{
+		WorkspaceRef:    workspaceRef,
+		TurnBudget:      2,
+		MaxCharsPerTurn: 20,
+	})
 	if err != nil {
 		t.Fatalf("GetRecentTurns returned error: %v", err)
 	}
-
 	if len(got.GetTurns()) != 2 {
 		t.Fatalf("turns len = %d, want 2", len(got.GetTurns()))
 	}
-
 	lastText := got.GetTurns()[1].GetText()
 	if len(lastText) > 23 {
 		t.Fatalf("last turn text length = %d, want <= 23", len(lastText))
 	}
-
 	if !strings.HasSuffix(lastText, "...") {
 		t.Fatalf("last turn text = %q, want truncated suffix", lastText)
 	}
@@ -69,7 +63,6 @@ func (source *fakeConversationSource) Resolve(
 			return record, nil
 		}
 	}
-
 	return conversation.Record{}, errors.New("conversation not found")
 }
 
@@ -84,7 +77,6 @@ func (source *fakeConversationSource) LoadMessages(
 func seedConversation(workspaceRef string) *fakeConversationSource {
 	newer := seededRecord("claude:newer", workspaceRef, 20)
 	older := seededRecord("claude:older", workspaceRef, 10)
-
 	return &fakeConversationSource{
 		records: []conversation.Record{newer, older},
 		messages: map[string][]transcript.Message{

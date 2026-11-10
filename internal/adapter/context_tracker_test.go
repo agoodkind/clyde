@@ -10,34 +10,26 @@ func TestContextUsageTrackerAccumulatesPriorOutputIntoSurfacedPrompt(t *testing.
 	tracker := newContextUsageTracker()
 	key := "conversation:test"
 
-	first := tracker.Track(
-		key,
-		Usage{
-			PromptTokens:     100,
-			CompletionTokens: 20,
-			TotalTokens:      120,
-		},
-	)
+	first := tracker.Track(key, Usage{
+		PromptTokens:     100,
+		CompletionTokens: 20,
+		TotalTokens:      120,
+	})
 	if first.usage.PromptTokens != 100 || first.usage.TotalTokens != 120 {
 		t.Fatalf("first usage = %+v", first.usage)
 	}
 
-	second := tracker.Track(
-		key,
-		Usage{
-			PromptTokens:     130,
-			CompletionTokens: 15,
-			TotalTokens:      145,
-		},
-	)
+	second := tracker.Track(key, Usage{
+		PromptTokens:     130,
+		CompletionTokens: 15,
+		TotalTokens:      145,
+	})
 	if second.rolledFrom != 20 {
 		t.Fatalf("rolledFrom = %d want 20", second.rolledFrom)
 	}
-
 	if second.usage.PromptTokens != 150 {
 		t.Fatalf("surfaced prompt = %d want 150", second.usage.PromptTokens)
 	}
-
 	if second.usage.CompletionTokens != 15 || second.usage.TotalTokens != 165 {
 		t.Fatalf("second usage = %+v", second.usage)
 	}
@@ -47,27 +39,20 @@ func TestContextUsageTrackerResetsAfterSharpPromptDrop(t *testing.T) {
 	tracker := newContextUsageTracker()
 	key := "conversation:test"
 
-	_ = tracker.Track(
-		key,
-		Usage{
-			PromptTokens:     400,
-			CompletionTokens: 80,
-			TotalTokens:      480,
-		},
-	)
+	_ = tracker.Track(key, Usage{
+		PromptTokens:     400,
+		CompletionTokens: 80,
+		TotalTokens:      480,
+	})
 
-	next := tracker.Track(
-		key,
-		Usage{
-			PromptTokens:     120,
-			CompletionTokens: 10,
-			TotalTokens:      130,
-		},
-	)
+	next := tracker.Track(key, Usage{
+		PromptTokens:     120,
+		CompletionTokens: 10,
+		TotalTokens:      130,
+	})
 	if next.rolledFrom != 0 {
 		t.Fatalf("rolledFrom = %d want 0 after reset", next.rolledFrom)
 	}
-
 	if next.usage.PromptTokens != 120 || next.usage.TotalTokens != 130 {
 		t.Fatalf("usage after reset = %+v", next.usage)
 	}
@@ -76,12 +61,10 @@ func TestContextUsageTrackerResetsAfterSharpPromptDrop(t *testing.T) {
 func TestRequestContextTrackerKeyPrefersUserAndMetadata(t *testing.T) {
 	req := ChatRequest{
 		User: "composer-123",
-		Metadata: mustRaw(
-			`{
+		Metadata: mustRaw(`{
 			"conversation_id": "conv-1",
 			"composerId": "cmp-1"
-		}`,
-		),
+		}`),
 		Messages: []ChatMessage{
 			{Role: "user", Content: mustRaw(`"hello"`)},
 		},

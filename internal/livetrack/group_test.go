@@ -30,7 +30,6 @@ func newFakeClock() *fakeClock {
 func (c *fakeClock) now() time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
 	return c.cur
 }
 
@@ -49,7 +48,6 @@ func TestPhaseOrder(t *testing.T) {
 	if len(got) != len(want) {
 		t.Fatalf("orderedPhases len = %d, want %d", len(got), len(want))
 	}
-
 	for i := range want {
 		if got[i] != want[i] {
 			t.Errorf("phase[%d] = %v, want %v", i, got[i], want[i])
@@ -63,26 +61,15 @@ func TestPhaseOrder(t *testing.T) {
 func TestActiveCountUsesLiveActivity(t *testing.T) {
 	t.Parallel()
 	clock := newFakeClock()
-	r := newRegistry[testMeta](Options[testMeta]{
-		Component: "test",
-		Concern:   "test.active",
-		Now:       clock.now,
-	})
-	s, err := r.Register(
-		context.Background(),
-		"k",
-		testMeta{Tag: "k"},
-		&noopCloser{count: atomic.Int32{}, err: nil, delay: 0},
-	)
+	r := newRegistry[testMeta](Options[testMeta]{Component: "test", Concern: "test.active", Now: clock.now})
+	s, err := r.Register(context.Background(), "k", testMeta{Tag: "k"}, &noopCloser{count: atomic.Int32{}, err: nil, delay: 0})
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
-
 	clock.advance(10 * time.Second)
 	if got := r.ActiveCount(5 * time.Second); got != 0 {
 		t.Fatalf("idle session counted active: got %d, want 0", got)
 	}
-
 	s.Touch()
 	if got := r.ActiveCount(5 * time.Second); got != 1 {
 		t.Fatalf("touched session not counted active: got %d, want 1", got)
@@ -101,7 +88,6 @@ func TestQuiesceRunsPhasesInOrder(t *testing.T) {
 			mu.Lock()
 			order = append(order, name)
 			mu.Unlock()
-
 			return nil
 		}
 	}
@@ -119,39 +105,17 @@ func TestQuiesceRunsPhasesInOrder(t *testing.T) {
 func TestAwaitQuietReturnsWhenActive(t *testing.T) {
 	t.Parallel()
 	g := NewGroup(GroupOptions{Log: groupTestLogger()})
-	ingress := Attach[testMeta](
-		g,
-		MemberSpec{Phase: PhaseIngress, QuietRelevant: true, CancelNoWait: false},
-		Options[testMeta]{
-			Component: "ingress",
-			Concern:   "test.ingress",
-			PollEvery: time.Millisecond,
-		},
-	)
-	worker := Attach[testMeta](
-		g,
-		MemberSpec{Phase: PhaseWorkers, QuietRelevant: false, CancelNoWait: false},
-		Options[testMeta]{Component: "worker", Concern: "test.worker", PollEvery: time.Millisecond},
-	)
-	if _, err := worker.Register(
-		context.Background(),
-		"job",
-		testMeta{Tag: "job"},
-		&noopCloser{count: atomic.Int32{}, err: nil, delay: 0},
-	); err != nil {
+	ingress := Attach[testMeta](g, MemberSpec{Phase: PhaseIngress, QuietRelevant: true, CancelNoWait: false},
+		Options[testMeta]{Component: "ingress", Concern: "test.ingress", PollEvery: time.Millisecond})
+	worker := Attach[testMeta](g, MemberSpec{Phase: PhaseWorkers, QuietRelevant: false, CancelNoWait: false},
+		Options[testMeta]{Component: "worker", Concern: "test.worker", PollEvery: time.Millisecond})
+	if _, err := worker.Register(context.Background(), "job", testMeta{Tag: "job"}, &noopCloser{count: atomic.Int32{}, err: nil, delay: 0}); err != nil {
 		t.Fatalf("register worker: %v", err)
 	}
-
-	s, err := ingress.Register(
-		context.Background(),
-		"req",
-		testMeta{Tag: "req"},
-		&noopCloser{count: atomic.Int32{}, err: nil, delay: 0},
-	)
+	s, err := ingress.Register(context.Background(), "req", testMeta{Tag: "req"}, &noopCloser{count: atomic.Int32{}, err: nil, delay: 0})
 	if err != nil {
 		t.Fatalf("register ingress: %v", err)
 	}
-
 	go func() {
 		time.Sleep(20 * time.Millisecond)
 		ingress.Release(context.Background(), s, "done")
@@ -168,15 +132,8 @@ func TestAwaitQuietReturnsWhenActive(t *testing.T) {
 func TestAwaitQuietImmediateWhenEmpty(t *testing.T) {
 	t.Parallel()
 	g := NewGroup(GroupOptions{Log: groupTestLogger()})
-	_ = Attach[testMeta](
-		g,
-		MemberSpec{Phase: PhaseIngress, QuietRelevant: true, CancelNoWait: false},
-		Options[testMeta]{
-			Component: "ingress",
-			Concern:   "test.ingress",
-			PollEvery: time.Millisecond,
-		},
-	)
+	_ = Attach[testMeta](g, MemberSpec{Phase: PhaseIngress, QuietRelevant: true, CancelNoWait: false},
+		Options[testMeta]{Component: "ingress", Concern: "test.ingress", PollEvery: time.Millisecond})
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if quiet := g.AwaitQuiet(ctx, 5*time.Second); !quiet {
@@ -192,17 +149,10 @@ func TestMemberCountTracksAttach(t *testing.T) {
 	if g.MemberCount() != 0 {
 		t.Fatalf("new group member count = %d, want 0", g.MemberCount())
 	}
-
-	_ = Attach[testMeta](
-		g,
-		MemberSpec{Phase: PhaseIngress, QuietRelevant: true, CancelNoWait: false},
-		Options[testMeta]{Component: "a", Concern: "test.a"},
-	)
-	_ = Attach[testMeta](
-		g,
-		MemberSpec{Phase: PhaseStorage, QuietRelevant: false, CancelNoWait: false},
-		Options[testMeta]{Component: "b", Concern: "test.b"},
-	)
+	_ = Attach[testMeta](g, MemberSpec{Phase: PhaseIngress, QuietRelevant: true, CancelNoWait: false},
+		Options[testMeta]{Component: "a", Concern: "test.a"})
+	_ = Attach[testMeta](g, MemberSpec{Phase: PhaseStorage, QuietRelevant: false, CancelNoWait: false},
+		Options[testMeta]{Component: "b", Concern: "test.b"})
 	if g.MemberCount() != 2 {
 		t.Fatalf("member count after 2 Attach = %d, want 2", g.MemberCount())
 	}

@@ -22,7 +22,6 @@ func CapToLastTokens(body string, budget int, c Counter) (string, int, bool) {
 	if budget <= 0 {
 		return body, 0, false
 	}
-
 	total := c.Estimate(body)
 	if total <= budget {
 		return body, total, false
@@ -36,25 +35,18 @@ func CapToLastTokens(body string, budget int, c Counter) (string, int, bool) {
 	end := len(trimmed)
 	cut := len(trimmed)
 	keptTokens := 0
-
 	for end > 0 {
 		newline := strings.LastIndexByte(trimmed[:end], '\n')
 		lineStart := newline + 1
 		lineTokens := c.Estimate(trimmed[lineStart:end] + "\n")
 		if keptTokens+lineTokens > budget {
-			suffixStart, suffixTokens := lastFittingSuffix(
-				trimmed[lineStart:end],
-				budget-keptTokens,
-				c,
-			)
+			suffixStart, suffixTokens := lastFittingSuffix(trimmed[lineStart:end], budget-keptTokens, c)
 			if lineStart+suffixStart < end {
 				keptTokens += suffixTokens
 				cut = lineStart + suffixStart
 			}
-
 			break
 		}
-
 		keptTokens += lineTokens
 		cut = lineStart
 		end = newline
@@ -63,7 +55,6 @@ func CapToLastTokens(body string, budget int, c Counter) (string, int, bool) {
 	if cut >= len(trimmed) {
 		return "", 0, true
 	}
-
 	return trimmed[cut:] + "\n", keptTokens, true
 }
 
@@ -79,29 +70,24 @@ func lastFittingSuffix(line string, budget int, c Counter) (int, int) {
 		return tokens, tokens <= budget
 	}
 	low := 0
-
 	high := len(line)
 	for low < high {
 		middle := low + (high-low)/2
 		for middle > low && !utf8.RuneStart(line[middle]) {
 			middle--
 		}
-
 		if _, ok := fits(middle); ok {
 			high = middle
 			continue
 		}
-
 		low = middle + 1
 		for low < high && !utf8.RuneStart(line[low]) {
 			low++
 		}
 	}
-
 	tokens, ok := fits(high)
 	if !ok || high == len(line) {
 		return len(line), 0
 	}
-
 	return high, tokens
 }

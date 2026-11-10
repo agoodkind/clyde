@@ -33,27 +33,19 @@ type DeltaResult struct {
 // rewritten by the client.
 func ComputeDelta(prior, current []codexwire.InputItem) DeltaResult {
 	if len(prior) == 0 {
-		return DeltaResult{
-			Items:  cloneInputItems(current),
-			Ok:     len(current) > 0,
-			Reason: zeroDeltaReason(current),
-		}
+		return DeltaResult{Items: cloneInputItems(current), Ok: len(current) > 0, Reason: zeroDeltaReason(current)}
 	}
-
 	if len(current) < len(prior) {
 		return DeltaResult{Reason: "baseline_divergence", Items: nil, Ok: false}
 	}
-
 	for i := range prior {
 		if !continuationItemEqual(prior[i], current[i]) {
 			return DeltaResult{Reason: "baseline_divergence", Items: nil, Ok: false}
 		}
 	}
-
 	if len(current) == len(prior) {
 		return DeltaResult{Reason: "no_extension", Items: nil, Ok: false}
 	}
-
 	return DeltaResult{Items: cloneInputItems(current[len(prior):]), Ok: true, Reason: ""}
 }
 
@@ -61,7 +53,6 @@ func zeroDeltaReason(current []codexwire.InputItem) string {
 	if len(current) == 0 {
 		return "empty_input"
 	}
-
 	return ""
 }
 
@@ -69,9 +60,7 @@ func cloneInputItems(items []codexwire.InputItem) []codexwire.InputItem {
 	if len(items) == 0 {
 		return nil
 	}
-
 	out := make([]codexwire.InputItem, len(items))
 	copy(out, items)
-
 	return out
 }

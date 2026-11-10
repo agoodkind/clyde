@@ -20,7 +20,6 @@ func exportEncryptedReasoningContextItem() transcript.CompactedContextItem {
 			encryptedExportSentinel +
 			`"}`,
 	)
-
 	return transcript.CompactedContextItem{
 		Kind:    transcript.CompactedContextItemKindReasoning,
 		Message: nil,
@@ -64,7 +63,6 @@ func exportTypedOnlyEncryptedReasoningItem() transcript.CompactedContextItem {
 		`{"type":"reasoning","summary":[{"type":"summary_text","text":"readable reasoning summary"}]}`,
 	)
 	item.Reasoning = &reasoning
-
 	return item
 }
 
@@ -73,7 +71,6 @@ func exportRawOnlyEncryptedReasoningItem() transcript.CompactedContextItem {
 	reasoning := *item.Reasoning
 	reasoning.EncryptedContent = ""
 	item.Reasoning = &reasoning
-
 	return item
 }
 
@@ -95,7 +92,6 @@ func assertExportOmitsEncrypted(t *testing.T, body []byte) {
 	if strings.Contains(text, encryptedExportSentinel) {
 		t.Fatal("export included encrypted payload sentinel")
 	}
-
 	if strings.Contains(text, `"encrypted_content"`) {
 		t.Fatal("export included encrypted_content field")
 	}
@@ -103,51 +99,43 @@ func assertExportOmitsEncrypted(t *testing.T, body []byte) {
 
 func mustExportJSONRaw(t *testing.T, index *Index, record Record) []byte {
 	t.Helper()
-	body, err := index.Export(
-		record,
-		ExportOptions{
-			Format:       ExportFormatJSON,
-			HistoryStart: 0,
-			LastN:        0,
-			MaxLines:     0,
-			MaxTokens:    "",
-			TokenModel:   "",
-			Whitespace:   WhitespacePreserve,
-			Content:      NewContentKindSet(ContentKindSystemMessages, ContentKindRawJSONMetadata),
-			Compaction: CompactionExportOptions{
-				IncludeSelector: "0",
-				FullHistory:     false,
-			},
+	body, err := index.Export(record, ExportOptions{
+		Format:       ExportFormatJSON,
+		HistoryStart: 0,
+		LastN:        0,
+		MaxLines:     0,
+		MaxTokens:    "",
+		TokenModel:   "",
+		Whitespace:   WhitespacePreserve,
+		Content:      NewContentKindSet(ContentKindSystemMessages, ContentKindRawJSONMetadata),
+		Compaction: CompactionExportOptions{
+			IncludeSelector: "0",
+			FullHistory:     false,
 		},
-	)
+	})
 	if err != nil {
 		t.Fatalf("Export: %v", err)
 	}
-
 	return body
 }
 
 func newExportIndexWithMessages(messages []transcript.Message) (*Index, Record) {
 	registry := NewRegistry()
-	registry.Register(&streamFuncParser{
-		stream: func(_ string, opts LoadOptions) iter.Seq2[transcript.Message, error] {
-			return func(yield func(transcript.Message, error) bool) {
-				for _, message := range messages {
-					if message.Role == "system" && !opts.IncludeSystemMessages {
-						continue
-					}
-
-					if !yield(message, nil) {
-						return
-					}
+	registry.Register(&streamFuncParser{stream: func(_ string, opts LoadOptions) iter.Seq2[transcript.Message, error] {
+		return func(yield func(transcript.Message, error) bool) {
+			for _, message := range messages {
+				if message.Role == "system" && !opts.IncludeSystemMessages {
+					continue
+				}
+				if !yield(message, nil) {
+					return
 				}
 			}
-		},
-	})
+		}
+	}})
 	idx := newTestIndex(registry)
 	idx.records = []Record{compactionExportRecord()}
 	idx.loaded = true
-
 	return idx, idx.records[0]
 }
 
@@ -157,19 +145,16 @@ func withExtraBoundaryContext(item transcript.CompactedContextItem) []transcript
 		if messages[i].UUID != "boundary-3" || messages[i].Compaction == nil {
 			continue
 		}
-
 		compaction := *messages[i].Compaction
 		compaction.ContextItems = append(slices.Clone(compaction.ContextItems), item)
 		compaction.ReplacementHistoryCount = len(compaction.ContextItems)
 		messages[i].Compaction = &compaction
 	}
-
 	return messages
 }
 
 func TestExportOmitsEncryptedCompactionContent(t *testing.T) {
 	t.Parallel()
-
 	formats := []ExportFormat{
 		ExportFormatMarkdown,
 		ExportFormatHTML,
@@ -177,82 +162,67 @@ func TestExportOmitsEncryptedCompactionContent(t *testing.T) {
 		ExportFormatJSON,
 	}
 	for _, format := range formats {
-		t.Run(
-			string(format),
-			func(t *testing.T) {
-				t.Parallel()
-				index, record, _ := newCompactionExportIndex()
-				body, err := index.Export(
-					record,
-					ExportOptions{
-						Format:       format,
-						HistoryStart: 0,
-						LastN:        0,
-						MaxLines:     0,
-						MaxTokens:    "",
-						TokenModel:   "",
-						Whitespace:   WhitespacePreserve,
-						Content:      NewContentKindSet(ContentKindChat, ContentKindThinking),
-						Compaction: CompactionExportOptions{
-							IncludeSelector: "0",
-							FullHistory:     false,
-						},
-					},
-				)
-				if err != nil {
-					t.Fatalf("Export: %v", err)
-				}
-
-				text := string(body)
-				if strings.Contains(text, encryptedExportSentinel) {
-					t.Fatal("export included encrypted payload sentinel")
-				}
-
-				if strings.Contains(text, `"encrypted_content"`) {
-					t.Fatal("export included encrypted_content field")
-				}
-
-				if !strings.Contains(text, "readable reasoning summary") {
-					t.Fatal("export removed readable reasoning summary")
-				}
-			},
-		)
+		t.Run(string(format), func(t *testing.T) {
+			t.Parallel()
+			index, record, _ := newCompactionExportIndex()
+			body, err := index.Export(record, ExportOptions{
+				Format:       format,
+				HistoryStart: 0,
+				LastN:        0,
+				MaxLines:     0,
+				MaxTokens:    "",
+				TokenModel:   "",
+				Whitespace:   WhitespacePreserve,
+				Content:      NewContentKindSet(ContentKindChat, ContentKindThinking),
+				Compaction: CompactionExportOptions{
+					IncludeSelector: "0",
+					FullHistory:     false,
+				},
+			})
+			if err != nil {
+				t.Fatalf("Export: %v", err)
+			}
+			text := string(body)
+			if strings.Contains(text, encryptedExportSentinel) {
+				t.Fatal("export included encrypted payload sentinel")
+			}
+			if strings.Contains(text, `"encrypted_content"`) {
+				t.Fatal("export included encrypted_content field")
+			}
+			if !strings.Contains(text, "readable reasoning summary") {
+				t.Fatal("export removed readable reasoning summary")
+			}
+		})
 	}
 }
 
 func TestExportRawJSONOmitsEncryptedCompactionContent(t *testing.T) {
 	t.Parallel()
 	index, record, _ := newCompactionExportIndex()
-	body, err := index.Export(
-		record,
-		ExportOptions{
-			Format:       ExportFormatJSON,
-			HistoryStart: 0,
-			LastN:        0,
-			MaxLines:     0,
-			MaxTokens:    "",
-			TokenModel:   "",
-			Whitespace:   WhitespacePreserve,
-			Content:      NewContentKindSet(ContentKindSystemMessages, ContentKindRawJSONMetadata),
-			Compaction: CompactionExportOptions{
-				IncludeSelector: "0",
-				FullHistory:     false,
-			},
+	body, err := index.Export(record, ExportOptions{
+		Format:       ExportFormatJSON,
+		HistoryStart: 0,
+		LastN:        0,
+		MaxLines:     0,
+		MaxTokens:    "",
+		TokenModel:   "",
+		Whitespace:   WhitespacePreserve,
+		Content:      NewContentKindSet(ContentKindSystemMessages, ContentKindRawJSONMetadata),
+		Compaction: CompactionExportOptions{
+			IncludeSelector: "0",
+			FullHistory:     false,
 		},
-	)
+	})
 	if err != nil {
 		t.Fatalf("Export: %v", err)
 	}
-
 	text := string(body)
 	if strings.Contains(text, encryptedExportSentinel) {
 		t.Fatal("export included encrypted payload sentinel")
 	}
-
 	if strings.Contains(text, `"encrypted_content"`) {
 		t.Fatal("export included encrypted_content field")
 	}
-
 	if !strings.Contains(text, "readable reasoning summary") {
 		t.Fatal("export removed readable reasoning summary")
 	}
@@ -297,27 +267,23 @@ func TestExportOmitsNestedOtherRawEncryptedContent(t *testing.T) {
 func TestExportOmitsEncryptedContentForFullHistory(t *testing.T) {
 	t.Parallel()
 	index, record, _ := newCompactionExportIndex()
-	body, err := index.Export(
-		record,
-		ExportOptions{
-			Format:       ExportFormatJSON,
-			HistoryStart: 0,
-			LastN:        0,
-			MaxLines:     0,
-			MaxTokens:    "",
-			TokenModel:   "",
-			Whitespace:   WhitespacePreserve,
-			Content:      NewContentKindSet(ContentKindSystemMessages, ContentKindRawJSONMetadata),
-			Compaction: CompactionExportOptions{
-				IncludeSelector: "",
-				FullHistory:     true,
-			},
+	body, err := index.Export(record, ExportOptions{
+		Format:       ExportFormatJSON,
+		HistoryStart: 0,
+		LastN:        0,
+		MaxLines:     0,
+		MaxTokens:    "",
+		TokenModel:   "",
+		Whitespace:   WhitespacePreserve,
+		Content:      NewContentKindSet(ContentKindSystemMessages, ContentKindRawJSONMetadata),
+		Compaction: CompactionExportOptions{
+			IncludeSelector: "",
+			FullHistory:     true,
 		},
-	)
+	})
 	if err != nil {
 		t.Fatalf("Export: %v", err)
 	}
-
 	assertExportOmitsEncrypted(t, body)
 	if !strings.Contains(string(body), "readable reasoning summary") {
 		t.Fatal("export removed readable reasoning summary")
@@ -330,28 +296,23 @@ func TestExportLeavesParserOwnedEncryptedContentUnchanged(t *testing.T) {
 	index, record := newExportIndexWithMessages(messages)
 	_ = mustExportJSONRaw(t, index, record)
 	found := false
-
 	for _, message := range messages {
 		if message.Compaction == nil {
 			continue
 		}
-
 		for _, item := range message.Compaction.ContextItems {
 			if item.Reasoning == nil {
 				continue
 			}
-
 			found = true
 			if item.Reasoning.EncryptedContent != encryptedExportSentinel {
 				t.Fatal("export mutated parser-owned EncryptedContent")
 			}
-
 			if !strings.Contains(string(item.Reasoning.Raw), encryptedExportSentinel) {
 				t.Fatal("export mutated parser-owned Raw")
 			}
 		}
 	}
-
 	if !found {
 		t.Fatal("fixture missing parser-owned encrypted reasoning")
 	}
@@ -361,30 +322,23 @@ func TestExportDefaultUsesLatestCompactionSegment(t *testing.T) {
 	t.Parallel()
 	idx, record, loadOptions := newCompactionExportIndex()
 
-	body, err := idx.Export(
-		record,
-		ExportOptions{
-			Format:       ExportFormatMarkdown,
-			HistoryStart: 0,
-			LastN:        0,
-			Whitespace:   WhitespacePreserve,
-			Content:      NewContentKindSet(ContentKindChat),
-		},
-	)
+	body, err := idx.Export(record, ExportOptions{
+		Format:       ExportFormatMarkdown,
+		HistoryStart: 0,
+		LastN:        0,
+		Whitespace:   WhitespacePreserve,
+		Content:      NewContentKindSet(ContentKindChat),
+	})
 	if err != nil {
 		t.Fatalf("Export returned error: %v", err)
 	}
-
 	if len(*loadOptions) != 1 {
 		t.Fatalf("load options calls = %d, want 1", len(*loadOptions))
 	}
-
 	if !(*loadOptions)[0].IncludeSystemMessages {
 		t.Fatalf("default segment export did not load system messages")
 	}
-
 	text := string(body)
-
 	for _, want := range []string{
 		"Compaction Segments 0",
 		"latest boundary context",
@@ -395,12 +349,7 @@ func TestExportDefaultUsesLatestCompactionSegment(t *testing.T) {
 			t.Fatalf("default segment export missing %q in:\n%s", want, text)
 		}
 	}
-
-	for _, unwanted := range []string{
-		"tail after first",
-		"tail after micro",
-		"latest boundary text",
-	} {
+	for _, unwanted := range []string{"tail after first", "tail after micro", "latest boundary text"} {
 		if strings.Contains(text, unwanted) {
 			t.Fatalf("default segment export included %q in:\n%s", unwanted, text)
 		}
@@ -411,26 +360,21 @@ func TestExportSelectorRangeRendersChronologicalSegments(t *testing.T) {
 	t.Parallel()
 	idx, record, _ := newCompactionExportIndex()
 
-	body, err := idx.Export(
-		record,
-		ExportOptions{
-			Format:       ExportFormatMarkdown,
-			HistoryStart: 0,
-			LastN:        0,
-			Whitespace:   WhitespacePreserve,
-			Content:      NewContentKindSet(ContentKindChat),
-			Compaction: CompactionExportOptions{
-				IncludeSelector: "0..2",
-				FullHistory:     false,
-			},
+	body, err := idx.Export(record, ExportOptions{
+		Format:       ExportFormatMarkdown,
+		HistoryStart: 0,
+		LastN:        0,
+		Whitespace:   WhitespacePreserve,
+		Content:      NewContentKindSet(ContentKindChat),
+		Compaction: CompactionExportOptions{
+			IncludeSelector: "0..2",
+			FullHistory:     false,
 		},
-	)
+	})
 	if err != nil {
 		t.Fatalf("Export returned error: %v", err)
 	}
-
 	text := string(body)
-
 	for _, want := range []string{
 		"Compaction Segments 0..2",
 		"first summary context",
@@ -444,18 +388,11 @@ func TestExportSelectorRangeRendersChronologicalSegments(t *testing.T) {
 			t.Fatalf("range export missing %q in:\n%s", want, text)
 		}
 	}
-
 	first := strings.Index(text, "tail after first")
 	micro := strings.Index(text, "tail after micro")
 	latest := strings.Index(text, "tail after latest")
 	if first < 0 || micro < 0 || latest < 0 || !(first < micro && micro < latest) {
-		t.Fatalf(
-			"range export order first=%d micro=%d latest=%d in:\n%s",
-			first,
-			micro,
-			latest,
-			text,
-		)
+		t.Fatalf("range export order first=%d micro=%d latest=%d in:\n%s", first, micro, latest, text)
 	}
 }
 
@@ -463,44 +400,33 @@ func TestExportFullHistorySelectsAllSegments(t *testing.T) {
 	t.Parallel()
 	idx, record, _ := newCompactionExportIndex()
 
-	body, err := idx.Export(
-		record,
-		ExportOptions{
-			Format:       ExportFormatJSON,
-			HistoryStart: 0,
-			LastN:        0,
-			Whitespace:   WhitespacePreserve,
-			Content:      NewContentKindSet(ContentKindChat),
-			Compaction: CompactionExportOptions{
-				IncludeSelector: "",
-				FullHistory:     true,
-			},
+	body, err := idx.Export(record, ExportOptions{
+		Format:       ExportFormatJSON,
+		HistoryStart: 0,
+		LastN:        0,
+		Whitespace:   WhitespacePreserve,
+		Content:      NewContentKindSet(ContentKindChat),
+		Compaction: CompactionExportOptions{
+			IncludeSelector: "",
+			FullHistory:     true,
 		},
-	)
+	})
 	if err != nil {
 		t.Fatalf("Export returned error: %v", err)
 	}
-
 	var document shapedCompactionJSONExport
 	if err := json.Unmarshal(body, &document); err != nil {
 		t.Fatalf("unmarshal export body: %v", err)
 	}
-
 	if document.Compaction == nil {
 		t.Fatal("compaction block was nil")
 	}
-
 	if document.Compaction.Selector != "all" {
 		t.Fatalf("selector = %q, want all", document.Compaction.Selector)
 	}
-
 	if len(document.Compaction.Segments) != 3 {
-		t.Fatalf(
-			"compaction segments = %d, want 3 starting summaries",
-			len(document.Compaction.Segments),
-		)
+		t.Fatalf("compaction segments = %d, want 3 starting summaries", len(document.Compaction.Segments))
 	}
-
 	if len(document.Messages) != 3 {
 		t.Fatalf("messages = %d, want 3 visible messages", len(document.Messages))
 	}
@@ -510,37 +436,26 @@ func TestExportLastNPreservesStartingSummary(t *testing.T) {
 	t.Parallel()
 	idx, record, _ := newCompactionExportIndex()
 
-	body, err := idx.Export(
-		record,
-		ExportOptions{
-			Format:       ExportFormatMarkdown,
-			HistoryStart: 0,
-			LastN:        2,
-			Whitespace:   WhitespacePreserve,
-			Content:      NewContentKindSet(ContentKindChat),
-			Compaction: CompactionExportOptions{
-				IncludeSelector: "0..2",
-				FullHistory:     false,
-			},
+	body, err := idx.Export(record, ExportOptions{
+		Format:       ExportFormatMarkdown,
+		HistoryStart: 0,
+		LastN:        2,
+		Whitespace:   WhitespacePreserve,
+		Content:      NewContentKindSet(ContentKindChat),
+		Compaction: CompactionExportOptions{
+			IncludeSelector: "0..2",
+			FullHistory:     false,
 		},
-	)
+	})
 	if err != nil {
 		t.Fatalf("Export returned error: %v", err)
 	}
-
 	text := string(body)
-
-	for _, want := range []string{
-		"micro context",
-		"latest summary context",
-		"tail after micro",
-		"tail after latest",
-	} {
+	for _, want := range []string{"micro context", "latest summary context", "tail after micro", "tail after latest"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("last-n export missing %q in:\n%s", want, text)
 		}
 	}
-
 	if strings.Contains(text, "tail after first") {
 		t.Fatalf("last-n export included older message in:\n%s", text)
 	}
@@ -550,24 +465,21 @@ func TestExportRejectsOutOfRangeSegment(t *testing.T) {
 	t.Parallel()
 	idx, record, _ := newCompactionExportIndex()
 
-	_, err := idx.Export(
-		record,
-		ExportOptions{
-			Format:       ExportFormatMarkdown,
-			HistoryStart: 0,
-			LastN:        0,
-			Whitespace:   WhitespacePreserve,
-			Content:      NewContentKindSet(ContentKindChat),
-			Compaction: CompactionExportOptions{
-				IncludeSelector: "4",
-				FullHistory:     false,
-			},
+	_, err := idx.Export(record, ExportOptions{
+		Format:       ExportFormatMarkdown,
+		HistoryStart: 0,
+		LastN:        0,
+		Whitespace:   WhitespacePreserve,
+		Content:      NewContentKindSet(ContentKindChat),
+		Compaction: CompactionExportOptions{
+			IncludeSelector: "4",
+			FullHistory:     false,
 		},
-	)
+	})
+
 	if err == nil {
 		t.Fatal("expected out-of-range segment error")
 	}
-
 	if !strings.Contains(err.Error(), "conversation has compaction segments 0..3") {
 		t.Fatalf("error = %q, want segment range", err.Error())
 	}
@@ -577,25 +489,20 @@ func TestExportDefaultedSegmentWithoutCompactionRendersConversation(t *testing.T
 	t.Parallel()
 	idx, record := newPlainExportIndex()
 
-	body, err := idx.Export(
-		record,
-		ExportOptions{
-			Format:       ExportFormatMarkdown,
-			HistoryStart: 0,
-			LastN:        0,
-			Whitespace:   WhitespacePreserve,
-			Content:      NewContentKindSet(ContentKindChat),
-		},
-	)
+	body, err := idx.Export(record, ExportOptions{
+		Format:       ExportFormatMarkdown,
+		HistoryStart: 0,
+		LastN:        0,
+		Whitespace:   WhitespacePreserve,
+		Content:      NewContentKindSet(ContentKindChat),
+	})
 	if err != nil {
 		t.Fatalf("Export returned error: %v", err)
 	}
-
 	text := string(body)
 	if !strings.Contains(text, "plain visible message") {
 		t.Fatalf("defaulted export = %q, want visible transcript message", text)
 	}
-
 	if strings.Contains(text, "Compaction Segments") {
 		t.Fatalf("uncompacted export rendered compaction block: %q", text)
 	}
@@ -604,47 +511,39 @@ func TestExportDefaultedSegmentWithoutCompactionRendersConversation(t *testing.T
 func newCompactionExportIndex() (*Index, Record, *[]LoadOptions) {
 	loadOptions := make([]LoadOptions, 0)
 	registry := NewRegistry()
-	registry.Register(&streamFuncParser{
-		stream: func(path string, opts LoadOptions) iter.Seq2[transcript.Message, error] {
-			loadOptions = append(loadOptions, opts)
-
-			return func(yield func(transcript.Message, error) bool) {
-				for _, message := range compactionExportMessages() {
-					if message.Role == "system" && !opts.IncludeSystemMessages {
-						continue
-					}
-
-					if !yield(message, nil) {
-						return
-					}
+	registry.Register(&streamFuncParser{stream: func(path string, opts LoadOptions) iter.Seq2[transcript.Message, error] {
+		loadOptions = append(loadOptions, opts)
+		return func(yield func(transcript.Message, error) bool) {
+			for _, message := range compactionExportMessages() {
+				if message.Role == "system" && !opts.IncludeSystemMessages {
+					continue
+				}
+				if !yield(message, nil) {
+					return
 				}
 			}
-		},
-	})
+		}
+	}})
 	idx := newTestIndex(registry)
 	idx.records = []Record{compactionExportRecord()}
 	idx.loaded = true
 	record := idx.records[0]
-
 	return idx, record, &loadOptions
 }
 
 func newPlainExportIndex() (*Index, Record) {
 	registry := NewRegistry()
-	registry.Register(&streamFuncParser{
-		stream: func(path string, opts LoadOptions) iter.Seq2[transcript.Message, error] {
-			return func(yield func(transcript.Message, error) bool) {
-				if !yield(exportChatMessage("plain-1", "user", "plain visible message", 1), nil) {
-					return
-				}
+	registry.Register(&streamFuncParser{stream: func(path string, opts LoadOptions) iter.Seq2[transcript.Message, error] {
+		return func(yield func(transcript.Message, error) bool) {
+			if !yield(exportChatMessage("plain-1", "user", "plain visible message", 1), nil) {
+				return
 			}
-		},
-	})
+		}
+	}})
 	idx := newTestIndex(registry)
 	idx.records = []Record{compactionExportRecord()}
 	idx.loaded = true
 	record := idx.records[0]
-
 	return idx, record
 }
 
@@ -832,16 +731,13 @@ func exportMessageContextItem(
 	messageClass transcript.CompactedMessageClass,
 ) transcript.CompactedContextItem {
 	messageItem := transcript.CompactedMessageItem{
-		Role:  "user",
-		Phase: "",
-		Content: []transcript.CompactedMessageContentItem{
-			{Type: "text", Text: text, Raw: json.RawMessage(`"text"`)},
-		},
+		Role:         "user",
+		Phase:        "",
+		Content:      []transcript.CompactedMessageContentItem{{Type: "text", Text: text, Raw: json.RawMessage(`"text"`)}},
 		ContentRaw:   json.RawMessage(`[{"type":"text","text":"text"}]`),
 		MessageClass: messageClass,
 		Raw:          json.RawMessage(`{"type":"message","role":"user"}`),
 	}
-
 	return transcript.CompactedContextItem{
 		Kind:                 transcript.CompactedContextItemKindMessage,
 		Message:              &messageItem,

@@ -9,7 +9,6 @@ import (
 	"unicode/utf8"
 
 	"goodkind.io/lm-semantic-search/collection"
-	"goodkind.io/lm-semantic-search/embedding"
 )
 
 // Embedding limits. A model that Clyde does not recognize gets the smallest
@@ -39,7 +38,6 @@ func activeTokenLimit(embeddingModel string) int {
 	if strings.ToLower(strings.TrimSpace(embeddingModel)) == nvEmbedCodeModelName {
 		return nvEmbedCodeInputTokenLimit
 	}
-
 	return minimumInputTokenLimit
 }
 
@@ -55,17 +53,14 @@ func expandOverBudget(chunks []storedChunk, byteBudget int) []storedChunk {
 	if byteBudget <= 0 {
 		return chunks
 	}
-
 	expanded := make([]storedChunk, 0, len(chunks))
 	for _, chunk := range chunks {
 		if len(chunk.Content) <= byteBudget {
 			expanded = append(expanded, chunk)
 			continue
 		}
-
 		expanded = append(expanded, splitChunkAtBudget(chunk, byteBudget)...)
 	}
-
 	return expanded
 }
 
@@ -78,11 +73,9 @@ func splitChunkAtBudget(chunk storedChunk, budget int) []storedChunk {
 	if chunk.SplitPart > 0 {
 		baseOffset = int(chunk.SplitPart) - 1
 	}
-
 	pieces := splitTextByBytes(chunk.Content, budget)
 	children := make([]storedChunk, 0, len(pieces))
 	offset := 0
-
 	for _, piece := range pieces {
 		child := chunk
 		child.Content = piece
@@ -90,7 +83,6 @@ func splitChunkAtBudget(chunk storedChunk, budget int) []storedChunk {
 		children = append(children, child)
 		offset += len(piece)
 	}
-
 	return children
 }
 
@@ -102,11 +94,9 @@ func safeInt32(value int) int32 {
 	if value > math.MaxInt32 {
 		return math.MaxInt32
 	}
-
 	if value < math.MinInt32 {
 		return math.MinInt32
 	}
-
 	return int32(value)
 }
 
@@ -122,13 +112,11 @@ func packChunks(chunks []storedChunk, reuse map[string][]float32) [][]storedChun
 	groups := make([][]storedChunk, 0)
 	current := make([]storedChunk, 0, embedBatchRows)
 	currentTokens := 0
-
 	for _, chunk := range chunks {
 		tokens := estimatedTokens(chunk.Content)
 		if _, reused := reuse[contentKey(chunk.Content)]; reused {
 			tokens = 0
 		}
-
 		overBudget := currentTokens+tokens > embedBatchTokenBudget
 		overRows := len(current) >= embedBatchRows
 		if len(current) > 0 && (overBudget || overRows) {
@@ -136,15 +124,12 @@ func packChunks(chunks []storedChunk, reuse map[string][]float32) [][]storedChun
 			current = make([]storedChunk, 0, embedBatchRows)
 			currentTokens = 0
 		}
-
 		current = append(current, chunk)
 		currentTokens += tokens
 	}
-
 	if len(current) > 0 {
 		groups = append(groups, current)
 	}
-
 	return groups
 }
 
@@ -169,13 +154,7 @@ type rowWriter struct {
 }
 
 func newRowWriter(client *Client, collectionName string) *rowWriter {
-	return &rowWriter{
-		client:         client,
-		collectionName: collectionName,
-		pending:        nil,
-		pendingBytes:   0,
-		written:        0,
-	}
+	return &rowWriter{client: client, collectionName: collectionName, pending: nil, pendingBytes: 0, written: 0}
 }
 
 func (writer *rowWriter) add(ctx context.Context, row collection.Row) error {
@@ -185,7 +164,6 @@ func (writer *rowWriter) add(ctx context.Context, row collection.Row) error {
 	if writer.pendingBytes < rowFlushBytes {
 		return nil
 	}
-
 	return writer.flush(ctx)
 }
 
@@ -193,45 +171,23 @@ func (writer *rowWriter) flush(ctx context.Context) error {
 	if len(writer.pending) == 0 {
 		return nil
 	}
-
 	dimension := len(writer.pending[0].Vector)
 	if err := writer.client.ensureCollection(ctx, writer.collectionName, dimension); err != nil {
 		return err
 	}
-
-	if err := writer.client.store.Upsert(
-		ctx,
-		writer.collectionName,
-		writer.client.declaration,
-		writer.pending,
-	); err != nil {
-		slog.WarnContext(
-			ctx,
-			"conversation.vectorsearch.upsert_rows_failed",
-			"concern",
-			"conversation.semantic",
-			"component",
-			"conversation",
-			"collection",
-			writer.collectionName,
-			"rows",
-			len(writer.pending),
-			"err",
-			err,
+	if err := writer.client.store.Upsert(ctx, writer.collectionName, writer.client.declaration, writer.pending); err != nil {
+		slog.WarnContext(ctx, "conversation.vectorsearch.upsert_rows_failed",
+			"concern", "conversation.semantic",
+			"component", "conversation",
+			"collection", writer.collectionName,
+			"rows", len(writer.pending),
+			"err", err,
 		)
-
-		return fmt.Errorf(
-			"write %d conversation rows to %s: %w",
-			len(writer.pending),
-			writer.collectionName,
-			err,
-		)
+		return fmt.Errorf("write %d conversation rows to %s: %w", len(writer.pending), writer.collectionName, err)
 	}
-
 	writer.written += len(writer.pending)
 	writer.pending = nil
 	writer.pendingBytes = 0
-
 	return nil
 }
 
@@ -262,61 +218,46 @@ func (c *Client) embedAndWrite(
 ) error {
 	queue := chunks
 	roundReuse := reuse
-
 	for round := 0; len(queue) > 0; round++ {
 		retry := make([]storedChunk, 0)
-
 		for _, pack := range packChunks(queue, roundReuse) {
 			if err := ctx.Err(); err != nil {
 				return failRead("embed conversation rows", err)
 			}
-
 			vectors, rejected, err := c.vectorsFor(ctx, pack, roundReuse, stats)
 			if err != nil {
 				return err
 			}
-
 			for i, chunk := range pack {
 				if vectors[i] == nil {
 					continue
 				}
-
 				if err := writer.add(ctx, chunkRow(chunk, vectors[i])); err != nil {
 					return err
 				}
 			}
-
 			for _, refusal := range rejected {
 				if c.shouldSplit(refusal) {
 					retry = append(retry, splitChunkInHalf(refusal.chunk)...)
 					stats.split++
 					continue
 				}
-
 				c.logDropped(ctx, refusal, round)
 				stats.dropped++
 			}
 		}
-
 		queue = retry
 		roundReuse = nil
 	}
-
 	return writer.flush(ctx)
 }
 
 // vectorsFor returns one vector per chunk of the pack, nil for a chunk the
 // endpoint rejected, and the rejections. It sends only the chunks without a
 // stored vector.
-func (c *Client) vectorsFor(
-	ctx context.Context,
-	pack []storedChunk,
-	reuse map[string][]float32,
-	stats *ingestStats,
-) ([][]float32, []rejection, error) {
+func (c *Client) vectorsFor(ctx context.Context, pack []storedChunk, reuse map[string][]float32, stats *ingestStats) ([][]float32, []rejection, error) {
 	vectors := make([][]float32, len(pack))
 	missTexts := make([]string, 0, len(pack))
-
 	missPositions := make([]int, 0, len(pack))
 	for i, chunk := range pack {
 		if vector, found := reuse[contentKey(chunk.Content)]; found {
@@ -324,103 +265,56 @@ func (c *Client) vectorsFor(
 			stats.reused++
 			continue
 		}
-
 		missTexts = append(missTexts, chunk.Content)
 		missPositions = append(missPositions, i)
 	}
-
 	if len(missTexts) == 0 {
 		return vectors, nil, nil
 	}
-
 	result, err := c.embedder.EmbedBatch(ctx, missTexts)
 	if err != nil {
-		slog.WarnContext(
-			ctx,
-			"conversation.vectorsearch.embed_batch_failed",
-			"concern",
-			"conversation.semantic",
-			"component",
-			"conversation",
-			"inputs",
-			len(missTexts),
-			"err",
-			err,
+		slog.WarnContext(ctx, "conversation.vectorsearch.embed_batch_failed",
+			"concern", "conversation.semantic",
+			"component", "conversation",
+			"inputs", len(missTexts),
+			"err", err,
 		)
-
 		return nil, nil, fmt.Errorf("embed %d conversation rows: %w", len(missTexts), err)
 	}
-
 	if len(result.Vectors) != len(missTexts) {
-		return nil, nil, failRead(
-			"embed conversation rows",
-			fmt.Errorf(
-				"endpoint returned %d vectors for %d inputs",
-				len(result.Vectors),
-				len(missTexts),
-			),
-		)
+		return nil, nil, failRead("embed conversation rows", fmt.Errorf("endpoint returned %d vectors for %d inputs", len(result.Vectors), len(missTexts)))
 	}
-
-	skipped := indexSkipped(result.Skipped)
-
-	rejected := make([]rejection, 0)
-
-	for position, chunkPosition := range missPositions {
-		vector := result.Vectors[position]
-		if vector == nil {
-			info, wasSkipped := skipped[position]
-			if !wasSkipped {
-				return nil, nil, failRead(
-					"embed conversation rows",
-					fmt.Errorf(
-						"endpoint returned no vector and no skip for %s",
-						pack[chunkPosition].RelativePath,
-					),
-				)
-			}
-
-			rejected = append(
-				rejected,
-				rejection{
-					chunk:       pack[chunkPosition],
-					reason:      info.reason,
-					maxTokens:   info.maxTokens,
-					maxReported: info.maxReported,
-				},
-			)
-			continue
-		}
-
-		if c.dimension > 0 && len(vector) != c.dimension {
-			return nil, nil, failRead(
-				"embed conversation rows",
-				fmt.Errorf(
-					"endpoint returned %d dimensions, configured embedding_dimension is %d",
-					len(vector),
-					c.dimension,
-				),
-			)
-		}
-
-		vectors[chunkPosition] = vector
-		stats.embedded++
-	}
-
-	return vectors, rejected, nil
-}
-
-func indexSkipped(inputs []embedding.SkippedInput) map[int]skipInfo {
-	skipped := make(map[int]skipInfo, len(inputs))
-	for _, skip := range inputs {
+	skipped := make(map[int]skipInfo, len(result.Skipped))
+	for _, skip := range result.Skipped {
 		skipped[skip.Index] = skipInfo{
 			reason:      string(skip.Reason),
 			maxTokens:   skip.MaxTokens.Value,
 			maxReported: skip.MaxTokens.Reported,
 		}
 	}
-
-	return skipped
+	rejected := make([]rejection, 0)
+	for position, chunkPosition := range missPositions {
+		vector := result.Vectors[position]
+		if vector == nil {
+			info, wasSkipped := skipped[position]
+			if !wasSkipped {
+				return nil, nil, failRead("embed conversation rows", fmt.Errorf("endpoint returned no vector and no skip for %s", pack[chunkPosition].RelativePath))
+			}
+			rejected = append(rejected, rejection{
+				chunk:       pack[chunkPosition],
+				reason:      info.reason,
+				maxTokens:   info.maxTokens,
+				maxReported: info.maxReported,
+			})
+			continue
+		}
+		if c.dimension > 0 && len(vector) != c.dimension {
+			return nil, nil, failRead("embed conversation rows", fmt.Errorf("endpoint returned %d dimensions, configured embedding_dimension is %d", len(vector), c.dimension))
+		}
+		vectors[chunkPosition] = vector
+		stats.embedded++
+	}
+	return vectors, rejected, nil
 }
 
 // splitByteFloor converts the token limit of a rejection to the smallest content
@@ -434,11 +328,9 @@ func (c *Client) splitByteFloor(refusal rejection) (int, bool) {
 	} else if limit := activeTokenLimit(c.embeddingModel); limit > 0 {
 		modelMaxTokens = limit
 	}
-
 	if modelMaxTokens <= splitRetrySpecialTokenMargin {
 		return 0, false
 	}
-
 	return modelMaxTokens - splitRetrySpecialTokenMargin, true
 }
 
@@ -449,16 +341,13 @@ func (c *Client) shouldSplit(refusal rejection) bool {
 	if refusal.reason != contextLengthExceededReason {
 		return false
 	}
-
 	if utf8.RuneCountInString(refusal.chunk.Content) <= 1 {
 		return false
 	}
-
 	byteFloor, hasCapacity := c.splitByteFloor(refusal)
 	if !hasCapacity {
 		return false
 	}
-
 	return len(refusal.chunk.Content) > byteFloor
 }
 
@@ -466,51 +355,34 @@ func (c *Client) dropKind(refusal rejection) string {
 	if refusal.reason == emptyContentReason {
 		return "empty_content"
 	}
-
 	if refusal.reason != contextLengthExceededReason {
 		return "unexpected_reason"
 	}
-
 	if utf8.RuneCountInString(refusal.chunk.Content) <= 1 {
 		return "indivisible"
 	}
-
 	byteFloor, hasCapacity := c.splitByteFloor(refusal)
 	if !hasCapacity {
 		return "no_content_capacity"
 	}
-
 	if len(refusal.chunk.Content) <= byteFloor {
 		return "below_token_floor"
 	}
-
 	return "unknown"
 }
 
 func (c *Client) logDropped(ctx context.Context, refusal rejection, round int) {
 	byteFloor, _ := c.splitByteFloor(refusal)
-	slog.WarnContext(
-		ctx,
-		"conversation.vectorsearch.embed_input_dropped",
-		"concern",
-		"conversation.semantic",
-		"component",
-		"conversation",
-		"drop_kind",
-		c.dropKind(refusal),
-		"reason",
-		refusal.reason,
-		"conversation_id",
-		refusal.chunk.ConversationID,
-		"relative_path",
-		refusal.chunk.RelativePath,
-		"content_bytes",
-		len(refusal.chunk.Content),
-		"model_max_tokens",
-		refusal.maxTokens,
-		"content_byte_floor",
-		byteFloor,
-		"retry_round",
-		round,
+	slog.WarnContext(ctx, "conversation.vectorsearch.embed_input_dropped",
+		"concern", "conversation.semantic",
+		"component", "conversation",
+		"drop_kind", c.dropKind(refusal),
+		"reason", refusal.reason,
+		"conversation_id", refusal.chunk.ConversationID,
+		"relative_path", refusal.chunk.RelativePath,
+		"content_bytes", len(refusal.chunk.Content),
+		"model_max_tokens", refusal.maxTokens,
+		"content_byte_floor", byteFloor,
+		"retry_round", round,
 	)
 }

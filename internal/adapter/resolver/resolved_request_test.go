@@ -12,13 +12,10 @@ func TestResolvedRequestProviderEffortUsesWireValueOrIdentity(t *testing.T) {
 		{name: "identity", req: ResolvedRequest{Effort: "future-tier"}, want: "future-tier"},
 	}
 	for _, test := range tests {
-		t.Run(
-			test.name,
-			func(t *testing.T) {
-				if got := test.req.ProviderEffort(); got != test.want {
-					t.Fatalf("ProviderEffort() = %q, want %q", got, test.want)
-				}
-			},
-		)
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.req.ProviderEffort(); got != test.want {
+				t.Fatalf("ProviderEffort() = %q, want %q", got, test.want)
+			}
+		})
 	}
 }

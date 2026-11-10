@@ -27,99 +27,67 @@ func redactedEndpoint(raw string) (string, bool) {
 	if trimmed == "" {
 		return "", false
 	}
-
 	schemeless := !strings.Contains(trimmed, schemeSeparator)
 	candidate := trimmed
 	if schemeless {
 		candidate = schemelessAddressPrefix + trimmed
 	}
-
 	parsed, err := url.Parse(candidate)
 	if err != nil || parsed.Host == "" {
 		return "", false
 	}
-
 	if parsed.User != nil {
 		parsed.User = url.User(redactedSettingValue)
 	}
-
 	query := parsed.Query()
 	for name := range query {
 		query[name] = []string{redactedSettingValue}
 	}
-
 	parsed.RawQuery = query.Encode()
 	parsed.Fragment = ""
 	rendered := parsed.String()
 	if schemeless {
 		rendered = strings.TrimPrefix(rendered, schemelessAddressPrefix)
 	}
-
 	return rendered, true
 }
 
-func semanticSettingsMetrics(
-	semantic config.ConversationSemanticConfig,
-	syncStatus conversationSemanticSyncStatus,
-) []StatusMetric {
+func semanticSettingsMetrics(semantic config.ConversationSemanticConfig, syncStatus conversationSemanticSyncStatus) []StatusMetric {
 	model := strings.TrimSpace(semantic.EmbeddingModel)
 	if model == "" {
 		model = syncStatus.embeddingModel
 	}
-
 	dimension := int64(semantic.EmbeddingDimension)
 	if semantic.Backend == config.ConversationSemanticBackendLocal {
 		model = syncStatus.embeddingModel
 		dimension = int64(syncStatus.embeddingDimension)
 	}
-
 	if dimension == 0 {
 		dimension = int64(syncStatus.embeddingDimension)
 	}
-
 	settings := []StatusMetric{
-		textMetric(
-			"semantic_settings.backend",
-			semanticBackendName(protoSemanticBackend(semantic.Backend)),
-		),
+		textMetric("semantic_settings.backend", semanticBackendName(protoSemanticBackend(semantic.Backend))),
 		textMetric("semantic_settings.collection_id", semantic.CollectionID),
-		textMetric(
-			"semantic_settings.collection_name",
-			vectorsearch.CollectionName(semantic.CollectionID),
-		),
+		textMetric("semantic_settings.collection_name", vectorsearch.CollectionName(semantic.CollectionID)),
 		knownTextMetric("semantic_settings.embedding_model", model, model != ""),
 		knownIntMetric("semantic_settings.embedding_dimension", dimension, "", dimension > 0),
-		intMetric(
-			"semantic_settings.sync_interval",
-			semantic.SyncPassInterval().Milliseconds(),
-			statusUnitMilliseconds,
-		),
-		intMetric(
-			"semantic_settings.index_refresh_interval",
-			semantic.IndexRefreshPeriod().Milliseconds(),
-			statusUnitMilliseconds,
-		),
+		intMetric("semantic_settings.sync_interval", semantic.SyncPassInterval().Milliseconds(), statusUnitMilliseconds),
+		intMetric("semantic_settings.index_refresh_interval", semantic.IndexRefreshPeriod().Milliseconds(), statusUnitMilliseconds),
 	}
 	if semantic.Backend == config.ConversationSemanticBackendLocal {
 		return settings
 	}
-
 	baseURL, baseURLKnown := redactedEndpoint(semantic.EmbeddingBaseURL)
 	address, addressKnown := redactedEndpoint(semantic.MilvusAddress)
 	database := strings.TrimSpace(semantic.MilvusDatabase)
-
-	return append(
-		settings,
+	return append(settings,
 		knownTextMetric("semantic_settings.embedding_base_url", baseURL, baseURLKnown),
 		knownTextMetric("semantic_settings.milvus_address", address, addressKnown),
 		knownTextMetric("semantic_settings.milvus_database", database, database != ""),
 	)
 }
 
-func semanticDetailMetrics(
-	semantic config.ConversationSemanticConfig,
-	syncStatus conversationSemanticSyncStatus,
-) []StatusMetric {
+func semanticDetailMetrics(semantic config.ConversationSemanticConfig, syncStatus conversationSemanticSyncStatus) []StatusMetric {
 	return append(semanticSettingsMetrics(semantic, syncStatus), semanticSyncMetrics(syncStatus)...)
 }
 
@@ -133,7 +101,6 @@ func daemonProcessMetrics(syncStatus conversationSemanticSyncStatus) []StatusMet
 			heapInUse = intMetric("process.heap_in_use", int64(heapBytes), statusUnitBytes)
 		}
 	}
-
 	return []StatusMetric{
 		intMetric("process.goroutines", int64(runtime.NumGoroutine()), statusUnitGoroutines),
 		heapInUse,

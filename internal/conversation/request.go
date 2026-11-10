@@ -178,10 +178,7 @@ type RequestLookupOptions struct {
 //
 // Otherwise the first knowable reason stands, since a later store having nothing
 // to say does not weaken what an earlier one established.
-func MergeRequestNotFoundReason(
-	soFar RequestNotFoundReason,
-	next RequestNotFoundReason,
-) RequestNotFoundReason {
+func MergeRequestNotFoundReason(soFar RequestNotFoundReason, next RequestNotFoundReason) RequestNotFoundReason {
 	for _, outranking := range []RequestNotFoundReason{
 		RequestNotFoundReasonAmbiguousConversation,
 		RequestNotFoundReasonInconclusive,
@@ -189,16 +186,13 @@ func MergeRequestNotFoundReason(
 		if soFar == outranking {
 			return soFar
 		}
-
 		if next == outranking {
 			return next
 		}
 	}
-
 	if soFar == RequestNotFoundReasonUnspecified {
 		return next
 	}
-
 	return soFar
 }
 
@@ -225,11 +219,7 @@ type RequestMatch struct {
 // The resolver must not run an unbounded scan unless opts.AllowFullScan is set,
 // and it must never return a nearby or guessed conversation.
 type RequestResolver interface {
-	ResolveRequestID(
-		ctx context.Context,
-		requestID string,
-		opts RequestLookupOptions,
-	) (RequestMatch, error)
+	ResolveRequestID(ctx context.Context, requestID string, opts RequestLookupOptions) (RequestMatch, error)
 }
 
 // RequestResolution is the index-level answer for one request id: whether it
@@ -255,7 +245,6 @@ func looksLikeRequestID(selector string) bool {
 	if len(selector) != requestIDLength {
 		return false
 	}
-
 	for index, char := range selector {
 		switch index {
 		case 8, 13, 18, 23:
@@ -268,7 +257,6 @@ func looksLikeRequestID(selector string) bool {
 			}
 		}
 	}
-
 	return true
 }
 
@@ -276,11 +264,9 @@ func isHexDigit(char rune) bool {
 	if char >= '0' && char <= '9' {
 		return true
 	}
-
 	if char >= 'a' && char <= 'f' {
 		return true
 	}
-
 	return char >= 'A' && char <= 'F'
 }
 

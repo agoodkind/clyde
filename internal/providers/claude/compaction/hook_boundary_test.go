@@ -28,7 +28,6 @@ func (b hookBody) Bytes() ([]byte, error) {
 	if b.err != nil {
 		return nil, b.err
 	}
-
 	return b.raw, nil
 }
 
@@ -41,38 +40,27 @@ type unreadableBody struct {
 func (b unreadableBody) Bytes() ([]byte, error) {
 	b.t.Helper()
 	b.t.Fatal("the hook read the request body for a request it must reject first")
-
 	return nil, nil
 }
 
 func liveHook(budget int) *reorientinject.Hook {
-	return reorientinject.New(
-		NewProvider(),
-		reorientinject.Settings{
-			DefaultBudget: budget,
-			Counter: tokencount.LocalCounter(
-				tokencount.FamilyClaude,
-				"claude-opus-5",
-				tokencount.Settings{},
-			),
-		},
-	)
+	return reorientinject.New(NewProvider(), reorientinject.Settings{
+		DefaultBudget: budget,
+		Counter: tokencount.LocalCounter(
+			tokencount.FamilyClaude,
+			"claude-opus-5",
+			tokencount.Settings{},
+		),
+	})
 }
 
 // instructionsHook is liveHook with an operator instructions file path.
 func instructionsHook(path string) *reorientinject.Hook {
-	return reorientinject.New(
-		NewProvider(),
-		reorientinject.Settings{
-			DefaultBudget:    500_000,
-			InstructionsFile: path,
-			Counter: tokencount.LocalCounter(
-				tokencount.FamilyClaude,
-				"claude-opus-5",
-				tokencount.Settings{},
-			),
-		},
-	)
+	return reorientinject.New(NewProvider(), reorientinject.Settings{
+		DefaultBudget:    500_000,
+		InstructionsFile: path,
+		Counter:          tokencount.LocalCounter(tokencount.FamilyClaude, "claude-opus-5", tokencount.Settings{}),
+	})
 }
 
 // TestSplitAppendsTheInstructionsFileAfterTheTranscript writes an operator
@@ -82,30 +70,19 @@ func instructionsHook(path string) *reorientinject.Hook {
 func TestSplitAppendsTheInstructionsFileAfterTheTranscript(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "after-compact.md")
-	if err := os.WriteFile(
-		path,
-		[]byte("# Read the ledger first\n\nThen the tickets.\n"),
-		0o600,
-	); err != nil {
+	if err := os.WriteFile(path, []byte("# Read the ledger first\n\nThen the tickets.\n"), 0o600); err != nil {
 		t.Fatalf("write instructions file: %v", err)
 	}
-
 	_, summary := splitWithHook(t, instructionsHook(path), recompactionBody(t, ""))
 	transcriptClose := strings.Index(summary, reorienttag.PreCompactionTranscriptClose)
 	instructionsOpen := strings.Index(summary, reorienttag.CompactionInstructionsOpen)
 	instructionsClose := strings.Index(summary, reorienttag.CompactionInstructionsClose)
 	summaryClose := strings.LastIndex(summary, "</summary>")
-	if transcriptClose < 0 || instructionsOpen < transcriptClose ||
-		instructionsClose < instructionsOpen ||
-		summaryClose < instructionsClose {
+	if transcriptClose < 0 || instructionsOpen < transcriptClose || instructionsClose < instructionsOpen || summaryClose < instructionsClose {
 		t.Fatalf("instructions span is missing or out of order: %s", summary)
 	}
-
 	if !strings.Contains(summary[instructionsOpen:instructionsClose], "Read the ledger first") {
-		t.Fatalf(
-			"instructions span lacks the file text: %s",
-			summary[instructionsOpen:instructionsClose],
-		)
+		t.Fatalf("instructions span lacks the file text: %s", summary[instructionsOpen:instructionsClose])
 	}
 }
 
@@ -118,9 +95,7 @@ func TestSplitRunsWithoutAMissingInstructionsFile(t *testing.T) {
 	if bytes.Contains(forwarded, []byte("tool-call-marker")) {
 		t.Fatal("the forwarded request still stores the retained tool call")
 	}
-
-	if !strings.Contains(summary, reorienttag.PreCompactionTranscriptClose) ||
-		strings.Contains(summary, reorienttag.CompactionInstructionsOpen) {
+	if !strings.Contains(summary, reorienttag.PreCompactionTranscriptClose) || strings.Contains(summary, reorienttag.CompactionInstructionsOpen) {
 		t.Fatalf("summary has no transcript or an unexpected instructions span: %s", summary)
 	}
 }
@@ -145,28 +120,16 @@ func compactionBody(t *testing.T) []byte {
 	t.Helper()
 	messages := []map[string]any{
 		{"role": "user", "content": "start the work"},
-		{
-			"role": "assistant",
-			"content": []map[string]string{
-				{
-					"type": "text",
-					"text": strings.TrimSpace(strings.Repeat("prior summary text ", 3000)),
-				},
-			},
-		},
+		{"role": "assistant", "content": []map[string]string{
+			{"type": "text", "text": strings.TrimSpace(strings.Repeat("prior summary text ", 3000))},
+		}},
 		{"role": "user", "content": "run the tests"},
-		{
-			"role": "assistant",
-			"content": []map[string]string{
-				{"type": "text", "text": "every test passes"},
-			},
-		},
-		{
-			"role": "user",
-			"content": []map[string]string{
-				{"type": "text", "text": compactionPrompt("")},
-			},
-		},
+		{"role": "assistant", "content": []map[string]string{
+			{"type": "text", "text": "every test passes"},
+		}},
+		{"role": "user", "content": []map[string]string{
+			{"type": "text", "text": compactionPrompt("")},
+		}},
 	}
 	body, err := json.Marshal(map[string]any{
 		"model":      "claude-opus-5",
@@ -177,7 +140,6 @@ func compactionBody(t *testing.T) []byte {
 	if err != nil {
 		t.Fatalf("encode compaction body: %v", err)
 	}
-
 	return body
 }
 
@@ -187,41 +149,29 @@ func compactionBody(t *testing.T) []byte {
 func TestHookSplitsARealCompactionRequest(t *testing.T) {
 	t.Parallel()
 	body := compactionBody(t)
-	match, err := liveHook(2000).MatchRequestResponse(
-		hookRequest(hookBody{
-			raw: body,
-			err: nil,
-		}),
-	)
+	match, err := liveHook(2000).MatchRequestResponse(hookRequest(hookBody{raw: body, err: nil}))
 	if err != nil {
 		t.Fatalf("MatchRequestResponse: %v", err)
 	}
-
 	if !match.Matched {
 		t.Fatal("a compaction request did not match")
 	}
-
 	if match.ContinueMatching {
 		t.Fatal("a compaction match continued to later response hooks")
 	}
-
 	if match.RequestTransformer == nil || match.Transformer == nil {
 		t.Fatal("a matched compaction needs both transformers")
 	}
-
 	truncated, changed, err := match.RequestTransformer.TransformRequest(context.Background(), body)
 	if err != nil {
 		t.Fatalf("TransformRequest: %v", err)
 	}
-
 	if !changed {
 		t.Fatal("the forwarded request is unchanged")
 	}
-
 	if len(truncated) >= len(body) {
 		t.Fatalf("truncated body is %d bytes, original is %d", len(truncated), len(body))
 	}
-
 	var forwarded struct {
 		Model     string            `json:"model"`
 		MaxTokens int               `json:"max_tokens"`
@@ -230,11 +180,9 @@ func TestHookSplitsARealCompactionRequest(t *testing.T) {
 	if err := json.Unmarshal(truncated, &forwarded); err != nil {
 		t.Fatalf("the forwarded request is not valid JSON: %v", err)
 	}
-
 	if forwarded.Model != "claude-opus-5" || forwarded.MaxTokens != 8192 {
 		t.Fatalf("the forwarded request lost a top-level field: %+v", forwarded)
 	}
-
 	if len(forwarded.Messages) == 0 {
 		t.Fatal("the forwarded request has no messages")
 	}
@@ -253,17 +201,10 @@ func TestHookIgnoresANormalTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode turn body: %v", err)
 	}
-
-	match, matchErr := liveHook(2000).MatchRequestResponse(
-		hookRequest(hookBody{
-			raw: body,
-			err: nil,
-		}),
-	)
+	match, matchErr := liveHook(2000).MatchRequestResponse(hookRequest(hookBody{raw: body, err: nil}))
 	if matchErr != nil {
 		t.Fatalf("MatchRequestResponse: %v", matchErr)
 	}
-
 	if match.Matched {
 		t.Fatal("an ordinary turn matched the compaction split")
 	}
@@ -278,7 +219,6 @@ func TestHookIgnoresAnUndecodableBody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MatchRequestResponse returned an error for a malformed body: %v", err)
 	}
-
 	if match.Matched {
 		t.Fatal("a malformed body matched the compaction split")
 	}
@@ -301,7 +241,6 @@ func TestHookIgnoresAnUndeclaredCompactionBody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MatchRequestResponse: %v", err)
 	}
-
 	if match.Matched {
 		t.Fatal("an undeclared request matched the compaction split")
 	}
@@ -317,7 +256,6 @@ func TestHookIgnoresANonMessagesPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MatchRequestResponse: %v", err)
 	}
-
 	if match.Matched {
 		t.Fatal("a count_tokens request matched the compaction split")
 	}
@@ -328,20 +266,13 @@ func TestHookIgnoresANonMessagesPath(t *testing.T) {
 func TestHookLeavesANonStreamingResponseUnchanged(t *testing.T) {
 	t.Parallel()
 	body := compactionBody(t)
-	match, err := liveHook(2000).MatchRequestResponse(
-		hookRequest(hookBody{
-			raw: body,
-			err: nil,
-		}),
-	)
+	match, err := liveHook(2000).MatchRequestResponse(hookRequest(hookBody{raw: body, err: nil}))
 	if err != nil {
 		t.Fatalf("MatchRequestResponse: %v", err)
 	}
-
 	if !match.Matched {
 		t.Fatal("a compaction request did not match")
 	}
-
 	upstream := []byte(`{"type":"error","error":{"type":"overloaded_error"}}`)
 	header := http.Header{}
 	header.Set("Content-Type", "application/json")
@@ -359,16 +290,13 @@ func TestHookLeavesANonStreamingResponseUnchanged(t *testing.T) {
 	if transformErr != nil {
 		t.Fatalf("TransformResponse: %v", transformErr)
 	}
-
 	got, readErr := io.ReadAll(out.Body)
 	if readErr != nil {
 		t.Fatalf("read transformed body: %v", readErr)
 	}
-
 	if !bytes.Equal(got, upstream) {
 		t.Fatalf("the error body changed: %q", got)
 	}
-
 	if out.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", out.StatusCode)
 	}
@@ -380,12 +308,7 @@ func TestHookLeavesANonStreamingResponseUnchanged(t *testing.T) {
 // markers appear only in message 0's tail and only inside a tool_use input.
 func recompactionBody(t *testing.T, arguments string) []byte {
 	t.Helper()
-
-	return recompactionBodyWithPrior(
-		t,
-		arguments,
-		strings.TrimSpace(strings.Repeat("prior injected line ", 6000)),
-	)
+	return recompactionBodyWithPrior(t, arguments, strings.TrimSpace(strings.Repeat("prior injected line ", 6000)))
 }
 
 // recompactionBodyWithPrior builds a recompaction request with the given text
@@ -396,39 +319,22 @@ func recompactionBodyWithPrior(t *testing.T, arguments string, priorInjection st
 	toolInput := strings.TrimSpace(strings.Repeat("patched line of source ", 1500))
 	messages := []map[string]any{
 		{"role": "user", "content": priorInjection + " prior-tail-marker"},
-		{
-			"role": "assistant",
-			"content": []map[string]any{
-				{"type": "text", "text": "editing the file"},
-				{
-					"type": "tool_use",
-					"id":   "toolu_01AA",
-					"name": "Write",
-					"input": map[string]string{
-						"path":    "main.go",
-						"content": "tool-call-marker " + toolInput,
-					},
-				},
-			},
-		},
-		{
-			"role": "user",
-			"content": []map[string]any{
-				{"type": "tool_result", "tool_use_id": "toolu_01AA", "content": "wrote main.go"},
-			},
-		},
-		{
-			"role": "assistant",
-			"content": []map[string]string{
-				{"type": "text", "text": "the edit is done"},
-			},
-		},
-		{
-			"role": "user",
-			"content": []map[string]string{
-				{"type": "text", "text": compactionPrompt(arguments)},
-			},
-		},
+		{"role": "assistant", "content": []map[string]any{
+			{"type": "text", "text": "editing the file"},
+			{"type": "tool_use", "id": "toolu_01AA", "name": "Write", "input": map[string]string{
+				"path":    "main.go",
+				"content": "tool-call-marker " + toolInput,
+			}},
+		}},
+		{"role": "user", "content": []map[string]any{
+			{"type": "tool_result", "tool_use_id": "toolu_01AA", "content": "wrote main.go"},
+		}},
+		{"role": "assistant", "content": []map[string]string{
+			{"type": "text", "text": "the edit is done"},
+		}},
+		{"role": "user", "content": []map[string]string{
+			{"type": "text", "text": compactionPrompt(arguments)},
+		}},
 	}
 	body, err := json.Marshal(map[string]any{
 		"model":      "claude-opus-5",
@@ -439,7 +345,6 @@ func recompactionBodyWithPrior(t *testing.T, arguments string, priorInjection st
 	if err != nil {
 		t.Fatalf("encode recompaction body: %v", err)
 	}
-
 	return body
 }
 
@@ -454,11 +359,8 @@ func summaryStream(t *testing.T) []byte {
 	if err != nil {
 		t.Fatalf("encode summary delta: %v", err)
 	}
-
-	return []byte(
-		"event: content_block_delta\ndata: " + string(delta) +
-			"\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
-	)
+	return []byte("event: content_block_delta\ndata: " + string(delta) +
+		"\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 }
 
 // splitOnce runs the whole hook over one compaction body and returns the
@@ -469,61 +371,40 @@ func splitOnce(t *testing.T, body []byte, budget int) (forwarded []byte, summary
 	return splitWithHook(t, liveHook(budget), body)
 }
 
-func splitWithHook(
-	t *testing.T,
-	hook *reorientinject.Hook,
-	body []byte,
-) (forwarded []byte, summary string) {
+func splitWithHook(t *testing.T, hook *reorientinject.Hook, body []byte) (forwarded []byte, summary string) {
 	t.Helper()
-	match, err := hook.MatchRequestResponse(
-		hookRequest(hookBody{
-			raw: body,
-			err: nil,
-		}),
-	)
+	match, err := hook.MatchRequestResponse(hookRequest(hookBody{raw: body, err: nil}))
 	if err != nil {
 		t.Fatalf("MatchRequestResponse: %v", err)
 	}
-
 	if !match.Matched {
 		t.Fatal("a compaction request did not match")
 	}
-
-	forwarded, changed, transformErr := match.RequestTransformer.TransformRequest(
-		context.Background(),
-		body,
-	)
+	forwarded, changed, transformErr := match.RequestTransformer.TransformRequest(context.Background(), body)
 	if transformErr != nil {
 		t.Fatalf("TransformRequest: %v", transformErr)
 	}
-
 	if !changed {
 		t.Fatal("the split forwarded the request unmodified")
 	}
-
 	header := http.Header{}
 	header.Set("Content-Type", "text/event-stream")
 	stream := summaryStream(t)
-	out, responseErr := match.Transformer.TransformResponse(
-		context.Background(),
-		mitm.ResponseHookResponse{
-			StatusCode:    http.StatusOK,
-			Status:        "200 OK",
-			Proto:         "HTTP/1.1",
-			Header:        header,
-			Body:          bytes.NewReader(stream),
-			ContentLength: int64(len(stream)),
-		},
-	)
+	out, responseErr := match.Transformer.TransformResponse(context.Background(), mitm.ResponseHookResponse{
+		StatusCode:    http.StatusOK,
+		Status:        "200 OK",
+		Proto:         "HTTP/1.1",
+		Header:        header,
+		Body:          bytes.NewReader(stream),
+		ContentLength: int64(len(stream)),
+	})
 	if responseErr != nil {
 		t.Fatalf("TransformResponse: %v", responseErr)
 	}
-
 	got, readErr := io.ReadAll(out.Body)
 	if readErr != nil {
 		t.Fatalf("read transformed body: %v", readErr)
 	}
-
 	return forwarded, string(got)
 }
 
@@ -538,7 +419,6 @@ func TestSplitRetainsToolCallsWhenOnlyABudgetIsTyped(t *testing.T) {
 	if bytes.Contains(forwarded, []byte("tool-call-marker")) {
 		t.Error("the forwarded request still stores the tool call the split retained")
 	}
-
 	if !strings.Contains(summary, "tool-call-marker") {
 		t.Fatalf("the retained content dropped the tool call input (%d bytes)", len(summary))
 	}
@@ -556,15 +436,12 @@ func TestSplitRetainsTheTailOfMessageZero(t *testing.T) {
 	if !strings.Contains(summary, "prior-tail-marker") {
 		t.Fatal("the retained content omits the tail of message 0")
 	}
-
 	if !strings.Contains(summary, "tool-call-marker") {
 		t.Fatal("the retained content omits the tool call after message 0")
 	}
-
 	if bytes.Contains(forwarded, []byte("prior-tail-marker")) {
 		t.Error("the forwarded request still stores the tail the split retained")
 	}
-
 	if !bytes.Contains(forwarded, []byte("prior injected line")) {
 		t.Error("the forwarded request dropped the head of message 0")
 	}
@@ -577,14 +454,9 @@ func TestSplitRetainsTheTailOfMessageZero(t *testing.T) {
 func TestSplitFramesRetainedSegmentsUnderTheBudget(t *testing.T) {
 	t.Parallel()
 	const budget = 10_000
-
 	bodies := map[string][]byte{
-		"ascii": recompactionBody(t, ""),
-		"non-ascii": recompactionBodyWithPrior(
-			t,
-			"",
-			strings.TrimSpace(strings.Repeat("prior é 𝄞 line ", 6000)),
-		),
+		"ascii":     recompactionBody(t, ""),
+		"non-ascii": recompactionBodyWithPrior(t, "", strings.TrimSpace(strings.Repeat("prior é 𝄞 line ", 6000))),
 	}
 	for name, body := range bodies {
 		_, summary := splitOnce(t, body, budget)
@@ -593,39 +465,22 @@ func TestSplitFramesRetainedSegmentsUnderTheBudget(t *testing.T) {
 		if len(spans) != 1 {
 			t.Fatalf("%s summary has %d framed transcripts, want 1: %s", name, len(spans), text)
 		}
-
 		kinds := map[reorienttag.SegmentKind]bool{}
-
 		for _, segment := range spans[0].Segments {
 			kinds[segment.Kind] = true
 			if !utf8.ValidString(segment.Text) {
 				t.Errorf("%s segment text is not valid UTF-8: %q", name, segment.Text)
 			}
 		}
-
-		for _, want := range []reorienttag.SegmentKind{
-			reorienttag.SegmentKindChat,
-			reorienttag.SegmentKindToolCall,
-			reorienttag.SegmentKindToolOutput,
-		} {
+		for _, want := range []reorienttag.SegmentKind{reorienttag.SegmentKindChat, reorienttag.SegmentKindToolCall, reorienttag.SegmentKindToolOutput} {
 			if !kinds[want] {
 				t.Errorf("%s framed transcript has no %s segment: %v", name, want, kinds)
 			}
 		}
-
 		if !strings.Contains(spans[0].Segments[0].Text, "prior-tail-marker") {
-			t.Errorf(
-				"%s framed transcript does not start with the tail of message 0: %q",
-				name,
-				spans[0].Segments[0].Text,
-			)
+			t.Errorf("%s framed transcript does not start with the tail of message 0: %q", name, spans[0].Segments[0].Text)
 		}
-
-		counter := tokencount.LocalCounter(
-			tokencount.FamilyClaude,
-			"claude-opus-5",
-			tokencount.Settings{},
-		)
+		counter := tokencount.LocalCounter(tokencount.FamilyClaude, "claude-opus-5", tokencount.Settings{})
 		retained := reorienttag.EncodeTranscript(spans[0].Segments)
 		if got := counter.Estimate(retained); got >= budget {
 			t.Fatalf("%s framed transcript measures %d tokens, budget %d", name, got, budget)
@@ -638,13 +493,11 @@ func TestSplitFramesRetainedSegmentsUnderTheBudget(t *testing.T) {
 func summaryStreamText(t *testing.T, stream string) string {
 	t.Helper()
 	var text strings.Builder
-
 	for line := range strings.Lines(stream) {
 		payload, found := strings.CutPrefix(strings.TrimSuffix(line, "\n"), "data: ")
 		if !found {
 			continue
 		}
-
 		var event struct {
 			Delta struct {
 				Text string `json:"text"`
@@ -653,10 +506,8 @@ func summaryStreamText(t *testing.T, stream string) string {
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
 			t.Fatalf("decode summary event %q: %v", payload, err)
 		}
-
 		text.WriteString(event.Delta.Text)
 	}
-
 	return text.String()
 }
 
@@ -668,7 +519,6 @@ func TestSplitHonorsAnExplicitContentSelector(t *testing.T) {
 	if strings.Contains(summary, "tool-call-marker") {
 		t.Error("--only chat retained a tool call")
 	}
-
 	if !strings.Contains(summary, "the edit is done") {
 		t.Error("--only chat dropped the chat text")
 	}

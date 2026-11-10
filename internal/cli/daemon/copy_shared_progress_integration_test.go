@@ -32,9 +32,7 @@ const (
 )
 
 // progressLinePattern matches one progress line that copy-shared prints.
-var progressLinePattern = regexp.MustCompile(
-	`^(\S+) round (\d+): (\d+) of (\d+) rows \(([0-9.]+)%\), (.+?), (\S+) elapsed, (.+)$`,
-)
+var progressLinePattern = regexp.MustCompile(`^(\S+) round (\d+): (\d+) of (\d+) rows \(([0-9.]+)%\), (.+?), (\S+) elapsed, (.+)$`)
 
 // progressDocuments returns three messages for each of four conversations.
 // The last message of every conversation uses the same text.
@@ -49,18 +47,11 @@ func progressDocuments() ([]semsearch.SemDoc, []semsearch.Fingerprint, int) {
 			"The cluster health check passes.",
 		}
 		for messageIndex, text := range texts {
-			doc := repairDoc(
-				conversationID,
-				text,
-				1_790_000_000+int64(conversationIndex*10+messageIndex),
-			)
+			doc := repairDoc(conversationID, text, 1_790_000_000+int64(conversationIndex*10+messageIndex))
 			doc.MessageIndex = int32(messageIndex)
 			docs = append(docs, doc)
 		}
-		manifest = append(
-			manifest,
-			semsearch.Fingerprint{ConversationID: conversationID, Value: "v1"},
-		)
+		manifest = append(manifest, semsearch.Fingerprint{ConversationID: conversationID, Value: "v1"})
 	}
 	distinctTexts := progressConversations*2 + 1
 	return docs, manifest, distinctTexts
@@ -90,17 +81,7 @@ func parseProgressLines(t *testing.T, output string) map[string][]progressLine {
 		if roundErr != nil || doneErr != nil || totalErr != nil {
 			t.Fatalf("progress line %q contains an invalid number", text)
 		}
-		phases[match[1]] = append(
-			phases[match[1]],
-			progressLine{
-				text:      text,
-				round:     round,
-				done:      done,
-				total:     total,
-				rate:      match[6],
-				remaining: match[8],
-			},
-		)
+		phases[match[1]] = append(phases[match[1]], progressLine{text: text, round: round, done: done, total: total, rate: match[6], remaining: match[8]})
 	}
 	return phases
 }
@@ -121,12 +102,7 @@ func TestCopySharedPrintsPhaseProgress(t *testing.T) {
 	ctx := context.Background()
 	source := openRepairClient(t, address, vectorsearch.LayoutSingle)
 	docs, manifest, distinctTexts := progressDocuments()
-	if _, err := source.UpsertConversationDocuments(
-		ctx,
-		progressSourceCollectionID,
-		docs,
-		manifest,
-	); err != nil {
+	if _, err := source.UpsertConversationDocuments(ctx, progressSourceCollectionID, docs, manifest); err != nil {
 		t.Fatalf("write single layout: %v", err)
 	}
 	time.Sleep(repairVisibilityWait)
@@ -187,47 +163,20 @@ func TestCopySharedPrintsPhaseProgress(t *testing.T) {
 		{phase: "verify_vectors", round: 1, total: int64(distinctTexts)},
 	}
 	if len(phases) != len(want) {
-		t.Fatalf(
-			"copy-shared printed progress for %d phases; expected %d:\n%s",
-			len(phases),
-			len(want),
-			stderr.String(),
-		)
+		t.Fatalf("copy-shared printed progress for %d phases; expected %d:\n%s", len(phases), len(want), stderr.String())
 	}
 	for _, expected := range want {
 		lines := phases[expected.phase]
 		if len(lines) < 2 {
-			t.Fatalf(
-				"phase %s printed %d progress lines; expected a start line and a final line:\n%s",
-				expected.phase,
-				len(lines),
-				stderr.String(),
-			)
+			t.Fatalf("phase %s printed %d progress lines; expected a start line and a final line:\n%s", expected.phase, len(lines), stderr.String())
 		}
 		first := lines[0]
-		if first.done != 0 || first.total != expected.total || first.round != expected.round ||
-			first.rate != wantRateUnknown ||
-			first.remaining != wantEstimateUnknown {
-			t.Fatalf(
-				"phase %s first line is %q; expected 0 of %d rows in round %d with an unknown rate and estimate",
-				expected.phase,
-				first.text,
-				expected.total,
-				expected.round,
-			)
+		if first.done != 0 || first.total != expected.total || first.round != expected.round || first.rate != wantRateUnknown || first.remaining != wantEstimateUnknown {
+			t.Fatalf("phase %s first line is %q; expected 0 of %d rows in round %d with an unknown rate and estimate", expected.phase, first.text, expected.total, expected.round)
 		}
 		last := lines[len(lines)-1]
-		if last.done != expected.total || last.total != expected.total ||
-			last.round != expected.round ||
-			last.remaining != wantFinished {
-			t.Fatalf(
-				"phase %s last line is %q; expected %d of %d rows in round %d with the finished text",
-				expected.phase,
-				last.text,
-				expected.total,
-				expected.total,
-				expected.round,
-			)
+		if last.done != expected.total || last.total != expected.total || last.round != expected.round || last.remaining != wantFinished {
+			t.Fatalf("phase %s last line is %q; expected %d of %d rows in round %d with the finished text", expected.phase, last.text, expected.total, expected.total, expected.round)
 		}
 	}
 }

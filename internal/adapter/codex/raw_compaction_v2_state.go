@@ -33,37 +33,20 @@ func NewRawResponsesCompactionV2Registry(now func() time.Time) *RawResponsesComp
 	if now == nil {
 		now = time.Now
 	}
-
-	return &RawResponsesCompactionV2Registry{
-		mu:             sync.Mutex{},
-		now:            now,
-		entries:        make(map[string]rawResponsesCompactionV2Entry),
-		nextGeneration: 0,
-	}
+	return &RawResponsesCompactionV2Registry{mu: sync.Mutex{}, now: now, entries: make(map[string]rawResponsesCompactionV2Entry), nextGeneration: 0}
 }
 
 // Arm stores transcript recovery under the digest of encrypted content.
-func (r *RawResponsesCompactionV2Registry) Arm(
-	sessionID string,
-	encryptedContent string,
-	transcript string,
-) bool {
+func (r *RawResponsesCompactionV2Registry) Arm(sessionID, encryptedContent, transcript string) bool {
 	_, ok := r.ArmWithGeneration(sessionID, encryptedContent, transcript)
 	return ok
 }
 
 // ArmWithGeneration stores recovery and returns its ownership generation.
-func (r *RawResponsesCompactionV2Registry) ArmWithGeneration(
-	sessionID string,
-	encryptedContent string,
-	transcript string,
-) (uint64, bool) {
-	if r == nil || strings.TrimSpace(sessionID) == "" ||
-		strings.TrimSpace(encryptedContent) == "" ||
-		strings.TrimSpace(transcript) == "" {
+func (r *RawResponsesCompactionV2Registry) ArmWithGeneration(sessionID, encryptedContent, transcript string) (uint64, bool) {
+	if r == nil || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(encryptedContent) == "" || strings.TrimSpace(transcript) == "" {
 		return 0, false
 	}
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := r.now()
@@ -72,34 +55,21 @@ func (r *RawResponsesCompactionV2Registry) ArmWithGeneration(
 	if _, exists := r.entries[key]; exists {
 		return 0, false
 	}
-
 	if len(r.entries) >= maxRawResponsesCompactionV2Pending {
 		if !r.evictOldest() {
 			return 0, false
 		}
 	}
-
 	r.nextGeneration++
-	r.entries[key] = rawResponsesCompactionV2Entry{
-		transcript: transcript,
-		created:    now,
-		leased:     false,
-		generation: r.nextGeneration,
-	}
-
+	r.entries[key] = rawResponsesCompactionV2Entry{transcript: transcript, created: now, leased: false, generation: r.nextGeneration}
 	return r.nextGeneration, true
 }
 
 // Disarm removes a pending recovery after its terminal client write fails.
-func (r *RawResponsesCompactionV2Registry) Disarm(
-	sessionID string,
-	encryptedContent string,
-	generation uint64,
-) {
+func (r *RawResponsesCompactionV2Registry) Disarm(sessionID, encryptedContent string, generation uint64) {
 	if r == nil || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(encryptedContent) == "" {
 		return
 	}
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.expire(r.now())
@@ -108,20 +78,14 @@ func (r *RawResponsesCompactionV2Registry) Disarm(
 	if !ok || !entry.leased || entry.generation != generation {
 		return
 	}
-
 	delete(r.entries, key)
 }
 
 // Discard removes an unleased recovery owned by the observer.
-func (r *RawResponsesCompactionV2Registry) Discard(
-	sessionID string,
-	encryptedContent string,
-	generation uint64,
-) {
+func (r *RawResponsesCompactionV2Registry) Discard(sessionID, encryptedContent string, generation uint64) {
 	if r == nil || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(encryptedContent) == "" {
 		return
 	}
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.expire(r.now())
@@ -130,19 +94,14 @@ func (r *RawResponsesCompactionV2Registry) Discard(
 	if !ok || entry.leased || entry.generation != generation {
 		return
 	}
-
 	delete(r.entries, key)
 }
 
 // Match returns an unexpired transcript recovery entry.
-func (r *RawResponsesCompactionV2Registry) Match(
-	sessionID string,
-	encryptedContent string,
-) (string, bool) {
+func (r *RawResponsesCompactionV2Registry) Match(sessionID, encryptedContent string) (string, bool) {
 	if r == nil {
 		return "", false
 	}
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.expire(r.now())
@@ -150,19 +109,14 @@ func (r *RawResponsesCompactionV2Registry) Match(
 	if !ok || entry.leased {
 		return "", false
 	}
-
 	return entry.transcript, true
 }
 
 // Reserve leases an unexpired recovery entry to one regular final-answer request.
-func (r *RawResponsesCompactionV2Registry) Reserve(
-	sessionID string,
-	encryptedContent string,
-) (string, uint64, bool) {
+func (r *RawResponsesCompactionV2Registry) Reserve(sessionID, encryptedContent string) (string, uint64, bool) {
 	if r == nil {
 		return "", 0, false
 	}
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.expire(r.now())
@@ -171,25 +125,18 @@ func (r *RawResponsesCompactionV2Registry) Reserve(
 	if !ok || entry.leased {
 		return "", 0, false
 	}
-
 	r.nextGeneration++
 	entry.leased = true
 	entry.generation = r.nextGeneration
 	r.entries[key] = entry
-
 	return entry.transcript, entry.generation, true
 }
 
 // Release makes a reserved recovery available after fail-open delivery.
-func (r *RawResponsesCompactionV2Registry) Release(
-	sessionID string,
-	encryptedContent string,
-	generation uint64,
-) {
+func (r *RawResponsesCompactionV2Registry) Release(sessionID, encryptedContent string, generation uint64) {
 	if r == nil {
 		return
 	}
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	key := rawResponsesCompactionV2Key(sessionID, encryptedContent)
@@ -197,21 +144,15 @@ func (r *RawResponsesCompactionV2Registry) Release(
 	if !ok || entry.generation != generation {
 		return
 	}
-
 	entry.leased = false
 	r.entries[key] = entry
 }
 
 // Complete removes a matched recovery entry after successful persistence.
-func (r *RawResponsesCompactionV2Registry) Complete(
-	sessionID string,
-	encryptedContent string,
-	generation uint64,
-) bool {
+func (r *RawResponsesCompactionV2Registry) Complete(sessionID, encryptedContent string, generation uint64) bool {
 	if r == nil {
 		return false
 	}
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	key := rawResponsesCompactionV2Key(sessionID, encryptedContent)
@@ -219,9 +160,7 @@ func (r *RawResponsesCompactionV2Registry) Complete(
 	if !ok || !entry.leased || entry.generation != generation {
 		return false
 	}
-
 	delete(r.entries, key)
-
 	return true
 }
 
@@ -236,23 +175,18 @@ func (r *RawResponsesCompactionV2Registry) expire(now time.Time) {
 func (r *RawResponsesCompactionV2Registry) evictOldest() bool {
 	var oldestKey string
 	var oldest time.Time
-
 	for key, entry := range r.entries {
 		if entry.leased {
 			continue
 		}
-
 		if oldestKey == "" || entry.created.Before(oldest) {
 			oldestKey, oldest = key, entry.created
 		}
 	}
-
 	if oldestKey == "" {
 		return false
 	}
-
 	delete(r.entries, oldestKey)
-
 	return true
 }
 

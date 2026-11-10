@@ -33,13 +33,10 @@ func DetectRawResponsesCompactionProtocol(header http.Header) RawResponsesCompac
 	if metadataValue == "" {
 		return RawResponsesCompactionNone
 	}
-
 	var metadata rawResponsesCompactionMetadata
-	if json.Unmarshal([]byte(metadataValue), &metadata) != nil ||
-		metadata.RequestKind != "compaction" {
+	if json.Unmarshal([]byte(metadataValue), &metadata) != nil || metadata.RequestKind != "compaction" {
 		return RawResponsesCompactionNone
 	}
-
 	switch RawResponsesCompactionProtocol(metadata.Compaction.Implementation) {
 	case RawResponsesCompactionNone:
 		return RawResponsesCompactionNone

@@ -91,34 +91,26 @@ type configWatcher struct {
 // serializes against CLI-initiated reloads. The listener comparison reuses
 // validateReloadListenerConfig, which reloads config and diffs it against the
 // running listeners.
-func newConfigWatcher(
-	log *slog.Logger,
-	baselineHash string,
-	runtime *runtimeServices,
-) *configWatcher {
+func newConfigWatcher(log *slog.Logger, baselineHash string, runtime *runtimeServices) *configWatcher {
 	w := &configWatcher{
 		path:         config.GlobalConfigPath(),
 		log:          log,
 		debounce:     configReloadDebounce,
 		baselineHash: baselineHash,
 		cancel:       nil,
-		registry: livetrack.Attach[configWatcherMeta](
-			runtime.group,
-			livetrack.MemberSpec{
-				Phase:         livetrack.PhaseWorkers,
-				QuietRelevant: false,
-				CancelNoWait:  true,
-			},
-			livetrack.Options[configWatcherMeta]{
-				Component:     "daemon",
-				Concern:       slogger.ConcernProcessDaemonConfig,
-				Log:           log,
-				PollEvery:     0,
-				CloserGrace:   0,
-				ParallelClose: false,
-				Now:           nil,
-			},
-		),
+		registry: livetrack.Attach[configWatcherMeta](runtime.group, livetrack.MemberSpec{
+			Phase:         livetrack.PhaseWorkers,
+			QuietRelevant: false,
+			CancelNoWait:  true,
+		}, livetrack.Options[configWatcherMeta]{
+			Component:     "daemon",
+			Concern:       slogger.ConcernProcessDaemonConfig,
+			Log:           log,
+			PollEvery:     0,
+			CloserGrace:   0,
+			ParallelClose: false,
+			Now:           nil,
+		}),
 		parse: config.LoadGlobalOrDefault,
 		reload: func(ctx context.Context) error {
 			_, err := ReloadDaemon(ctx)
@@ -136,7 +128,6 @@ func newConfigWatcher(
 			if current == nil || next == nil {
 				return config.RouteReload
 			}
-
 			return config.ClassifyConfigChange(*current, *next)
 		},
 		applyInProcess: func(ctx context.Context, next *config.Config) error {
@@ -148,7 +139,6 @@ func newConfigWatcher(
 	// constructor so the deadcode gate sees the constraint method as live.
 	var marker livetrack.Meta = configWatcherMeta{Path: ""}
 	marker.IsLivetrackMeta()
-
 	return w
 }
 
@@ -161,52 +151,28 @@ func (w *configWatcher) start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create config watcher: %w", err)
 	}
-
 	dir := filepath.Dir(w.path)
 	if err := fsw.Add(dir); err != nil {
 		_ = fsw.Close()
 		return fmt.Errorf("watch config dir %s: %w", dir, err)
 	}
-
 	loopCtx, cancel := context.WithCancel(ctx)
 	w.cancel = cancel
-	sess, err := w.registry.Register(
-		loopCtx,
-		"config.watch",
-		configWatcherMeta{Path: w.path},
-		&configWatcherCloser{cancel: cancel},
-	)
+	sess, err := w.registry.Register(loopCtx, "config.watch", configWatcherMeta{Path: w.path}, &configWatcherCloser{cancel: cancel})
 	if err != nil {
 		cancel()
 		_ = fsw.Close()
-
 		return fmt.Errorf("register config watcher: %w", err)
 	}
-
-	w.log.InfoContext(
-		ctx,
-		"daemon.config_watch.started",
-		"concern",
-		slogger.ConcernProcessDaemonConfig,
-		"component",
-		"daemon",
-		"path",
-		w.path,
-		"debounce",
-		w.debounce.String(),
+	w.log.InfoContext(ctx, "daemon.config_watch.started", "concern", slogger.ConcernProcessDaemonConfig, "component", "daemon",
+		"path", w.path,
+		"debounce", w.debounce.String(),
 	)
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				w.log.ErrorContext(
-					loopCtx,
-					"daemon.config_watch.panic",
-					"concern",
-					slogger.ConcernProcessDaemonConfig,
-					"component",
-					"daemon",
-					"err",
-					fmt.Sprintf("panic: %v", recovered),
+				w.log.ErrorContext(loopCtx, "daemon.config_watch.panic", "concern", slogger.ConcernProcessDaemonConfig, "component", "daemon",
+					"err", fmt.Sprintf("panic: %v", recovered),
 				)
 			}
 		}()
@@ -214,7 +180,6 @@ func (w *configWatcher) start(ctx context.Context) error {
 		defer func() { _ = fsw.Close() }()
 		w.loop(loopCtx, fsw)
 	}()
-
 	return nil
 }
 
@@ -226,7 +191,6 @@ func (w *configWatcher) cancelLoop() {
 	if w == nil || w.cancel == nil {
 		return
 	}
-
 	w.cancel()
 }
 
@@ -239,10 +203,8 @@ func (w *configWatcher) loop(ctx context.Context, fsw *fsnotify.Watcher) {
 	if !timer.Stop() {
 		<-timer.C
 	}
-
 	defer func() { _ = timer.Stop() }()
 	pending := false
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -251,7 +213,6 @@ func (w *configWatcher) loop(ctx context.Context, fsw *fsnotify.Watcher) {
 			if !ok {
 				return
 			}
-
 			if w.matches(event) {
 				pending = true
 				resetConfigReloadTimer(timer, w.debounce)
@@ -260,7 +221,6 @@ func (w *configWatcher) loop(ctx context.Context, fsw *fsnotify.Watcher) {
 			if !pending {
 				continue
 			}
-
 			pending = false
 			if w.handleChange(ctx) {
 				return
@@ -269,16 +229,8 @@ func (w *configWatcher) loop(ctx context.Context, fsw *fsnotify.Watcher) {
 			if !ok {
 				return
 			}
-
-			w.log.WarnContext(
-				ctx,
-				"daemon.config_watch.error",
-				"concern",
-				slogger.ConcernProcessDaemonConfig,
-				"component",
-				"daemon",
-				"err",
-				err,
+			w.log.WarnContext(ctx, "daemon.config_watch.error", "concern", slogger.ConcernProcessDaemonConfig, "component", "daemon",
+				"err", err,
 			)
 		}
 	}
@@ -291,9 +243,7 @@ func (w *configWatcher) matches(event fsnotify.Event) bool {
 	if filepath.Clean(event.Name) != filepath.Clean(w.path) {
 		return false
 	}
-
 	const reloadEvents = fsnotify.Write | fsnotify.Create | fsnotify.Rename | fsnotify.Remove | fsnotify.Chmod
-
 	return event.Op&reloadEvents != 0
 }
 
@@ -305,101 +255,67 @@ func (w *configWatcher) handleChange(ctx context.Context) bool {
 	if !ok {
 		return false
 	}
-
 	if hash == w.baselineHash {
 		return false
 	}
-
-	next, err := w.parseChangedConfig(ctx)
+	next, err := w.parse()
 	if err != nil {
+		w.log.WarnContext(ctx, "daemon.config_watch.parse_failed", "concern", slogger.ConcernProcessDaemonConfig, "component", "daemon",
+			"path", w.path,
+			"err", err,
+		)
 		return false
 	}
-
-	w.log.InfoContext(
-		ctx,
-		"daemon.config_watch.change_detected",
-		"concern",
-		slogger.ConcernProcessDaemonConfig,
-		"component",
-		"daemon",
-		"path",
-		w.path,
+	w.log.InfoContext(ctx, "daemon.config_watch.change_detected", "concern", slogger.ConcernProcessDaemonConfig, "component", "daemon",
+		"path", w.path,
 	)
 	// Classify the change. A restart-required change cannot be honored by the
 	// running generation, so log and keep watching rather than re-exec into a
 	// config it cannot serve. A hot-appliable change is swapped in process with
 	// no re-exec and no severed exchanges; on apply failure it falls through to
 	// the reload path below.
-	route := w.classifyChangedConfig(ctx, next)
+	route := config.RouteReload
+	if w.classify != nil {
+		route = w.classify(next)
+	}
+	w.log.InfoContext(ctx, "daemon.config_watch.classified", "concern", slogger.ConcernProcessDaemonConfig, "component", "daemon",
+		"path", w.path,
+		"route", route.String(),
+	)
 	if route == config.RouteRestartRequired {
-		w.log.WarnContext(
-			ctx,
-			"daemon.config_watch.restart_required",
-			"concern",
-			slogger.ConcernProcessDaemonConfig,
-			"component",
-			"daemon",
-			"path",
-			w.path,
+		w.log.WarnContext(ctx, "daemon.config_watch.restart_required", "concern", slogger.ConcernProcessDaemonConfig, "component", "daemon",
+			"path", w.path,
 		)
-
 		return false
 	}
-
 	if route == config.RouteHotApply && w.applyInProcess != nil {
 		if applyErr := w.applyInProcess(ctx, next); applyErr != nil {
-			w.log.WarnContext(
-				ctx,
-				"daemon.config_watch.hot_apply_failed",
-				"concern",
-				slogger.ConcernProcessDaemonConfig,
-				"component",
-				"daemon",
-				"path",
-				w.path,
-				"err",
-				applyErr,
+			w.log.WarnContext(ctx, "daemon.config_watch.hot_apply_failed", "concern", slogger.ConcernProcessDaemonConfig, "component", "daemon",
+				"path", w.path,
+				"err", applyErr,
 			)
 		} else {
 			w.baselineHash = hash
 			return false
 		}
 	}
-
 	// Wait for in-flight client exchanges to finish before triggering a reload
 	// or rebind that would sever them, bounded by the reload quiet-wait. A
 	// request longer than the bound still takes the drain.
 	if w.quietWait != nil && !w.quietWait(ctx) {
-		w.log.InfoContext(
-			ctx,
-			"daemon.config_watch.quiet_wait_timeout",
-			"concern",
-			slogger.ConcernProcessDaemonConfig,
-			"component",
-			"daemon",
-			"path",
-			w.path,
+		w.log.InfoContext(ctx, "daemon.config_watch.quiet_wait_timeout", "concern", slogger.ConcernProcessDaemonConfig, "component", "daemon",
+			"path", w.path,
 		)
 	}
-
 	// Re-hash after the wait: an edit reverted to the baseline while we waited
 	// means there is nothing to apply, so skip the reload entirely.
 	postHash, postOK := configFileHash(ctx, w.log, w.path)
 	if !postOK || postHash == w.baselineHash {
-		w.log.InfoContext(
-			ctx,
-			"daemon.config_watch.reverted_during_wait",
-			"concern",
-			slogger.ConcernProcessDaemonConfig,
-			"component",
-			"daemon",
-			"path",
-			w.path,
+		w.log.InfoContext(ctx, "daemon.config_watch.reverted_during_wait", "concern", slogger.ConcernProcessDaemonConfig, "component", "daemon",
+			"path", w.path,
 		)
-
 		return false
 	}
-
 	// Route reload vs rebind on the single classifier decision: a listener move
 	// (RouteRebind) frees and rebinds the ports fresh, while every other
 	// reload-class change re-execs inheriting the open sockets. A hot apply that
@@ -407,55 +323,7 @@ func (w *configWatcher) handleChange(ctx context.Context) bool {
 	if route == config.RouteRebind {
 		return w.trigger(ctx, "rebind", w.rebind)
 	}
-
 	return w.trigger(ctx, "reload", w.reload)
-}
-
-func (w *configWatcher) parseChangedConfig(ctx context.Context) (*config.Config, error) {
-	next, err := w.parse()
-	if err != nil {
-		w.log.WarnContext(
-			ctx,
-			"daemon.config_watch.parse_failed",
-			"concern",
-			slogger.ConcernProcessDaemonConfig,
-			"component",
-			"daemon",
-			"path",
-			w.path,
-			"err",
-			err,
-		)
-
-		return nil, err
-	}
-
-	return next, nil
-}
-
-func (w *configWatcher) classifyChangedConfig(
-	ctx context.Context,
-	next *config.Config,
-) config.Route {
-	route := config.RouteReload
-	if w.classify != nil {
-		route = w.classify(next)
-	}
-
-	w.log.InfoContext(
-		ctx,
-		"daemon.config_watch.classified",
-		"concern",
-		slogger.ConcernProcessDaemonConfig,
-		"component",
-		"daemon",
-		"path",
-		w.path,
-		"route",
-		route.String(),
-	)
-
-	return route
 }
 
 // trigger runs one reload or rebind and logs the outcome. It returns true only
@@ -466,40 +334,18 @@ func (w *configWatcher) classifyChangedConfig(
 // cancels the loop context. If the self-RPC rode that same context it would be
 // cancelled mid-flight and report a spurious rejection even though the reload
 // succeeded server-side. The client carries its own overall timeout.
-func (w *configWatcher) trigger(
-	parent context.Context,
-	kind string,
-	fn func(context.Context) error,
-) bool {
+func (w *configWatcher) trigger(parent context.Context, kind string, fn func(context.Context) error) bool {
 	ctx := context.WithoutCancel(parent)
 	if err := fn(ctx); err != nil {
-		w.log.WarnContext(
-			ctx,
-			"daemon.config_watch.reload_rejected",
-			"concern",
-			slogger.ConcernProcessDaemonConfig,
-			"component",
-			"daemon",
-			"kind",
-			kind,
-			"err",
-			err,
+		w.log.WarnContext(ctx, "daemon.config_watch.reload_rejected", "concern", slogger.ConcernProcessDaemonConfig, "component", "daemon",
+			"kind", kind,
+			"err", err,
 		)
-
 		return false
 	}
-
-	w.log.InfoContext(
-		ctx,
-		"daemon.config_watch.reload_triggered",
-		"concern",
-		slogger.ConcernProcessDaemonConfig,
-		"component",
-		"daemon",
-		"kind",
-		kind,
+	w.log.InfoContext(ctx, "daemon.config_watch.reload_triggered", "concern", slogger.ConcernProcessDaemonConfig, "component", "daemon",
+		"kind", kind,
 	)
-
 	return true
 }
 
@@ -512,7 +358,6 @@ func resetConfigReloadTimer(timer *time.Timer, duration time.Duration) {
 		default:
 		}
 	}
-
 	timer.Reset(duration)
 }
 
@@ -526,24 +371,12 @@ func configFileHash(ctx context.Context, log *slog.Logger, path string) (string,
 		if errors.Is(err, os.ErrNotExist) {
 			return configAbsentHash, true
 		}
-
-		log.WarnContext(
-			ctx,
-			"daemon.config_watch.hash_failed",
-			"concern",
-			slogger.ConcernProcessDaemonConfig,
-			"component",
-			"daemon",
-			"path",
-			path,
-			"err",
-			err,
+		log.WarnContext(ctx, "daemon.config_watch.hash_failed", "concern", slogger.ConcernProcessDaemonConfig, "component", "daemon",
+			"path", path,
+			"err", err,
 		)
-
 		return "", false
 	}
-
 	sum := sha256.Sum256(data)
-
 	return hex.EncodeToString(sum[:]), true
 }
