@@ -299,28 +299,15 @@ func (s *Server) tryDispatchNativeCodexResponses(
 		return false, preErr
 	}
 
-	resolvedRaw := raw
-	resolvedBody := decodedBody
-	if model != resolvedReq.Model {
-		rewrittenRaw, rawErr := decodedRaw.MarshalWithModel(resolvedReq.Model)
-		if rawErr != nil {
-			return false, adapterErrInvalidRequest(rawErr.Error(), rawErr)
-		}
-
-		resolvedBody = rewrittenRaw.Body
-		forwardBody, encoded := encodeNativeResponsesBody(
-			resolvedBody,
-			raw.Header.Get("Content-Encoding"),
-		)
-		if !encoded {
-			return false, adapterErrInvalidRequest(
-				"failed to encode resolved Responses request",
-				nil,
-			)
-		}
-
-		resolvedRaw = rewrittenRaw
-		resolvedRaw.Body = forwardBody
+	resolvedRaw, resolvedBody, rewriteErr := rewriteNativeResponsesModel(
+		raw,
+		&decodedRaw,
+		decodedBody,
+		model,
+		&resolvedReq,
+	)
+	if rewriteErr != nil {
+		return false, rewriteErr
 	}
 
 	transformedRaw, compactionTransformer, v2Plan, v2Recovery := prepareNativeCodexResponsesCompaction(
@@ -341,6 +328,40 @@ func (s *Server) tryDispatchNativeCodexResponses(
 	)
 
 	return true, nil
+}
+
+func rewriteNativeResponsesModel(
+	raw adaptercodex.RawResponsesRequest,
+	decodedRequest *adaptercodex.RawResponsesRequest,
+	decodedBody []byte,
+	model string,
+	resolvedRequest *adapterresolver.ResolvedRequest,
+) (adaptercodex.RawResponsesRequest, []byte, error) {
+	resolvedRaw := raw
+	resolvedBody := decodedBody
+	if model != resolvedRequest.Model {
+		rewrittenRaw, rawErr := decodedRequest.MarshalWithModel(resolvedRequest.Model)
+		if rawErr != nil {
+			return resolvedRaw, resolvedBody, adapterErrInvalidRequest(rawErr.Error(), rawErr)
+		}
+
+		resolvedBody = rewrittenRaw.Body
+		forwardBody, encoded := encodeNativeResponsesBody(
+			resolvedBody,
+			raw.Header.Get("Content-Encoding"),
+		)
+		if !encoded {
+			return resolvedRaw, resolvedBody, adapterErrInvalidRequest(
+				"failed to encode resolved Responses request",
+				nil,
+			)
+		}
+
+		resolvedRaw = rewrittenRaw
+		resolvedRaw.Body = forwardBody
+	}
+
+	return resolvedRaw, resolvedBody, nil
 }
 
 func nativeResponsesResolverError(resolverErr error) *adapterError {
