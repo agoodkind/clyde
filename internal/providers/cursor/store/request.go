@@ -612,93 +612,24 @@ func ListComposerIDsCoveringTime(
 	// database with no workspace column binds neither.
 	scopeByWorkspace := columns[composerWorkspaceColumn]
 	query := selectComposerIDsCoveringTimeQuery(columns, scopeByWorkspace)
-	var rows *sql.Rows
-	if scopeByWorkspace {
-		rows, err = db.QueryContext(
-			ctx,
-			query,
-			composerLifetimeToleranceMs,
-			unixMs,
-			composerLifetimeToleranceMs,
-			unixMs,
-			workspaceID,
-			workspaceID,
-		)
-	} else {
-		rows, err = db.QueryContext(
-			ctx,
-			query,
-			composerLifetimeToleranceMs,
-			unixMs,
-			composerLifetimeToleranceMs,
-			unixMs,
-		)
-	}
-
+	rows, err := queryComposerIDsCoveringTime(ctx, db, query, scopeByWorkspace, unixMs, workspaceID)
 	if err != nil {
-		slog.WarnContext(
-			ctx,
-			"providers.cursor.store.composer_headers_query_failed",
-			"concern",
-			concern,
-			"unix_ms",
-			unixMs,
-			"err",
-			err,
-		)
-
 		return ComposerNarrowing{
 			ComposerIDs:   nil,
 			Usable:        false,
 			ExcludedChats: 0,
-		}, fmt.Errorf("query cursor composer headers covering %d: %w", unixMs, err)
+		}, err
 	}
 
 	defer func() { _ = rows.Close() }()
 
-	composerIDs := make([]string, 0)
-
-	for rows.Next() {
-		var composerID string
-		if err := rows.Scan(&composerID); err != nil {
-			slog.WarnContext(
-				ctx,
-				"providers.cursor.store.composer_header_scan_failed",
-				"concern",
-				concern,
-				"unix_ms",
-				unixMs,
-				"err",
-				err,
-			)
-
-			return ComposerNarrowing{
-				ComposerIDs:   nil,
-				Usable:        false,
-				ExcludedChats: 0,
-			}, fmt.Errorf("scan cursor composer header covering %d: %w", unixMs, err)
-		}
-
-		composerIDs = append(composerIDs, composerID)
-	}
-
-	if err := rows.Err(); err != nil {
-		slog.WarnContext(
-			ctx,
-			"providers.cursor.store.composer_headers_iterate_failed",
-			"concern",
-			concern,
-			"unix_ms",
-			unixMs,
-			"err",
-			err,
-		)
-
+	composerIDs, err := scanComposerIDsCoveringTime(ctx, rows, unixMs)
+	if err != nil {
 		return ComposerNarrowing{
 			ComposerIDs:   nil,
 			Usable:        false,
 			ExcludedChats: 0,
-		}, fmt.Errorf("iterate cursor composer headers covering %d: %w", unixMs, err)
+		}, err
 	}
 
 	narrowing.ComposerIDs = composerIDs
@@ -834,18 +765,9 @@ func ReadComposerHeaderCoverage(ctx context.Context, db *sql.DB) (ComposerHeader
 
 	coverage.Readable = true
 
-	storedChats, err := snapshot.countRange(ctx, keyRangeForPrefix(composerDataKeyPrefix))
+	storedChats, err := countStoredComposerChats(ctx, snapshot)
 	if err != nil {
-		slog.WarnContext(
-			ctx,
-			"providers.cursor.store.composer_chat_count_failed",
-			"concern",
-			concern,
-			"err",
-			err,
-		)
-
-		return coverage, fmt.Errorf("count cursor chats: %w", err)
+		return coverage, err
 	}
 
 	coverage.StoredChats = storedChats
@@ -884,12 +806,7 @@ func ReadComposerHeaderCoverage(ctx context.Context, db *sql.DB) (ComposerHeader
 	// The chat id starts one byte past the key prefix, and the prefix is a
 	// constant of this package rather than caller text, so its length is written
 	// into the statement instead of bound beside the range.
-	reachable := " AND h." + composerCreatedAtColumn + " IS NOT NULL AND h." + composerCreatedAtColumn + " > 0"
-	if !columns[composerCreatedAtColumn] {
-		// Without the column no row is reachable, which the NOT EXISTS renders by
-		// matching nothing.
-		reachable = " AND 0"
-	}
+	reachable := composerHeaderReachabilitySQL(columns)
 
 	bounds := keyRangeForPrefix(composerDataKeyPrefix)
 	query := "SELECT count(*) FROM " + string(KVTableCursorDiskKV) +
@@ -914,30 +831,8 @@ func ReadComposerHeaderCoverage(ctx context.Context, db *sql.DB) (ComposerHeader
 		return coverage, fmt.Errorf("count cursor chats the header table omits: no row")
 	}
 
-	if err := rows.Scan(&coverage.UnlistedChats); err != nil {
-		slog.WarnContext(
-			ctx,
-			"providers.cursor.store.composer_header_coverage_scan_failed",
-			"concern",
-			concern,
-			"err",
-			err,
-		)
-
-		return coverage, fmt.Errorf("scan cursor chats the header table omits: %w", err)
-	}
-
-	if err := rows.Err(); err != nil {
-		slog.WarnContext(
-			ctx,
-			"providers.cursor.store.composer_header_coverage_iterate_failed",
-			"concern",
-			concern,
-			"err",
-			err,
-		)
-
-		return coverage, fmt.Errorf("iterate cursor chats the header table omits: %w", err)
+	if err := scanComposerHeaderCoverage(ctx, rows, &coverage); err != nil {
+		return coverage, err
 	}
 
 	return coverage, nil
@@ -1077,4 +972,162 @@ func findBubbleRequestIDInRange(
 	}
 
 	return search, nil
+}
+
+func queryComposerIDsCoveringTime(
+	ctx context.Context,
+	database *sql.DB,
+	query string,
+	scopeByWorkspace bool,
+	unixMs int64,
+	workspaceID string,
+) (*sql.Rows, error) {
+	var rows *sql.Rows
+	var err error
+	if scopeByWorkspace {
+		rows, err = database.QueryContext(
+			ctx,
+			query,
+			composerLifetimeToleranceMs,
+			unixMs,
+			composerLifetimeToleranceMs,
+			unixMs,
+			workspaceID,
+			workspaceID,
+		)
+	} else {
+		rows, err = database.QueryContext(
+			ctx,
+			query,
+			composerLifetimeToleranceMs,
+			unixMs,
+			composerLifetimeToleranceMs,
+			unixMs,
+		)
+	}
+
+	if err != nil {
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.store.composer_headers_query_failed",
+			"concern",
+			concern,
+			"unix_ms",
+			unixMs,
+			"err",
+			err,
+		)
+
+		return nil, fmt.Errorf("query cursor composer headers covering %d: %w", unixMs, err)
+	}
+
+	return rows, nil
+}
+
+func scanComposerIDsCoveringTime(
+	ctx context.Context,
+	rows *sql.Rows,
+	unixMs int64,
+) ([]string, error) {
+	composerIDs := make([]string, 0)
+
+	for rows.Next() {
+		var composerID string
+		if err := rows.Scan(&composerID); err != nil {
+			slog.WarnContext(
+				ctx,
+				"providers.cursor.store.composer_header_scan_failed",
+				"concern",
+				concern,
+				"unix_ms",
+				unixMs,
+				"err",
+				err,
+			)
+
+			return nil, fmt.Errorf("scan cursor composer header covering %d: %w", unixMs, err)
+		}
+
+		composerIDs = append(composerIDs, composerID)
+	}
+
+	if err := rows.Err(); err != nil {
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.store.composer_headers_iterate_failed",
+			"concern",
+			concern,
+			"unix_ms",
+			unixMs,
+			"err",
+			err,
+		)
+
+		return nil, fmt.Errorf("iterate cursor composer headers covering %d: %w", unixMs, err)
+	}
+
+	return composerIDs, nil
+}
+
+func countStoredComposerChats(ctx context.Context, snapshot readSnapshot) (int, error) {
+	storedChats, err := snapshot.countRange(ctx, keyRangeForPrefix(composerDataKeyPrefix))
+	if err != nil {
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.store.composer_chat_count_failed",
+			"concern",
+			concern,
+			"err",
+			err,
+		)
+
+		return 0, fmt.Errorf("count cursor chats: %w", err)
+	}
+
+	return storedChats, nil
+}
+
+func scanComposerHeaderCoverage(
+	ctx context.Context,
+	rows *sql.Rows,
+	coverage *ComposerHeaderCoverage,
+) error {
+	if err := rows.Scan(&coverage.UnlistedChats); err != nil {
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.store.composer_header_coverage_scan_failed",
+			"concern",
+			concern,
+			"err",
+			err,
+		)
+
+		return fmt.Errorf("scan cursor chats the header table omits: %w", err)
+	}
+
+	if err := rows.Err(); err != nil {
+		slog.WarnContext(
+			ctx,
+			"providers.cursor.store.composer_header_coverage_iterate_failed",
+			"concern",
+			concern,
+			"err",
+			err,
+		)
+
+		return fmt.Errorf("iterate cursor chats the header table omits: %w", err)
+	}
+
+	return nil
+}
+
+func composerHeaderReachabilitySQL(columns map[string]bool) string {
+	reachable := " AND h." + composerCreatedAtColumn + " IS NOT NULL AND h." + composerCreatedAtColumn + " > 0"
+	if !columns[composerCreatedAtColumn] {
+		// Without the column no row is reachable, which the NOT EXISTS renders by
+		// matching nothing.
+		reachable = " AND 0"
+	}
+
+	return reachable
 }
