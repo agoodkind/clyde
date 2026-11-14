@@ -1099,7 +1099,7 @@ func (p *Proxy) handleProviderInterceptedRequest(
 
 	bodyAccessor := newCachedRequestResponseHookBody(req)
 	transformer, reqTransformer, err := p.matchRequestResponseHook(
-		newRequestResponseHookRequest(provider.ID().String(), host, req, bodyAccessor),
+		newRequestResponseHookRequest(provider.ID().String(), host, req, bodyAccessor, false),
 	)
 	if err != nil {
 		// A hook is an optional enhancement, so a match failure must not abort the

@@ -389,6 +389,11 @@ func newControlServer(
 		searchSource = &rawTextFallbackSearchSource{primary: searchSource, index: index}
 	}
 
+	var declareCompaction func(string) bool
+	if cfg.MITM.ReorientSummaryInjection && runtime.declarations != nil {
+		declareCompaction = runtime.declarations.Declare
+	}
+
 	return &controlServer{
 		UnimplementedClydeServiceServer: clydev1.UnimplementedClydeServiceServer{},
 		stats:                           stats,
@@ -434,6 +439,7 @@ func newControlServer(
 		exportTokens:       exportTokens,
 		providerStatsNow:   nil,
 		providerStatsTicks: nil,
+		declareCompaction:  declareCompaction,
 	}
 }
 

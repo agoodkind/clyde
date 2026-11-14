@@ -82,6 +82,7 @@ func TestHookRequestCarriesDeclaredPurpose(t *testing.T) {
 		"example.test",
 		req,
 		newStaticRequestResponseHookBody(nil),
+		false,
 	)
 	if hookRequest.Purpose != RequestPurposeCompaction {
 		t.Fatalf("Purpose = %q, want %q", hookRequest.Purpose, RequestPurposeCompaction)
@@ -101,6 +102,7 @@ func TestHookRequestPurposeUnspecifiedWithoutHeader(t *testing.T) {
 		"example.test",
 		req,
 		newStaticRequestResponseHookBody(nil),
+		false,
 	)
 	if hookRequest.Purpose != RequestPurposeUnspecified {
 		t.Fatalf("Purpose = %q, want unspecified", hookRequest.Purpose)
@@ -122,6 +124,7 @@ func TestHookRequestPurposeUnspecifiedForProviderWithoutClassifier(t *testing.T)
 		"example.test",
 		req,
 		newStaticRequestResponseHookBody(nil),
+		false,
 	)
 	if hookRequest.Purpose != RequestPurposeUnspecified {
 		t.Fatalf("Purpose = %q, want unspecified", hookRequest.Purpose)
@@ -143,6 +146,7 @@ func TestHookRequestPurposeIgnoresOtherProviders(t *testing.T) {
 		"example.test",
 		req,
 		newStaticRequestResponseHookBody(nil),
+		false,
 	)
 	if hookRequest.Purpose != RequestPurposeUnspecified {
 		t.Fatalf("Purpose = %q, want unspecified for a different provider", hookRequest.Purpose)
