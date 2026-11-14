@@ -12,12 +12,8 @@ import (
 	"goodkind.io/clyde/internal/livetrack"
 )
 
-// upstreamRequest captures the inbound request fields the proxy
-// forwards to the upstream HTTPS endpoint. Splitting the inbound
-// [http.Request] from the upstream request lets the upstream call
-// run on its own context (decoupled from r.Context() to survive
-// stdlib [http.Server] lifecycle cancellations; CLYDE-324) without
-// passing two distinct contexts into the same dispatch helper.
+// upstreamRequest stores the method, path, headers, body, provider, and upstream
+// address for one plain HTTP request.
 type upstreamRequest struct {
 	method   string
 	path     string
@@ -27,16 +23,9 @@ type upstreamRequest struct {
 	upstream string
 }
 
-// dispatchUpstream constructs and executes the upstream request on
-// upstreamCtx and returns the response. On failure it writes the
-// error response to w and returns false. The upstreamCtx is supplied
-// by [Proxy.registerPlainHTTP] and is NOT [http.Request.Context]: it
-// shares request-scoped values via [context.WithoutCancel] but breaks
-// the cancel chain, so stdlib [http.Server] lifecycle transitions and
-// HTTP keep-alive churn do not abort the upstream stream mid-flight.
-// Force-close from the registry's [mitmHTTPCloser] cancels upstreamCtx
-// directly. Genuine client disconnect surfaces via streamWithFlush's
-// failed write, which fires the deferred release in handle (CLYDE-324).
+// dispatchUpstream constructs and sends the upstream request with the context
+// that handlePlainHTTP creates. It writes an HTTP error and returns false
+// when request construction or the upstream send fails.
 func (p *Proxy) dispatchUpstream(
 	upstreamCtx context.Context,
 	writer http.ResponseWriter,
@@ -79,24 +68,12 @@ func (p *Proxy) dispatchUpstream(
 	return resp, true
 }
 
-// registerPlainHTTP records the plain-HTTP exchange in the tunnel
-// registry so reload drain sees in-flight requests. The caller owns
-// the upstream context lifecycle and supplies cancel; the registered
-// [mitmHTTPCloser] invokes cancel on force-close. Returns false (and
-// writes a 503) when the registry has already begun draining.
-//
-// The caller derives ctx via [context.WithCancel] of
-// [context.WithoutCancel] applied to [http.Request.Context] so that
-// trace and other request-scoped values flow through to the upstream
-// call but the cancel chain from r.Context() is broken. This is the
-// CLYDE-324 fix: the inbound r.Context() is cancelled by the stdlib
-// [http.Server] lifecycle on shutdown and by HTTP keep-alive churn,
-// and that cancellation would silently abort the in-flight upstream
-// HTTPS request to api.anthropic.com mid-stream. ctx is cancelled
-// only by the registry's force-close path (via [mitmHTTPCloser.Close],
-// which calls cancel) or by the deferred release at the end of the
-// handler. Genuine client disconnect surfaces via streamWithFlush's
-// failed write, which fires the deferred release naturally.
+// registerPlainHTTP registers the exchange and its cancellation callback with
+// the tunnel registry. Reload drains the registered exchange. Forced closure
+// calls mitmHTTPCloser.Close to cancel the upstream request. The returned
+// release function removes the exchange and cancels the upstream context.
+// A draining registry rejects registration. This function cancels the context,
+// writes HTTP 503, and returns false after that rejection.
 func (p *Proxy) registerPlainHTTP(
 	ctx context.Context,
 	cancel context.CancelFunc,
@@ -234,13 +211,12 @@ func (p *Proxy) handlePlainHTTP(
 	started time.Time,
 	cfg config.MITMConfig,
 ) {
-	// CLYDE-324: upstream context shares request-scoped values with
-	// r.Context() (trace ids, etc.) via [context.WithoutCancel] but
-	// breaks the cancel chain so stdlib [http.Server] lifecycle changes
-	// and HTTP keep-alive churn cannot abort the upstream HTTPS stream
-	// mid-flight. Force-close from the registry cancels via the closer
-	// installed in registerPlainHTTP; the deferred release also
-	// cancels at handler return.
+	// CLYDE-324: context.WithoutCancel(request.Context()) preserves correlation
+	// values and does not inherit request cancellation. HTTP server shutdown and
+	// keep-alive changes must not cancel an active upstream stream.
+	// context.WithCancel provides the callback that the tunnel registry uses
+	// during forced closure. The deferred release cancels upstreamCtx when
+	// handlePlainHTTP returns. A failed client write also ends this handler.
 	upstreamCtx, upstreamCancel := context.WithCancel(context.WithoutCancel(request.Context()))
 	plainHTTPSession, releasePlainHTTP, registered := p.registerPlainHTTP(
 		upstreamCtx,
@@ -274,8 +250,8 @@ func (p *Proxy) handlePlainHTTP(
 
 	transforms := p.matchPlainHTTPHooks(provider, request, body)
 
-	// Apply any request-body rewrite before indexing, dispatching, and capturing so
-	// all three see the forwarded (possibly trimmed) body. Fail-open leaves body as-is.
+	// Rewrite the body before request indexing, forwarding, and capture.
+	// A failed transformation preserves the original body.
 	body, _ = p.transformRequestBody(upstreamCtx, transforms.RequestTransformer, body)
 	requestBodyIndex := newCaptureBodyIndexFromSummary(summarizeBody(body))
 	resp, dispatched := p.dispatchUpstream(
@@ -386,18 +362,18 @@ func (p *Proxy) finishPlainHTTPResponse(
 		return
 	}
 
-	// Close the transformed body only when the hook produced a new response; when
-	// no transform ran applyResponseHook returns resp unchanged, so the defer
-	// above already covers it and a second close would double-close.
+	// handlePlainHTTP closes resp.Body after finishPlainHTTPResponse returns.
+	// finishPlainHTTPResponse closes streamResp.Body when the hook creates a
+	// different response.
 	if streamResp != resp {
 		defer func() { _ = streamResp.Body.Close() }()
 	}
 
 	forwardResponseHeaders(writer.Header(), streamResp.Header)
 	writer.WriteHeader(streamResp.StatusCode)
-	// Buffer the response up to the store body cap so the full body reaches
-	// the capture store while still streaming to the client. The wire-leg
-	// summary is derived from this same buffer (summarizeBody previews/caps).
+	// Stream the response to the client and retain up to the capture store body
+	// limit in captureBuffer. Capture storage and wire log summaries read that
+	// buffer after streaming finishes.
 	captureBuffer := &limitedBuffer{limit: p.captureBodyCap(fin.cfg), buf: bytes.Buffer{}}
 	counter := &countingWriter{writer: writer, bytesWritten: 0}
 	flusher, _ := writer.(http.Flusher)
@@ -423,10 +399,8 @@ func (p *Proxy) finishPlainHTTPResponse(
 	p.finalizePlainHTTPCapture(request, streamResp, fin)
 }
 
-// plainHTTPCaptureFinalize bundles the post-stream state the plain-HTTP forward
-// path threads into [Proxy.finalizePlainHTTPCapture]. Splitting the
-// finalization out of [Proxy.handle] keeps that function under the funlen
-// ceiling while preserving the capture / drift / baseline-refresh ordering.
+// plainHTTPCaptureFinalize stores the request metadata and response results
+// that finalizePlainHTTPCapture records after streaming finishes.
 type plainHTTPCaptureFinalize struct {
 	cfg              config.MITMConfig
 	provider         string
@@ -438,10 +412,9 @@ type plainHTTPCaptureFinalize struct {
 	duration         time.Duration
 }
 
-// finalizePlainHTTPCapture decodes the buffered response, records the unified
-// HTTP capture leg, persists the exchange to the SQLite capture store, appends
-// the drift-capture record for native upstreams, and debounces a baseline
-// refresh.
+// finalizePlainHTTPCapture decodes the buffered response and records the HTTP
+// capture leg. It then saves the exchange in SQLite, records drift data for
+// native upstreams, and schedules the baseline refresh.
 func (p *Proxy) finalizePlainHTTPCapture(
 	request *http.Request,
 	resp *http.Response,
