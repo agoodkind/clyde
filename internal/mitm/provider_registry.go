@@ -156,6 +156,8 @@ type RequestClassifier interface {
 
 // RequestBodyClassifier optionally classifies a request using its cached body.
 // Implementations require a client declaration before matching body content.
+// Purpose contains the header classifier's result. The dispatcher preserves
+// that result when it specifies a known purpose.
 type RequestBodyClassifier interface {
 	ClassifyRequestBodyPurpose(request RequestResponseHookRequest) RequestPurpose
 }
@@ -191,9 +193,9 @@ type ProviderResponseAdapter interface {
 	) (ResponseHookResponse, error)
 }
 
-// requestPurposeFor asks the named provider's classifier to read these
-// headers. An unregistered provider and a provider without a classifier both
-// return [RequestPurposeUnspecified].
+// requestPurposeFor calls the provider's header and body classifiers.
+// The body classifier receives the header result in Purpose. A known header
+// purpose takes priority over the body classifier's result.
 func requestPurposeFor(request RequestResponseHookRequest) RequestPurpose {
 	for _, provider := range defaultRegistry.snapshot() {
 		if provider.ID().String() != request.Provider {
@@ -201,18 +203,17 @@ func requestPurposeFor(request RequestResponseHookRequest) RequestPurpose {
 		}
 
 		if classifier, ok := provider.(RequestClassifier); ok {
-			if purpose := classifier.ClassifyRequestPurpose(
-				request.Header,
-			); purpose != RequestPurposeUnspecified {
+			request.Purpose = classifier.ClassifyRequestPurpose(request.Header)
+		}
+
+		if classifier, ok := provider.(RequestBodyClassifier); ok {
+			purpose := classifier.ClassifyRequestBodyPurpose(request)
+			if request.Purpose == RequestPurposeUnspecified {
 				return purpose
 			}
 		}
 
-		if classifier, ok := provider.(RequestBodyClassifier); ok {
-			return classifier.ClassifyRequestBodyPurpose(request)
-		}
-
-		return RequestPurposeUnspecified
+		return request.Purpose
 	}
 
 	return RequestPurposeUnspecified

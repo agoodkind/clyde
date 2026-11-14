@@ -310,6 +310,12 @@ func TestHeaderlessClaudeCompactionRequiresDeclaration(t *testing.T) {
 		{"", "", body},
 		{declaredSession, "main", body},
 		{declaredSession, "", []byte(`{`)},
+		{
+			declaredSession,
+			"compaction",
+			[]byte(`{"messages":[{"role":"user","content":"ordinary turn"}]}`),
+		},
+		{declaredSession, "compaction", []byte(`{`)},
 	} {
 		assertRequest(probe.session, probe.class, probe.body, false)
 		if !runtime.declarations.Pending(declaredID) {
@@ -320,6 +326,9 @@ func TestHeaderlessClaudeCompactionRequiresDeclaration(t *testing.T) {
 	assertRequest(declaredSession, "", body, true)
 	assertRequest(declaredSession, "", body, false)
 	assertRequest(declaredSession, "compaction", body, true)
+	declare(declaredID, true)
+	assertRequest(declaredSession, "compaction", body, true)
+	assertRequest(declaredSession, "", body, false)
 	declare(declaredID, true)
 	elapsed.Add(int64(60 * time.Second))
 	assertRequest(declaredSession, "", body, false)
