@@ -2,13 +2,16 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"goodkind.io/clyde/internal/adapter"
 	"goodkind.io/clyde/internal/adapter/anthropic"
@@ -16,12 +19,15 @@ import (
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/clyde/internal/agentgateaction"
+	"goodkind.io/clyde/internal/clock"
+	"goodkind.io/clyde/internal/compactiondeclaration"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/mitm/capture"
 	claudecompaction "goodkind.io/clyde/internal/providers/claude/compaction"
+	claudemitm "goodkind.io/clyde/internal/providers/claude/mitmcontrib"
 	codexcompaction "goodkind.io/clyde/internal/providers/codex/compaction"
 	"goodkind.io/clyde/internal/reorientinject"
 	"goodkind.io/clyde/internal/responsehook"
@@ -65,7 +71,8 @@ type runtimeServices struct {
 	// stats owns the in-process provider activity and pricing state. The hot
 	// apply path replaces its immutable pricing table after every fallible
 	// component apply succeeds.
-	stats *providerStatsRecorder
+	stats        *providerStatsRecorder
+	declarations *compactiondeclaration.Store
 	// currentConfig holds the config the running generation is serving. The
 	// in-process apply path compares against it to classify a change and
 	// advances it after a successful hot apply.
@@ -77,6 +84,16 @@ type inheritedRuntime struct {
 	packetConns map[string]net.PacketConn
 	ready       *os.File
 }
+
+type mitmSocketPlan[Socket io.Closer] struct {
+	inherited   func(string) (Socket, bool)
+	address     func(Socket) string
+	listen      func(context.Context, string) (Socket, error)
+	label       string
+	failedEvent string
+}
+
+var errMITMListenerRestartRequired = errors.New("full daemon restart required")
 
 func startRuntime(
 	ctx context.Context,
@@ -94,28 +111,9 @@ func startRuntime(
 		return nil, err
 	}
 
-	runtime := &runtimeServices{
-		listener:              listener,
-		adapter:               nil,
-		adapterListener:       nil,
-		adapterCursorListener: nil,
-		mitmProxies:           map[string]*mitm.Proxy{},
-		mitmListeners:         map[string][]net.Listener{},
-		mitmPacketConns:       map[string][]net.PacketConn{},
-		captureStore:          nil,
-		semantic:              nil,
-		semanticSync:          nil,
-		semanticBackends:      nil,
-		pprofListener:         nil,
-		errors:                make(chan error, 3),
-		reloadMu:              sync.Mutex{},
-		reloadDrain:           nil,
-		configWatcher:         nil,
-		group:                 newLifecycleGroup(log),
-		stats:                 stats,
-		currentConfig:         atomic.Pointer[config.Config]{},
-	}
+	runtime := newRuntimeServices(listener, log, stats)
 	runtime.currentConfig.Store(cfg)
+	runtime.declarations = startCompactionDeclarations(runtime.group, clock.Now)
 	if captureStoreRequired(cfg) {
 		if err := startCaptureStore(ctx, cfg, log, runtime); err != nil {
 			runtime.shutdown(context.WithoutCancel(ctx))
@@ -184,6 +182,52 @@ func startRuntime(
 	runtime.startSemanticBackends(ctx, cfg, log)
 
 	return runtime, nil
+}
+
+func newRuntimeServices(
+	listener net.Listener,
+	log *slog.Logger,
+	stats *providerStatsRecorder,
+) *runtimeServices {
+	return &runtimeServices{
+		listener:              listener,
+		adapter:               nil,
+		adapterListener:       nil,
+		adapterCursorListener: nil,
+		mitmProxies:           map[string]*mitm.Proxy{},
+		mitmListeners:         map[string][]net.Listener{},
+		mitmPacketConns:       map[string][]net.PacketConn{},
+		captureStore:          nil,
+		semantic:              nil,
+		semanticSync:          nil,
+		semanticBackends:      nil,
+		pprofListener:         nil,
+		errors:                make(chan error, 3),
+		reloadMu:              sync.Mutex{},
+		reloadDrain:           nil,
+		configWatcher:         nil,
+		group:                 newLifecycleGroup(log),
+		stats:                 stats,
+		declarations:          nil,
+		currentConfig:         atomic.Pointer[config.Config]{},
+	}
+}
+
+func startCompactionDeclarations(
+	group *livetrack.Group,
+	now func() time.Time,
+) *compactiondeclaration.Store {
+	store := compactiondeclaration.New(now)
+	group.AddHookBefore(
+		livetrack.PhaseIngress,
+		"compaction_declarations.close",
+		func(context.Context) error {
+			return store.Close()
+		},
+	)
+	mitm.RegisterProvider(claudemitm.NewProvider(store))
+
+	return store
 }
 
 func captureStoreRequired(cfg *config.Config) bool {
@@ -264,50 +308,26 @@ func bindMITMStreamListeners(
 	addrs []string,
 	inherited inheritedRuntime,
 ) ([]net.Listener, error) {
-	sockets := make([]net.Listener, 0, len(addrs))
-	for _, addr := range addrs {
-		if existing := inherited.listeners[mitmSocketKey(listenerCfg.ID, addr)]; existing != nil {
-			if got := existing.Addr().String(); got != addr {
-				closeMITMSockets(sockets, nil)
+	listenConfig := net.ListenConfig{}
 
-				return nil, fmt.Errorf(
-					"mitm listener %q inherited address %s does not match config %s; full daemon restart required",
-					listenerCfg.ID,
-					got,
-					addr,
-				)
-			}
-
-			sockets = append(sockets, existing)
-			continue
-		}
-
-		listenConfig := net.ListenConfig{}
-		bound, err := listenConfig.Listen(ctx, "tcp", addr)
-		if err != nil {
-			closeMITMSockets(sockets, nil)
-			log.WarnContext(
-				ctx,
-				"daemon.mitm.listen_failed",
-				"concern",
-				"process.daemon.lifecycle",
-				"component",
-				"daemon",
-				"listener_id",
-				listenerCfg.ID,
-				"addr",
-				addr,
-				"err",
-				err,
-			)
-
-			return nil, fmt.Errorf("mitm listen %s for listener %q: %w", addr, listenerCfg.ID, err)
-		}
-
-		sockets = append(sockets, bound)
-	}
-
-	return sockets, nil
+	return bindMITMSockets(
+		ctx,
+		log,
+		listenerCfg.ID,
+		addrs,
+		mitmSocketPlan[net.Listener]{
+			inherited: func(address string) (net.Listener, bool) {
+				socket := inherited.listeners[mitmSocketKey(listenerCfg.ID, address)]
+				return socket, socket != nil
+			},
+			address: func(socket net.Listener) string { return socket.Addr().String() },
+			listen: func(ctx context.Context, address string) (net.Listener, error) {
+				return listenConfig.Listen(ctx, "tcp", address)
+			},
+			label:       "mitm",
+			failedEvent: "daemon.mitm.listen_failed",
+		},
+	)
 }
 
 // bindMITMPacketConns binds (or adopts inherited) UDP packet connections for
@@ -320,58 +340,94 @@ func bindMITMPacketConns(
 	addrs []string,
 	inherited inheritedRuntime,
 ) ([]net.PacketConn, error) {
-	packetConns := make([]net.PacketConn, 0, len(addrs))
-	for _, addr := range addrs {
-		if existing := inherited.packetConns[mitmUDPSocketKey(
-			listenerCfg.ID,
-			addr,
-		)]; existing != nil {
-			if got := existing.LocalAddr().String(); got != addr {
-				closeMITMSockets(nil, packetConns)
+	listenConfig := net.ListenConfig{}
+
+	return bindMITMSockets(
+		ctx,
+		log,
+		listenerCfg.ID,
+		addrs,
+		mitmSocketPlan[net.PacketConn]{
+			inherited: func(address string) (net.PacketConn, bool) {
+				socket := inherited.packetConns[mitmUDPSocketKey(listenerCfg.ID, address)]
+				return socket, socket != nil
+			},
+			address: func(socket net.PacketConn) string { return socket.LocalAddr().String() },
+			listen: func(ctx context.Context, address string) (net.PacketConn, error) {
+				return listenConfig.ListenPacket(ctx, "udp", address)
+			},
+			label:       "mitm udp",
+			failedEvent: "daemon.mitm.quic_listen_failed",
+		},
+	)
+}
+
+// bindMITMSockets validates inherited addresses and closes accumulated sockets
+// when a later address fails. TCP and UDP use the same ownership rules.
+func bindMITMSockets[Socket io.Closer](
+	ctx context.Context,
+	log *slog.Logger,
+	listenerID string,
+	addresses []string,
+	plan mitmSocketPlan[Socket],
+) ([]Socket, error) {
+	sockets := make([]Socket, 0, len(addresses))
+	closeSockets := func() {
+		for _, socket := range sockets {
+			_ = socket.Close()
+		}
+	}
+
+	for _, address := range addresses {
+		if existing, ok := plan.inherited(address); ok {
+			if got := plan.address(existing); got != address {
+				closeSockets()
 
 				return nil, fmt.Errorf(
-					"mitm udp listener %q inherited address %s does not match config %s; full daemon restart required",
-					listenerCfg.ID,
+					"%s listener %q inherited address %s does not match config %s; %w",
+					plan.label,
+					listenerID,
 					got,
-					addr,
+					address,
+					errMITMListenerRestartRequired,
 				)
 			}
 
-			packetConns = append(packetConns, existing)
+			sockets = append(sockets, existing)
 			continue
 		}
 
-		listenConfig := net.ListenConfig{}
-		bound, err := listenConfig.ListenPacket(ctx, "udp", addr)
+		socket, err := plan.listen(ctx, address)
 		if err != nil {
-			closeMITMSockets(nil, packetConns)
+			closeSockets()
 			log.WarnContext(
 				ctx,
-				"daemon.mitm.quic_listen_failed",
+				plan.failedEvent,
 				"concern",
 				"process.daemon.lifecycle",
 				"component",
 				"daemon",
 				"listener_id",
-				listenerCfg.ID,
+				listenerID,
 				"addr",
-				addr,
+				address,
 				"err",
 				err,
 			)
 
 			return nil, fmt.Errorf(
-				"mitm udp listen %s for listener %q: %w",
-				addr,
-				listenerCfg.ID,
+				"%s listen %s for listener %q: %w",
+				plan.label,
+				address,
+				listenerID,
 				err,
 			)
 		}
 
-		packetConns = append(packetConns, bound)
+		sockets = append(sockets, socket)
 	}
 
-	return packetConns, nil
+	return sockets, nil
 }
 
 type mitmHookRegistration struct {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc"
@@ -53,6 +54,7 @@ type controlServer struct {
 	exportTokens       exportTokenConfig
 	providerStatsNow   func() time.Time
 	providerStatsTicks <-chan time.Time
+	declareCompaction  func(string) bool
 }
 
 // GetDaemonStatus reads only daemon-owned flags, connections, and listener handles.
@@ -301,6 +303,26 @@ func (s *controlServer) ReorientConversation(
 	)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "reorient conversation: %v", err)
+	}
+
+	if req.GetSyntheticPrecompact() && strings.TrimSpace(req.GetConversationId()) != "" &&
+		page.NextCursor == "" &&
+		s.declareCompaction != nil {
+		if !s.declareCompaction(page.CurrentConversation.ID) {
+			client, _ := peer.FromContext(ctx)
+			slog.WarnContext(
+				ctx,
+				"daemon.reorient.compaction_declaration_rejected",
+				"concern",
+				"process.daemon.lifecycle",
+				"component",
+				"daemon",
+				"peer",
+				peerString(client),
+				"conversation_id",
+				page.CurrentConversation.ID,
+			)
+		}
 	}
 
 	return protoReorientPage(page), nil

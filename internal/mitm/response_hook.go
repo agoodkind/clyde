@@ -32,9 +32,11 @@ type RequestResponseHookRequest struct {
 	Path     string
 	Header   http.Header
 	Body     RequestResponseHookBody
-	// Purpose stores what the claiming provider's [RequestClassifier]
-	// returned. A request no classifier claims stores
-	// [RequestPurposeUnspecified].
+	// PlainHTTP distinguishes direct HTTP requests from intercepted CONNECT traffic.
+	PlainHTTP bool
+	// Purpose contains the header result for [RequestBodyClassifier] and
+	// the final classification for hooks. A known header result takes
+	// priority over body classification.
 	Purpose RequestPurpose
 }
 
@@ -227,21 +229,26 @@ func newRequestResponseHookRequest(
 	host string,
 	req *http.Request,
 	body RequestResponseHookBody,
+	plainHTTP bool,
 ) RequestResponseHookRequest {
 	header := req.Header.Clone()
 
-	return RequestResponseHookRequest{
+	request := RequestResponseHookRequest{
 		Provider: provider,
 		Host:     host,
 		Method:   req.Method,
 		// Path is the request path without the query string, so a hook matching
 		// on a path suffix is not defeated by a query-parameterized request such
 		// as /v1/messages?beta=...
-		Path:    req.URL.Path,
-		Header:  header,
-		Body:    body,
-		Purpose: requestPurposeFor(provider, header),
+		Path:      req.URL.Path,
+		Header:    header,
+		Body:      body,
+		PlainHTTP: plainHTTP,
+		Purpose:   RequestPurposeUnspecified,
 	}
+	request.Purpose = requestPurposeFor(request)
+
+	return request
 }
 
 func newCachedRequestResponseHookBody(req *http.Request) *cachedRequestResponseHookBody {
