@@ -75,6 +75,7 @@ func TestConversationLookupErrorsAreConcise(t *testing.T) {
 				if operation == "export" {
 					want = exportProbeLaterUser
 				}
+
 				text, err := lookupProbeCLI(t, d, operation, conversationID, "")
 				if err != nil || !strings.Contains(text, want) {
 					t.Fatalf("CLI %s failed or omitted %q: %v\n%s", operation, want, err, text)
@@ -204,6 +205,7 @@ func assertLookupProbeMiss(t *testing.T, d *localProofDaemon, selector string) {
 		if err == nil || text != "Error: "+want+"\n" {
 			t.Errorf("CLI %s error = %v, text = %q; want %q", operation, err, text, want)
 		}
+
 		mcpPath := filepath.Join(t.TempDir(), "mcp-export.txt")
 		result := lookupProbeMCP(t, d, operation, selector, mcpPath)
 		if !result.IsError || result.text() != want {
@@ -238,6 +240,7 @@ func assertLookupProbeFailure(
 			strings.Contains(text, " not found.") {
 			t.Errorf("CLI %s did not preserve %q: %v\n%s", operation, diagnostic, err, text)
 		}
+
 		result := lookupProbeMCP(t, d, operation, selector, "")
 		if !result.IsError || !strings.Contains(result.text(), diagnostic) ||
 			strings.Contains(result.text(), " not found.") {
@@ -253,6 +256,7 @@ func assertLookupProbeLog(t *testing.T, home string, diagnostic string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if !strings.Contains(string(data), diagnostic) {
 		t.Errorf("daemon log does not contain %q:\n%s", diagnostic, data)
 	}
@@ -277,6 +281,7 @@ func lookupProbeCLI(
 			arguments = append(arguments, "--output", path)
 		}
 	}
+
 	command := exec.CommandContext(ctx, d.binaryPath, arguments...)
 	command.Env = d.environment
 	output, err := command.CombinedOutput()
@@ -300,6 +305,7 @@ func lookupProbeMCP(
 	} else {
 		path = ""
 	}
+
 	call, err := json.Marshal(lookupProbeRequest{
 		JSONRPC: "2.0",
 		ID:      exportProbeRequestID,
@@ -312,6 +318,7 @@ func lookupProbeMCP(
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	ctx, cancel := context.WithTimeout(t.Context(), localProofCommandTimeout)
 	defer cancel()
 	command := exec.CommandContext(ctx, d.binaryPath, "mcp", "serve")
@@ -322,13 +329,16 @@ func lookupProbeMCP(
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
+
 	messages := strings.Join(
 		[]string{localProofInitializeRequest, localProofInitializedMessage, string(call)},
 		"\n",
@@ -340,6 +350,7 @@ func lookupProbeMCP(
 	if failure := errors.Join(writeErr, readErr, closeErr, waitErr); failure != nil {
 		t.Fatalf("MCP %s failed: %v\n%s", operation, failure, stderr.String())
 	}
+
 	if response.Error != nil || response.Result == nil {
 		t.Fatalf(
 			"MCP %s did not return a tool result: %+v\n%s",
