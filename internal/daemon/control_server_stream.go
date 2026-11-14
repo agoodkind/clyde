@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -146,12 +147,26 @@ func (s *controlServer) StreamExportTranscript(
 	req *clydev1.ExportTranscriptRequest,
 	stream grpc.ServerStreamingServer[clydev1.ExportChunk],
 ) error {
+	if strings.TrimSpace(req.GetConversationId()) == "" {
+		return status.Error(codes.InvalidArgument, "conversation selector is required")
+	}
+
 	ctx := stream.Context()
 	client, _ := peer.FromContext(ctx)
 	record, err := s.index.Resolve(ctx, req.GetConversationId())
 	if err != nil {
-		slog.WarnContext(
+		level := slog.LevelWarn
+		code := codes.Internal
+		message := fmt.Sprintf("resolve conversation: %v", err)
+		if missing, ok := errors.AsType[*conversation.NotFoundError](err); ok {
+			level = slog.LevelDebug
+			code = codes.NotFound
+			message = missing.UserMessage()
+		}
+
+		slog.Log(
 			ctx,
+			level,
 			"daemon.stream_export.resolve_failed",
 			"concern",
 			"process.daemon.lifecycle",
@@ -165,7 +180,7 @@ func (s *controlServer) StreamExportTranscript(
 			err,
 		)
 
-		return status.Errorf(codes.NotFound, "resolve conversation: %v", err)
+		return status.Error(code, message)
 	}
 
 	options := conversation.ExportOptions{
