@@ -34,9 +34,9 @@ type RequestResponseHookRequest struct {
 	Body     RequestResponseHookBody
 	// PlainHTTP distinguishes direct HTTP requests from intercepted CONNECT traffic.
 	PlainHTTP bool
-	// Purpose stores what the claiming provider's [RequestClassifier]
-	// returned. A request no classifier claims stores
-	// [RequestPurposeUnspecified].
+	// Purpose contains the header result for [RequestBodyClassifier] and
+	// the final classification for hooks. A known header result takes
+	// priority over body classification.
 	Purpose RequestPurpose
 }
 

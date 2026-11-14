@@ -30,9 +30,10 @@ func classifyRequestPurpose(headers http.Header) mitm.RequestPurpose {
 	return mitm.RequestPurposeUnspecified
 }
 
-// ClassifyRequestBodyPurpose recognizes declared headerless HTTP compaction.
+// ClassifyRequestBodyPurpose consumes a matching compaction declaration.
 //
-// A matching session declaration and prompt authorize one request.
+// An explicit compaction consumes its declaration after session and prompt
+// checks. Headerless plain HTTP compaction requires that declaration.
 //
 // Example:
 //
@@ -40,10 +41,14 @@ func classifyRequestPurpose(headers http.Header) mitm.RequestPurpose {
 func (p routeProvider) ClassifyRequestBodyPurpose(
 	request mitm.RequestResponseHookRequest,
 ) mitm.RequestPurpose {
-	if p.declarations == nil || !request.PlainHTTP || request.Method != http.MethodPost ||
+	if p.declarations == nil || request.Method != http.MethodPost ||
 		request.Path != "/v1/messages" ||
-		len(request.Header.Values(requestClassHeader)) != 0 ||
 		request.Body == nil {
+		return mitm.RequestPurposeUnspecified
+	}
+
+	if request.Purpose != mitm.RequestPurposeCompaction &&
+		(!request.PlainHTTP || len(request.Header.Values(requestClassHeader)) != 0) {
 		return mitm.RequestPurposeUnspecified
 	}
 
