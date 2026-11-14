@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"goodkind.io/clyde/internal/compactiondeclaration"
 	"goodkind.io/clyde/internal/mitm"
 )
 
@@ -25,7 +26,20 @@ const (
 // Claude (Anthropic) upstream. It claims plain-HTTP paths under
 // `/v1/messages` and `/v1/models`, and claims Anthropic and
 // claude.ai CONNECT hosts for TLS interception.
-type routeProvider struct{}
+type routeProvider struct {
+	declarations *compactiondeclaration.Store
+}
+
+// NewProvider constructs Claude classification with compaction declarations.
+//
+// A nil store preserves header-only classification.
+//
+// Example:
+//
+//	mitm.RegisterProvider(mitmcontrib.NewProvider(declarations))
+func NewProvider(declarations *compactiondeclaration.Store) routeProvider {
+	return routeProvider{declarations: declarations}
+}
 
 // providerID is the typed provider id this package registers with
 // the MITM provider registry.
@@ -98,5 +112,5 @@ func (routeProvider) ClassifyRequestPurpose(headers http.Header) mitm.RequestPur
 }
 
 func init() {
-	mitm.RegisterProvider(routeProvider{})
+	mitm.RegisterProvider(NewProvider(nil))
 }

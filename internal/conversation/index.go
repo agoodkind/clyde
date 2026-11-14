@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -181,44 +180,27 @@ func (idx *Index) List(ctx context.Context) ([]Record, error) {
 // issued the request, and pasting a request id into a chat is how a title comes
 // to be one.
 func (idx *Index) Resolve(ctx context.Context, selector string) (Record, error) {
-	selector = strings.TrimSpace(selector)
-	if selector == "" {
-		return Record{}, errors.New("conversation selector is required")
-	}
-
-	records, err := idx.List(ctx)
-	if err != nil {
-		return Record{}, err
-	}
-
-	if looksLikeRequestID(selector) {
-		if record, ok := resolveRecordIdentity(records, selector); ok {
-			return record, nil
-		}
-
-		return idx.resolveUUIDShapedSelector(ctx, selector)
-	}
-
-	if record, ok := resolveRecordExact(records, selector); ok {
-		return record, nil
-	}
-
-	if record, ok := resolveRecordFuzzyTitle(records, selector); ok {
-		return record, nil
-	}
-
-	fresh := idx.refreshBeforeLookup(ctx)
-	records = idx.recordsSnapshot()
-	if record, ok := resolveRecord(records, selector); ok {
-		return record, nil
-	}
-
-	if !fresh {
-		return Record{}, fmt.Errorf("conversation %q not found: %s", selector, staleIndexNote)
-	}
-
-	return Record{}, fmt.Errorf("conversation %q not found", selector)
+	return idx.resolve(ctx, selector, resolutionVisible)
 }
+
+// ResolveForExport resolves a conversation for static transcript export.
+//
+// Exact IDs, artifact paths, and provider request IDs can select hidden subagent
+// conversations. Title matching follows the ordinary visibility setting.
+//
+// Example:
+//
+//	record, err := index.ResolveForExport(ctx, artifactPath)
+func (idx *Index) ResolveForExport(ctx context.Context, selector string) (Record, error) {
+	return idx.resolve(ctx, selector, resolutionExport)
+}
+
+type resolutionScope uint8
+
+const (
+	resolutionVisible resolutionScope = iota
+	resolutionExport
+)
 
 // staleIndexNote is what a lookup says when it could not bring the index up to
 // date before answering, so a miss over records that may be out of date is not
@@ -272,8 +254,12 @@ func (idx *Index) refreshBeforeLookup(ctx context.Context) bool {
 // The index's own request-id pass runs here rather than in the exact matcher, so
 // every selector surface answers a request id the same way `resolve-request`
 // does, ambiguity included.
-func (idx *Index) resolveUUIDShapedSelector(ctx context.Context, selector string) (Record, error) {
-	records := idx.recordsSnapshot()
+func (idx *Index) resolveUUIDShapedSelector(
+	ctx context.Context,
+	selector string,
+	scope resolutionScope,
+) (Record, error) {
+	records := idx.resolutionRecords(scope)
 	if record, ok := resolveRecordIdentity(records, selector); ok {
 		return record, nil
 	}
@@ -282,11 +268,11 @@ func (idx *Index) resolveUUIDShapedSelector(ctx context.Context, selector string
 	case carriers == 1:
 		return record, nil
 	case carriers > 1:
-		return Record{}, fmt.Errorf(
-			"conversation %q not found: %s",
-			selector,
-			notFoundNote(RequestNotFoundReasonAmbiguousConversation, true),
-		)
+		return Record{}, &NotFoundError{
+			Selector: selector,
+			Reason:   RequestNotFoundReasonAmbiguousConversation,
+			Fresh:    true,
+		}
 	}
 
 	match := idx.resolveRequestMatch(ctx, selector, RequestLookupOptions{AllowFullScan: false})
@@ -297,7 +283,7 @@ func (idx *Index) resolveUUIDShapedSelector(ctx context.Context, selector string
 	}
 
 	fresh := idx.refreshBeforeLookup(ctx)
-	records = idx.recordsSnapshot()
+	records = idx.resolutionRecords(scope)
 	if record, ok := resolveRecordIdentity(records, selector); ok {
 		return record, nil
 	}
@@ -306,30 +292,26 @@ func (idx *Index) resolveUUIDShapedSelector(ctx context.Context, selector string
 	case carriers == 1:
 		return record, nil
 	case carriers > 1:
-		return Record{}, fmt.Errorf(
-			"conversation %q not found: %s",
-			selector,
-			notFoundNote(RequestNotFoundReasonAmbiguousConversation, fresh),
-		)
+		return Record{}, &NotFoundError{
+			Selector: selector,
+			Reason:   RequestNotFoundReasonAmbiguousConversation,
+			Fresh:    fresh,
+		}
 	}
 
 	if !match.Found {
-		return Record{}, fmt.Errorf(
-			"conversation %q not found: %s",
-			selector,
-			notFoundNote(match.Reason, fresh),
-		)
+		return Record{}, &NotFoundError{Selector: selector, Reason: match.Reason, Fresh: fresh}
 	}
 
 	if record, ok := recordByNativeID(records, match.Provider, match.NativeConversationID); ok {
 		return record, nil
 	}
 
-	return Record{}, fmt.Errorf(
-		"conversation %q not found: %s",
-		selector,
-		notFoundNote(RequestNotFoundReasonUnindexedConversation, fresh),
-	)
+	return Record{}, &NotFoundError{
+		Selector: selector,
+		Reason:   RequestNotFoundReasonUnindexedConversation,
+		Fresh:    fresh,
+	}
 }
 
 // notFoundNote renders the reason a lookup missed, and says so was over records
@@ -534,91 +516,6 @@ func (idx *Index) requestResolvers() []RequestResolver {
 	return resolvers
 }
 
-func foundRequestResolution(
-	requestID string,
-	origin RequestOrigin,
-	record Record,
-) RequestResolution {
-	return RequestResolution{
-		RequestID: requestID,
-		Found:     true,
-		Origin:    origin,
-		Reason:    RequestNotFoundReasonUnspecified,
-		Record:    record,
-	}
-}
-
-func missingRequestResolution(requestID string, reason RequestNotFoundReason) RequestResolution {
-	return RequestResolution{
-		RequestID: requestID,
-		Found:     false,
-		Origin:    RequestOriginUnspecified,
-		Reason:    reason,
-		Record:    emptyRecord(),
-	}
-}
-
-// recordByLatestRequestID finds the conversation whose most recent turn carries
-// the request id, and reports how many conversations carry it. The comparison is
-// whole-string, so a record that merely contains the id in some other field never
-// matches.
-//
-// The count is what the caller needs, not just the first hit. Duplicating a
-// conversation copies the field: measured on a real Cursor store, 43 of 1,836
-// chats advertising a latest request id share it with another chat, so the first
-// record carrying one is not evidence that it is the only one.
-func recordByLatestRequestID(records []Record, requestID string) (Record, int) {
-	if requestID == "" {
-		return emptyRecord(), 0
-	}
-
-	first := emptyRecord()
-	carriers := 0
-
-	for _, record := range records {
-		if record.LatestRequestID != requestID {
-			continue
-		}
-
-		if carriers == 0 {
-			first = record
-		}
-
-		carriers++
-	}
-
-	return first, carriers
-}
-
-// recordByNativeID maps a provider's own conversation id back to the index
-// record for it.
-//
-// It is deliberately narrower than [resolveRecordExact], which is a
-// human-selector matcher and also compares titles and artifact paths across every
-// provider. A native id arriving here is not something a human typed: a resolver
-// stated it, and the only record that can answer for it is the one that provider
-// owns under that id. Going through the selector matcher instead lets a
-// conversation from any provider whose title happens to be that id answer, so a
-// Cursor composer id pasted into a Claude chat while debugging returns the Claude
-// conversation as the one that issued the request.
-func recordByNativeID(
-	records []Record,
-	provider providerid.Provider,
-	nativeID string,
-) (Record, bool) {
-	if nativeID == "" {
-		return emptyRecord(), false
-	}
-
-	for _, record := range records {
-		if record.Provider == provider && record.NativeID == nativeID {
-			return record, true
-		}
-	}
-
-	return emptyRecord(), false
-}
-
 // Refresh rebuilds the cache synchronously, and waits for the rebuild already in
 // flight when one is running rather than returning while it is still going.
 //
@@ -631,6 +528,54 @@ func (idx *Index) Refresh(ctx context.Context) (err error) {
 // RefreshWithReason rebuilds the cache under an explicit trigger attribution.
 func (idx *Index) RefreshWithReason(ctx context.Context, reason RefreshReason) (err error) {
 	return idx.refreshWithReason(ctx, reason)
+}
+
+func (idx *Index) resolve(
+	ctx context.Context,
+	selector string,
+	scope resolutionScope,
+) (Record, error) {
+	selector = strings.TrimSpace(selector)
+	if selector == "" {
+		return Record{}, errors.New("conversation selector is required")
+	}
+
+	if err := idx.loadOnce(); err != nil {
+		return Record{}, err
+	}
+
+	records := idx.resolutionRecords(scope)
+	if looksLikeRequestID(selector) {
+		if record, ok := resolveRecordIdentity(records, selector); ok {
+			return record, nil
+		}
+
+		return idx.resolveUUIDShapedSelector(ctx, selector, scope)
+	}
+
+	if record, ok := idx.resolveScopedRecord(records, selector); ok {
+		return record, nil
+	}
+
+	fresh := idx.refreshBeforeLookup(ctx)
+	records = idx.resolutionRecords(scope)
+	if record, ok := idx.resolveScopedRecord(records, selector); ok {
+		return record, nil
+	}
+
+	return Record{}, &NotFoundError{
+		Selector: selector,
+		Reason:   RequestNotFoundReasonUnspecified,
+		Fresh:    fresh,
+	}
+}
+
+func (idx *Index) resolveScopedRecord(records []Record, selector string) (Record, bool) {
+	if record, ok := resolveRecordIdentity(records, selector); ok {
+		return record, true
+	}
+
+	return resolveRecord(idx.recordsSnapshot(), selector)
 }
 
 func (idx *Index) refreshWithReason(ctx context.Context, reason RefreshReason) (err error) {
@@ -1019,17 +964,6 @@ func (idx *Index) refreshAsync(ctx context.Context, reasons ...RefreshReason) {
 	}()
 }
 
-// recordsByPath indexes records by artifact path and selector so the next
-// incremental scan can reuse every conversation from an unchanged artifact.
-func recordsByPath(records []Record) map[string]Record {
-	byPath := make(map[string]Record, len(records))
-	for _, record := range records {
-		byPath[recordKey(record.ArtifactPath, record.Selector)] = record
-	}
-
-	return byPath
-}
-
 // cacheFile is the on-disk index cache. It persists the successful refresh time
 // and per-file stamps next to the records so a freshly started worker waits
 // until the cache is due and then re-parses only changed transcripts.
@@ -1174,129 +1108,6 @@ func writeCache(
 	)
 
 	return nil
-}
-
-func resolveRecord(records []Record, selector string) (Record, bool) {
-	if record, ok := resolveRecordExact(records, selector); ok {
-		return record, true
-	}
-
-	return resolveRecordFuzzyTitle(records, selector)
-}
-
-// resolveRecordExact matches a selector against the identifiers a record owns
-// outright. Every comparison is whole-string, so a record that merely contains
-// the selector somewhere never matches here.
-//
-// A request id is deliberately not one of them. It does not identify one
-// conversation: duplicating a chat copies the field, and 43 of 1,836 chats
-// advertising one share it with another chat, so returning the first record
-// carrying it answers with whichever sorted first. Matching it here would also
-// answer before [Index.Resolve] reaches the request-id route, so every selector
-// surface would quietly disagree with `resolve-request` about the same id.
-// [recordByLatestRequestID] is the one place that lookup happens, and it counts.
-func resolveRecordExact(records []Record, selector string) (Record, bool) {
-	if record, ok := resolveRecordIdentity(records, selector); ok {
-		return record, true
-	}
-
-	for _, record := range records {
-		if record.Title == selector {
-			return record, true
-		}
-	}
-
-	return emptyRecord(), false
-}
-
-// resolveRecordIdentity is [resolveRecordExact] without the title, for a
-// selector that names one exact thing.
-//
-// A title is what a conversation is about rather than what it is, so it can be
-// any string at all, request ids included: pasting one into a chat is enough to
-// make it that chat's title. Matching a request-id-shaped selector against a
-// title would hand back a conversation that merely discussed the request as the
-// conversation that issued it, and would do so before the request-id route ran,
-// so every selector surface would quietly disagree with `resolve-request` about
-// the same id.
-func resolveRecordIdentity(records []Record, selector string) (Record, bool) {
-	for _, record := range records {
-		if record.ID == selector ||
-			record.NativeID == selector ||
-			record.ArtifactPath == selector {
-			return record, true
-		}
-	}
-
-	return emptyRecord(), false
-}
-
-// resolveRecordFuzzyTitle matches a selector against record titles by substring,
-// and answers only when exactly one record matches. It is a convenience for
-// human-typed titles and it can return a conversation the caller did not name,
-// so it must never run for a selector that identifies one exact thing.
-func resolveRecordFuzzyTitle(records []Record, selector string) (Record, bool) {
-	lower := strings.ToLower(selector)
-	var matched Record
-	matchCount := 0
-
-	for _, record := range records {
-		if strings.Contains(strings.ToLower(record.Title), lower) {
-			matched = record
-			matchCount++
-		}
-	}
-
-	if matchCount != 1 {
-		return emptyRecord(), false
-	}
-
-	return matched, true
-}
-
-func sortRecords(records []Record) {
-	sort.SliceStable(
-		records,
-		func(i int, j int) bool {
-			left := records[i]
-			right := records[j]
-			if !left.UpdatedAt.Equal(right.UpdatedAt) {
-				return left.UpdatedAt.After(right.UpdatedAt)
-			}
-
-			return left.ID < right.ID
-		},
-	)
-}
-
-func cloneRecords(records []Record) []Record {
-	if len(records) == 0 {
-		return nil
-	}
-
-	out := make([]Record, len(records))
-	copy(out, records)
-
-	return out
-}
-
-func cloneStampedRecords(records []Record, stamps map[string]FileStamp) []StampedRecord {
-	if len(records) == 0 {
-		return nil
-	}
-
-	out := make([]StampedRecord, 0, len(records))
-	for _, record := range records {
-		out = append(
-			out,
-			StampedRecord{
-				Record: record,
-				Stamp:  stamps[recordKey(record.ArtifactPath, record.Selector)],
-			},
-		)
-	}
-
-	return out
 }
 
 // DerivedID returns the stable conversation id for an artifact: the provider

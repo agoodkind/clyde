@@ -150,12 +150,16 @@ const (
 // RequestClassifier is an optional provider extension that returns the purpose
 // a client declared for one intercepted request. Implementations read only
 // provider-owned headers and must not block.
-//
-// A client sets a header to declare what a request is for. A person pasting
-// text into a conversation changes the request body and sets no header. A hook
-// reads the declaration through this interface instead of reading the body.
 type RequestClassifier interface {
 	ClassifyRequestPurpose(headers http.Header) RequestPurpose
+}
+
+// RequestBodyClassifier optionally classifies a request using its cached body.
+// Implementations require a client declaration before matching body content.
+// Purpose contains the header classifier's result. The dispatcher preserves
+// that result when it specifies a known purpose.
+type RequestBodyClassifier interface {
+	ClassifyRequestBodyPurpose(request RequestResponseHookRequest) RequestPurpose
 }
 
 // ResponseAction evaluates assistant text. It receives no provider wire type.
@@ -189,17 +193,27 @@ type ProviderResponseAdapter interface {
 	) (ResponseHookResponse, error)
 }
 
-// requestPurposeFor asks the named provider's classifier to read these
-// headers. An unregistered provider and a provider without a classifier both
-// return [RequestPurposeUnspecified].
-func requestPurposeFor(providerName string, headers http.Header) RequestPurpose {
+// requestPurposeFor calls the provider's header and body classifiers.
+// The body classifier receives the header result in Purpose. A known header
+// purpose takes priority over the body classifier's result.
+func requestPurposeFor(request RequestResponseHookRequest) RequestPurpose {
 	for _, provider := range defaultRegistry.snapshot() {
-		classifier, ok := provider.(RequestClassifier)
-		if !ok || provider.ID().String() != providerName {
+		if provider.ID().String() != request.Provider {
 			continue
 		}
 
-		return classifier.ClassifyRequestPurpose(headers)
+		if classifier, ok := provider.(RequestClassifier); ok {
+			request.Purpose = classifier.ClassifyRequestPurpose(request.Header)
+		}
+
+		if classifier, ok := provider.(RequestBodyClassifier); ok {
+			purpose := classifier.ClassifyRequestBodyPurpose(request)
+			if request.Purpose == RequestPurposeUnspecified {
+				return purpose
+			}
+		}
+
+		return request.Purpose
 	}
 
 	return RequestPurposeUnspecified

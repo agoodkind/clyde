@@ -446,7 +446,10 @@ func runExportTranscriptResult(ctx context.Context, p exportPayload) (Result, er
 	}
 
 	if err != nil {
-		return nil, logOperationError(ctx, "export transcript", err)
+		return nil, conversationLookupError(
+			p.ConversationID,
+			logOperationError(ctx, "export transcript", err),
+		)
 	}
 
 	spec := exportTokenSpec(ctx, p.ConversationID, p.Options.TokenModel)
@@ -638,7 +641,10 @@ func runExportTranscript(
 	}
 
 	if err != nil {
-		return logFail(ctx, surface, "export_failed", "export transcript", err)
+		return conversationLookupError(
+			p.ConversationID,
+			logFail(ctx, surface, "export_failed", "export transcript", err),
+		)
 	}
 
 	if surface == SurfaceCLI {
