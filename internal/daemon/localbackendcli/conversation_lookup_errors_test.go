@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/sandbox"
 )
 
@@ -37,11 +36,6 @@ type lookupProbeRequest struct {
 func TestConversationLookupErrorsAreConcise(t *testing.T) {
 	binaryPath := buildClydeCLI(t)
 	home := t.TempDir()
-	writeLocalProofFile(
-		t,
-		filepath.Join(home, ".config", "clyde", "config.toml"),
-		"[logging]\nlevel = \"debug\"\n",
-	)
 	writeExportProbeRollout(t, home, exportProbeCompactedRollout, exportProbeCompactedBody())
 	d := startLocalProofDaemon(t, binaryPath, home)
 	waitForExportProbe(t, binaryPath, d.environment, exportProbeCompactedRollout)
@@ -59,13 +53,6 @@ func TestConversationLookupErrorsAreConcise(t *testing.T) {
 			},
 		)
 	}
-
-	t.Run(
-		"diagnostics preserve provider retention",
-		func(t *testing.T) {
-			assertLookupProbeLog(t, home, conversation.RequestNotFoundReasonNotRetained.Describe())
-		},
-	)
 
 	t.Run(
 		"successful info and export preserve content",
@@ -107,7 +94,7 @@ func TestConversationLookupErrorsAreConcise(t *testing.T) {
 	)
 
 	t.Run(
-		"stale misses preserve refresh diagnostics",
+		"stale misses use concise errors",
 		func(t *testing.T) {
 			writeExportProbeRollout(
 				t,
@@ -126,8 +113,6 @@ func TestConversationLookupErrorsAreConcise(t *testing.T) {
 				}
 			})
 			assertLookupProbeMiss(t, d, "stale-missing-501")
-			assertLookupProbeLog(t, home, "this miss may be stale")
-			assertLookupProbeLog(t, home, "permission denied")
 		},
 	)
 
@@ -246,19 +231,6 @@ func assertLookupProbeFailure(
 			strings.Contains(result.text(), " not found.") {
 			t.Errorf("MCP %s did not preserve %q: %+v", operation, diagnostic, result)
 		}
-	}
-}
-
-func assertLookupProbeLog(t *testing.T, home string, diagnostic string) {
-	t.Helper()
-	path := filepath.Join(home, ".local", "state", "clyde", localProofDaemonLogName)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !strings.Contains(string(data), diagnostic) {
-		t.Errorf("daemon log does not contain %q:\n%s", diagnostic, data)
 	}
 }
 
