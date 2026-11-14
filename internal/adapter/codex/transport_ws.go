@@ -205,7 +205,7 @@ func websocketMessageToSyntheticSSE(message []byte) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
-func streamWebsocketAsSyntheticSSE(conn *websocket.Conn, capCfg *wsEgressCapture) io.Reader {
+func streamWebsocketAsSyntheticSSE(conn *websocket.Conn, capCfg *wsEgressCapture) *io.PipeReader {
 	pr, pw := io.Pipe()
 	rec := newWsFrameRecorder(capCfg)
 	go func() {
@@ -325,16 +325,16 @@ func writeAndParseWebsocketRequest(
 		}
 	}
 
-	synthetic := streamWebsocketAsSyntheticSSE(conn, capCfg)
 	parseOpts := SSEParseOptions{
 		DropEncryptedContent:      cfg.RoundTripEncrypted == RoundTripEncryptedDrop,
 		DeclaredTools:             payload.Tools,
 		NativePatchRepresentation: cfg.NativePatchRepresentation,
 	}
 	responseStarted := false
-	result, err := ParseSSEEventsWithOptions(
+	result, err := parseWebsocketResponse(
 		ctx,
-		synthetic,
+		conn,
+		capCfg,
 		func(event adapterrender.Event) error {
 			if codexRenderEventStartsClientResponse(event) {
 				responseStarted = true
