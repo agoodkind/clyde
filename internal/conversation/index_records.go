@@ -10,8 +10,13 @@ import (
 
 // visibleRecords returns sorted scanned records and retained records for deleted transcripts, omitting retained records with matching scanned IDs and applying the subagent visibility setting. Callers must lock idx.mu.
 func (idx *Index) visibleRecords() []Record {
+	return idx.visibleFrom(idx.allRecords())
+}
+
+// allRecords merges scanned and retained records. Callers must lock idx.mu.
+func (idx *Index) allRecords() []Record {
 	if len(idx.retained) == 0 {
-		return idx.visibleFrom(idx.records)
+		return cloneRecords(idx.records)
 	}
 
 	served := make([]Record, 0, len(idx.records)+len(idx.retained))
@@ -30,7 +35,7 @@ func (idx *Index) visibleRecords() []Record {
 
 	sortRecords(served)
 
-	return idx.visibleFrom(served)
+	return served
 }
 
 // visibleScannedRecords returns scanned records under the subagent setting. The semantic sync feeder reads these records.
@@ -102,11 +107,17 @@ func (idx *Index) RecordByID(id string) (Record, bool) {
 }
 
 func (idx *Index) recordsSnapshot() []Record {
-	idx.mu.Lock()
-	records := idx.visibleRecords()
-	idx.mu.Unlock()
+	return idx.resolutionRecords(resolutionVisible)
+}
 
-	return records
+func (idx *Index) resolutionRecords(scope resolutionScope) []Record {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	if scope == resolutionExport {
+		return idx.allRecords()
+	}
+
+	return idx.visibleRecords()
 }
 
 // recordByLatestRequestID finds the conversation with the given latest request

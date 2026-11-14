@@ -153,7 +153,7 @@ func (s *controlServer) StreamExportTranscript(
 
 	ctx := stream.Context()
 	client, _ := peer.FromContext(ctx)
-	record, err := s.index.Resolve(ctx, req.GetConversationId())
+	record, err := s.index.ResolveForExport(ctx, req.GetConversationId())
 	if err != nil {
 		level := slog.LevelWarn
 		code := codes.Internal
@@ -523,7 +523,7 @@ func ExportTokenSpec(
 	tokenModel string,
 ) (*tokencount.Spec, error) {
 	index := newLocalConversationIndex()
-	record, err := index.Resolve(ctx, conversationID)
+	record, err := index.ResolveForExport(ctx, conversationID)
 	if err != nil {
 		slog.WarnContext(
 			ctx,

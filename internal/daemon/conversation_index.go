@@ -188,7 +188,7 @@ func ExportTranscriptLocal(
 	options conversation.ExportOptions,
 ) ([]byte, error) {
 	index := newLocalConversationIndex()
-	record, err := index.Resolve(ctx, conversationID)
+	record, err := index.ResolveForExport(ctx, conversationID)
 	if err != nil {
 		slog.WarnContext(
 			ctx,

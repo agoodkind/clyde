@@ -32,9 +32,9 @@ type ConversationConfig struct {
 	// stores every conversation's origin and applies this setting when it reads.
 	//
 	// It selects whole conversations, which is a different level from
-	// [ConversationSemanticConfig.IndexedContent]. A conversation this hides is
-	// absent from every clyde surface, and the engine retains whatever a short
-	// manifest omits, so hiding one removes nothing already stored.
+	// [ConversationSemanticConfig.IndexedContent]. Explicit export can select a
+	// hidden conversation by ID, artifact path, or provider request ID. The engine
+	// retains conversations omitted from its ingestion manifest.
 	IncludeSubagentConversations bool                       `json:"includeSubagentConversations,omitempty" toml:"include_subagent_conversations,omitempty"`
 	Cursor                       CursorConversationConfig   `json:"cursor,omitzero" toml:"cursor,omitempty"`
 	Semantic                     ConversationSemanticConfig `json:"semantic,omitzero" toml:"semantic,omitempty"`
