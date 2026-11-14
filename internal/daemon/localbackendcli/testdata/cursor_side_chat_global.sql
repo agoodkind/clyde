@@ -1,0 +1,10 @@
+CREATE TABLE ItemTable(key TEXT UNIQUE, value BLOB);
+CREATE TABLE cursorDiskKV(key TEXT UNIQUE, value BLOB);
+CREATE TABLE composerHeaders(composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER, recency INTEGER, checkpointAt INTEGER, value TEXT);
+INSERT INTO composerHeaders VALUES ('50000000-0000-4000-8000-000000000002', 'probe', 1710000000000, 1710000001000, 0, 1, 0, 0, '{"name":"side chat export probe"}');
+INSERT INTO composerHeaders VALUES ('50000000-0000-4000-8000-000000000006', 'probe', 1710000000000, 1710000001000, 0, 0, 0, 0, '{"name":"50000000-0000-4000-8000-000000000003"}');
+INSERT INTO cursorDiskKV VALUES ('composerData:50000000-0000-4000-8000-000000000002', '{"composerId":"50000000-0000-4000-8000-000000000002","name":"side chat export probe","createdAt":1710000000000,"lastUpdatedAt":1710000001000,"fullConversationHeadersOnly":[{"bubbleId":"owned","type":1},{"bubbleId":"ambiguous","type":1}]}');
+INSERT INTO cursorDiskKV VALUES ('composerData:50000000-0000-4000-8000-000000000006', '{"composerId":"50000000-0000-4000-8000-000000000006","name":"50000000-0000-4000-8000-000000000003","createdAt":1710000000000,"lastUpdatedAt":1710000001000,"fullConversationHeadersOnly":[{"bubbleId":"copied","type":1}]}');
+INSERT INTO cursorDiskKV VALUES ('bubbleId:50000000-0000-4000-8000-000000000002:owned', '{"_v":3,"bubbleId":"owned","type":1,"text":"side chat export probe","requestId":"50000000-0000-4000-8000-000000000003"}');
+INSERT INTO cursorDiskKV VALUES ('bubbleId:50000000-0000-4000-8000-000000000002:ambiguous', '{"_v":3,"bubbleId":"ambiguous","type":1,"text":"side chat export probe","requestId":"50000000-0000-4000-8000-000000000004"}');
+INSERT INTO cursorDiskKV VALUES ('bubbleId:50000000-0000-4000-8000-000000000006:copied', '{"_v":3,"bubbleId":"copied","type":1,"text":"pasted request 50000000-0000-4000-8000-000000000003 and 50000000-0000-4000-8000-000000000005","requestId":"50000000-0000-4000-8000-000000000004"}');

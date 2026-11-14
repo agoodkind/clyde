@@ -117,6 +117,11 @@ differ from the count used by `--last-n`.
 
 ## Export Selection
 
+Explicit export accepts a subagent conversation ID, native Agent ID, artifact
+path, or provider Request ID even when
+`conversation.include_subagent_conversations` is false. That setting still filters
+ordinary discovery, title matching, and semantic ingestion.
+
 `clyde conversation export` includes segment `0` by default. This default keeps
 the latest compaction summary and the messages after it.
 
