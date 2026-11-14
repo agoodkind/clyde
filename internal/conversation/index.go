@@ -180,44 +180,27 @@ func (idx *Index) List(ctx context.Context) ([]Record, error) {
 // issued the request, and pasting a request id into a chat is how a title comes
 // to be one.
 func (idx *Index) Resolve(ctx context.Context, selector string) (Record, error) {
-	selector = strings.TrimSpace(selector)
-	if selector == "" {
-		return Record{}, errors.New("conversation selector is required")
-	}
-
-	records, err := idx.List(ctx)
-	if err != nil {
-		return Record{}, err
-	}
-
-	if looksLikeRequestID(selector) {
-		if record, ok := resolveRecordIdentity(records, selector); ok {
-			return record, nil
-		}
-
-		return idx.resolveUUIDShapedSelector(ctx, selector)
-	}
-
-	if record, ok := resolveRecordExact(records, selector); ok {
-		return record, nil
-	}
-
-	if record, ok := resolveRecordFuzzyTitle(records, selector); ok {
-		return record, nil
-	}
-
-	fresh := idx.refreshBeforeLookup(ctx)
-	records = idx.recordsSnapshot()
-	if record, ok := resolveRecord(records, selector); ok {
-		return record, nil
-	}
-
-	return Record{}, &NotFoundError{
-		Selector: selector,
-		Reason:   RequestNotFoundReasonUnspecified,
-		Fresh:    fresh,
-	}
+	return idx.resolve(ctx, selector, resolutionVisible)
 }
+
+// ResolveForExport resolves a conversation for static transcript export.
+//
+// Exact IDs, artifact paths, and provider request IDs can select hidden subagent
+// conversations. Title matching follows the ordinary visibility setting.
+//
+// Example:
+//
+//	record, err := index.ResolveForExport(ctx, artifactPath)
+func (idx *Index) ResolveForExport(ctx context.Context, selector string) (Record, error) {
+	return idx.resolve(ctx, selector, resolutionExport)
+}
+
+type resolutionScope uint8
+
+const (
+	resolutionVisible resolutionScope = iota
+	resolutionExport
+)
 
 // staleIndexNote is what a lookup says when it could not bring the index up to
 // date before answering, so a miss over records that may be out of date is not
@@ -271,8 +254,12 @@ func (idx *Index) refreshBeforeLookup(ctx context.Context) bool {
 // The index's own request-id pass runs here rather than in the exact matcher, so
 // every selector surface answers a request id the same way `resolve-request`
 // does, ambiguity included.
-func (idx *Index) resolveUUIDShapedSelector(ctx context.Context, selector string) (Record, error) {
-	records := idx.recordsSnapshot()
+func (idx *Index) resolveUUIDShapedSelector(
+	ctx context.Context,
+	selector string,
+	scope resolutionScope,
+) (Record, error) {
+	records := idx.resolutionRecords(scope)
 	if record, ok := resolveRecordIdentity(records, selector); ok {
 		return record, nil
 	}
@@ -296,7 +283,7 @@ func (idx *Index) resolveUUIDShapedSelector(ctx context.Context, selector string
 	}
 
 	fresh := idx.refreshBeforeLookup(ctx)
-	records = idx.recordsSnapshot()
+	records = idx.resolutionRecords(scope)
 	if record, ok := resolveRecordIdentity(records, selector); ok {
 		return record, nil
 	}
@@ -541,6 +528,54 @@ func (idx *Index) Refresh(ctx context.Context) (err error) {
 // RefreshWithReason rebuilds the cache under an explicit trigger attribution.
 func (idx *Index) RefreshWithReason(ctx context.Context, reason RefreshReason) (err error) {
 	return idx.refreshWithReason(ctx, reason)
+}
+
+func (idx *Index) resolve(
+	ctx context.Context,
+	selector string,
+	scope resolutionScope,
+) (Record, error) {
+	selector = strings.TrimSpace(selector)
+	if selector == "" {
+		return Record{}, errors.New("conversation selector is required")
+	}
+
+	if err := idx.loadOnce(); err != nil {
+		return Record{}, err
+	}
+
+	records := idx.resolutionRecords(scope)
+	if looksLikeRequestID(selector) {
+		if record, ok := resolveRecordIdentity(records, selector); ok {
+			return record, nil
+		}
+
+		return idx.resolveUUIDShapedSelector(ctx, selector, scope)
+	}
+
+	if record, ok := idx.resolveScopedRecord(records, selector); ok {
+		return record, nil
+	}
+
+	fresh := idx.refreshBeforeLookup(ctx)
+	records = idx.resolutionRecords(scope)
+	if record, ok := idx.resolveScopedRecord(records, selector); ok {
+		return record, nil
+	}
+
+	return Record{}, &NotFoundError{
+		Selector: selector,
+		Reason:   RequestNotFoundReasonUnspecified,
+		Fresh:    fresh,
+	}
+}
+
+func (idx *Index) resolveScopedRecord(records []Record, selector string) (Record, bool) {
+	if record, ok := resolveRecordIdentity(records, selector); ok {
+		return record, true
+	}
+
+	return resolveRecord(idx.recordsSnapshot(), selector)
 }
 
 func (idx *Index) refreshWithReason(ctx context.Context, reason RefreshReason) (err error) {
