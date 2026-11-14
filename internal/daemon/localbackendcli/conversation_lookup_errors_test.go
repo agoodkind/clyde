@@ -176,6 +176,7 @@ func TestConversationLookupErrorsAreConcise(t *testing.T) {
 				if failure != nil && strings.Contains(text, "decode conversation cache") {
 					break
 				}
+
 				if time.Now().After(deadline) {
 					t.Fatalf(
 						"corrupt-cache daemon did not report the decode failure: %v\n%s\n%s",
@@ -184,8 +185,10 @@ func TestConversationLookupErrorsAreConcise(t *testing.T) {
 						broken.stderr.String(),
 					)
 				}
+
 				time.Sleep(localProofPollDelay)
 			}
+
 			assertLookupProbeFailure(t, broken, conversationID, "decode conversation cache")
 		},
 	)
