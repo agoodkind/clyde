@@ -2,6 +2,7 @@ package clispec
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -10,6 +11,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"goodkind.io/clyde/internal/cli"
 	"goodkind.io/clyde/internal/clock"
@@ -174,13 +177,16 @@ func conversationInfoOp() Operation[conversationInfoInput, conversationInfoPaylo
 		runResult: func(ctx context.Context, p conversationInfoPayload) (Result, error) {
 			info, err := daemon.GetConversationInfo(ctx, p.ConversationID)
 			if err != nil {
-				return nil, conversationLookupError(p.ConversationID, logFail(
-					ctx,
-					surfaceFromContext(ctx),
-					"info_failed",
-					"get conversation info",
-					err,
-				))
+				return nil, conversationLookupError(
+					p.ConversationID,
+					logFail(
+						ctx,
+						surfaceFromContext(ctx),
+						"info_failed",
+						"get conversation info",
+						err,
+					),
+				)
 			}
 
 			text := formatConversationInfo(info)
@@ -893,6 +899,27 @@ func formatTime(value time.Time) string {
 	}
 
 	return value.UTC().Format(time.RFC3339)
+}
+
+type conversationNotFoundError string
+
+func (message conversationNotFoundError) Error() string {
+	return string(message)
+}
+
+func conversationLookupError(selector string, err error) error {
+	_, missing := errors.AsType[*conv.NotFoundError](err)
+	if missing || status.Code(err) == codes.NotFound {
+		lookup := conv.NotFoundError{
+			Selector: selector,
+			Reason:   conv.RequestNotFoundReasonUnspecified,
+			Fresh:    false,
+		}
+
+		return conversationNotFoundError(lookup.UserMessage())
+	}
+
+	return err
 }
 
 func logOperationError(ctx context.Context, operation string, err error) error {

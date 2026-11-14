@@ -9,7 +9,13 @@ type NotFoundError struct {
 	Fresh    bool
 }
 
-// Error returns the diagnostic message, including request lookup and refresh details.
+// Error returns the lookup diagnostic.
+//
+// Request lookup reasons and refresh failures extend the selector message.
+//
+// Example:
+//
+//	conversation "missing-id" not found
 func (err *NotFoundError) Error() string {
 	message := fmt.Sprintf("conversation %q not found", err.Selector)
 	if err.Reason != RequestNotFoundReasonUnspecified {
@@ -24,6 +30,12 @@ func (err *NotFoundError) Error() string {
 }
 
 // UserMessage returns the concise message for CLI and MCP callers.
+//
+// The message preserves the selector and omits lookup diagnostics.
+//
+// Example:
+//
+//	Conversation missing-id not found.
 func (err *NotFoundError) UserMessage() string {
 	return fmt.Sprintf("Conversation %s not found.", err.Selector)
 }

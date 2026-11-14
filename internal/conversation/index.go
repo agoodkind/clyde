@@ -213,7 +213,11 @@ func (idx *Index) Resolve(ctx context.Context, selector string) (Record, error) 
 		return record, nil
 	}
 
-	return Record{}, &NotFoundError{Selector: selector, Reason: RequestNotFoundReasonUnspecified, Fresh: fresh}
+	return Record{}, &NotFoundError{
+		Selector: selector,
+		Reason:   RequestNotFoundReasonUnspecified,
+		Fresh:    fresh,
+	}
 }
 
 // staleIndexNote is what a lookup says when it could not bring the index up to
@@ -278,7 +282,11 @@ func (idx *Index) resolveUUIDShapedSelector(ctx context.Context, selector string
 	case carriers == 1:
 		return record, nil
 	case carriers > 1:
-		return Record{}, &NotFoundError{Selector: selector, Reason: RequestNotFoundReasonAmbiguousConversation, Fresh: true}
+		return Record{}, &NotFoundError{
+			Selector: selector,
+			Reason:   RequestNotFoundReasonAmbiguousConversation,
+			Fresh:    true,
+		}
 	}
 
 	match := idx.resolveRequestMatch(ctx, selector, RequestLookupOptions{AllowFullScan: false})
@@ -298,7 +306,11 @@ func (idx *Index) resolveUUIDShapedSelector(ctx context.Context, selector string
 	case carriers == 1:
 		return record, nil
 	case carriers > 1:
-		return Record{}, &NotFoundError{Selector: selector, Reason: RequestNotFoundReasonAmbiguousConversation, Fresh: fresh}
+		return Record{}, &NotFoundError{
+			Selector: selector,
+			Reason:   RequestNotFoundReasonAmbiguousConversation,
+			Fresh:    fresh,
+		}
 	}
 
 	if !match.Found {
@@ -309,7 +321,11 @@ func (idx *Index) resolveUUIDShapedSelector(ctx context.Context, selector string
 		return record, nil
 	}
 
-	return Record{}, &NotFoundError{Selector: selector, Reason: RequestNotFoundReasonUnindexedConversation, Fresh: fresh}
+	return Record{}, &NotFoundError{
+		Selector: selector,
+		Reason:   RequestNotFoundReasonUnindexedConversation,
+		Fresh:    fresh,
+	}
 }
 
 // notFoundNote renders the reason a lookup missed, and says so was over records

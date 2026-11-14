@@ -158,8 +158,7 @@ func (s *controlServer) StreamExportTranscript(
 		level := slog.LevelWarn
 		code := codes.Internal
 		message := fmt.Sprintf("resolve conversation: %v", err)
-		var missing *conversation.NotFoundError
-		if errors.As(err, &missing) {
+		if missing, ok := errors.AsType[*conversation.NotFoundError](err); ok {
 			level = slog.LevelDebug
 			code = codes.NotFound
 			message = missing.UserMessage()
