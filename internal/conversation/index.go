@@ -213,11 +213,7 @@ func (idx *Index) Resolve(ctx context.Context, selector string) (Record, error) 
 		return record, nil
 	}
 
-	if !fresh {
-		return Record{}, fmt.Errorf("conversation %q not found: %s", selector, staleIndexNote)
-	}
-
-	return Record{}, fmt.Errorf("conversation %q not found", selector)
+	return Record{}, &NotFoundError{Selector: selector, Reason: RequestNotFoundReasonUnspecified, Fresh: fresh}
 }
 
 // staleIndexNote is what a lookup says when it could not bring the index up to
@@ -282,11 +278,7 @@ func (idx *Index) resolveUUIDShapedSelector(ctx context.Context, selector string
 	case carriers == 1:
 		return record, nil
 	case carriers > 1:
-		return Record{}, fmt.Errorf(
-			"conversation %q not found: %s",
-			selector,
-			notFoundNote(RequestNotFoundReasonAmbiguousConversation, true),
-		)
+		return Record{}, &NotFoundError{Selector: selector, Reason: RequestNotFoundReasonAmbiguousConversation, Fresh: true}
 	}
 
 	match := idx.resolveRequestMatch(ctx, selector, RequestLookupOptions{AllowFullScan: false})
@@ -306,30 +298,18 @@ func (idx *Index) resolveUUIDShapedSelector(ctx context.Context, selector string
 	case carriers == 1:
 		return record, nil
 	case carriers > 1:
-		return Record{}, fmt.Errorf(
-			"conversation %q not found: %s",
-			selector,
-			notFoundNote(RequestNotFoundReasonAmbiguousConversation, fresh),
-		)
+		return Record{}, &NotFoundError{Selector: selector, Reason: RequestNotFoundReasonAmbiguousConversation, Fresh: fresh}
 	}
 
 	if !match.Found {
-		return Record{}, fmt.Errorf(
-			"conversation %q not found: %s",
-			selector,
-			notFoundNote(match.Reason, fresh),
-		)
+		return Record{}, &NotFoundError{Selector: selector, Reason: match.Reason, Fresh: fresh}
 	}
 
 	if record, ok := recordByNativeID(records, match.Provider, match.NativeConversationID); ok {
 		return record, nil
 	}
 
-	return Record{}, fmt.Errorf(
-		"conversation %q not found: %s",
-		selector,
-		notFoundNote(RequestNotFoundReasonUnindexedConversation, fresh),
-	)
+	return Record{}, &NotFoundError{Selector: selector, Reason: RequestNotFoundReasonUnindexedConversation, Fresh: fresh}
 }
 
 // notFoundNote renders the reason a lookup missed, and says so was over records

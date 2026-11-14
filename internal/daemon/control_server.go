@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc"
@@ -177,11 +178,26 @@ func (s *controlServer) GetConversationInfo(
 	ctx context.Context,
 	req *clydev1.GetConversationInfoRequest,
 ) (*clydev1.GetConversationInfoResponse, error) {
+	if strings.TrimSpace(req.GetConversationId()) == "" {
+		return nil, status.Error(codes.InvalidArgument, "conversation selector is required")
+	}
+
 	client, _ := peer.FromContext(ctx)
 	record, err := s.index.Resolve(ctx, req.GetConversationId())
 	if err != nil {
-		slog.WarnContext(
+		level := slog.LevelWarn
+		code := codes.Internal
+		message := fmt.Sprintf("resolve conversation: %v", err)
+		var missing *conversation.NotFoundError
+		if errors.As(err, &missing) {
+			level = slog.LevelDebug
+			code = codes.NotFound
+			message = missing.UserMessage()
+		}
+
+		slog.Log(
 			ctx,
+			level,
 			"daemon.get_conversation_info.resolve_failed",
 			"concern",
 			"process.daemon.lifecycle",
@@ -195,7 +211,7 @@ func (s *controlServer) GetConversationInfo(
 			err,
 		)
 
-		return nil, status.Errorf(codes.NotFound, "resolve conversation: %v", err)
+		return nil, status.Error(code, message)
 	}
 
 	info, err := s.index.ConversationInfo(record)

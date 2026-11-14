@@ -174,13 +174,13 @@ func conversationInfoOp() Operation[conversationInfoInput, conversationInfoPaylo
 		runResult: func(ctx context.Context, p conversationInfoPayload) (Result, error) {
 			info, err := daemon.GetConversationInfo(ctx, p.ConversationID)
 			if err != nil {
-				return nil, logFail(
+				return nil, conversationLookupError(p.ConversationID, logFail(
 					ctx,
 					surfaceFromContext(ctx),
 					"info_failed",
 					"get conversation info",
 					err,
-				)
+				))
 			}
 
 			text := formatConversationInfo(info)
