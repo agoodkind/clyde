@@ -8,11 +8,6 @@ import (
 	"goodkind.io/clyde/internal/providerid"
 )
 
-// visibleRecords returns sorted scanned records and retained records for deleted transcripts, omitting retained records with matching scanned IDs and applying the subagent visibility setting. Callers must lock idx.mu.
-func (idx *Index) visibleRecords() []Record {
-	return idx.visibleFrom(idx.allRecords())
-}
-
 // allRecords merges scanned and retained records. Callers must lock idx.mu.
 func (idx *Index) allRecords() []Record {
 	if len(idx.retained) == 0 {
@@ -38,12 +33,13 @@ func (idx *Index) allRecords() []Record {
 	return served
 }
 
-// visibleScannedRecords returns scanned records under the subagent setting. The semantic sync feeder reads these records.
-func (idx *Index) visibleScannedRecords() []Record {
-	return idx.visibleFrom(idx.records)
+// ingestionRecords selects scanned records for semantic ingestion.
+// Callers must lock idx.mu.
+func (idx *Index) ingestionRecords() []Record {
+	return idx.selectForIngestion(idx.records)
 }
 
-func (idx *Index) visibleFrom(records []Record) []Record {
+func (idx *Index) selectForIngestion(records []Record) []Record {
 	if idx.includeSubagents {
 		return cloneRecords(records)
 	}
@@ -64,7 +60,8 @@ func (idx *Index) visibleFrom(records []Record) []Record {
 	return out
 }
 
-// ListWithStamps returns cached records and artifact stamps without a refresh.
+// ListWithStamps returns scanned records selected for semantic ingestion and
+// their artifact stamps without a refresh. Raw reads use [Index.List].
 func (idx *Index) ListWithStamps(ctx context.Context) ([]StampedRecord, error) {
 	if err := idx.loadOnce(); err != nil {
 		return nil, err
@@ -73,7 +70,7 @@ func (idx *Index) ListWithStamps(ctx context.Context) ([]StampedRecord, error) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
-	return cloneStampedRecords(idx.visibleScannedRecords(), idx.prevStamps), nil
+	return cloneStampedRecords(idx.ingestionRecords(), idx.prevStamps), nil
 }
 
 // RecordByID returns the cached record with the exact id from the in-memory
@@ -87,15 +84,10 @@ func (idx *Index) RecordByID(id string) (Record, bool) {
 
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
-	// A hidden record is skipped rather than returned as a miss, so a subagent
-	// conversation that somehow shares an id with a real one can never mask it.
+
 	for _, records := range [][]Record{idx.records, idx.retained} {
 		for _, record := range records {
 			if record.ID != id {
-				continue
-			}
-
-			if record.IsSubagent() && !idx.includeSubagents {
 				continue
 			}
 
@@ -107,17 +99,10 @@ func (idx *Index) RecordByID(id string) (Record, bool) {
 }
 
 func (idx *Index) recordsSnapshot() []Record {
-	return idx.resolutionRecords(resolutionVisible)
-}
-
-func (idx *Index) resolutionRecords(scope resolutionScope) []Record {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
-	if scope == resolutionExport {
-		return idx.allRecords()
-	}
 
-	return idx.visibleRecords()
+	return idx.allRecords()
 }
 
 // recordByLatestRequestID finds the conversation with the given latest request

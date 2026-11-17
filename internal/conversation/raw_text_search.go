@@ -28,18 +28,7 @@ func (idx *Index) SearchRawText(
 		return SearchConversationsResult{}, ErrQueryRequired
 	}
 
-	candidates, err := idx.ListPage(
-		ctx,
-		ListOptions{
-			Limit:           0,
-			Offset:          0,
-			Provider:        options.Provider,
-			WorkspaceRoot:   options.WorkspaceRoot,
-			Query:           "",
-			IncludeArchived: options.IncludeArchived,
-			All:             true,
-		},
-	)
+	candidates, err := idx.rawTextCandidates(ctx, options)
 	if err != nil {
 		return SearchConversationsResult{}, err
 	}
@@ -66,11 +55,7 @@ func (idx *Index) SearchRawText(
 	}
 	skipped := 0
 
-	for _, record := range candidates.Records {
-		if options.ConversationID != "" && record.ID != options.ConversationID {
-			continue
-		}
-
+	for _, record := range candidates {
 		if err := ctx.Err(); err != nil {
 			return SearchConversationsResult{}, fmt.Errorf("search raw text: %w", err)
 		}
@@ -113,6 +98,49 @@ func (idx *Index) SearchRawText(
 	result.Facets = ComputeFacets(result.Matches, 0)
 
 	return result, nil
+}
+
+func (idx *Index) rawTextCandidates(
+	ctx context.Context,
+	options SearchConversationsOptions,
+) ([]Record, error) {
+	var selected Record
+	if options.ConversationID != "" {
+		var err error
+		selected, err = idx.Resolve(ctx, options.ConversationID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	candidates, err := idx.ListPage(
+		ctx,
+		ListOptions{
+			Limit:           0,
+			Offset:          0,
+			Provider:        options.Provider,
+			WorkspaceRoot:   options.WorkspaceRoot,
+			Query:           "",
+			IncludeArchived: options.IncludeArchived,
+			All:             true,
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if options.ConversationID == "" {
+		return candidates.Records, nil
+	}
+
+	for _, record := range candidates.Records {
+		if record.ID == selected.ID && record.ArtifactPath == selected.ArtifactPath &&
+			record.Selector == selected.Selector {
+			return []Record{record}, nil
+		}
+	}
+
+	return nil, nil
 }
 
 func (idx *Index) firstRawTextMatch(

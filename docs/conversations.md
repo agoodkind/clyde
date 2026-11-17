@@ -54,6 +54,10 @@ context, and export remain available with both off. Search can use previously
 indexed conversations while ingestion is off. An unavailable engine leaves raw
 operations available and retries its connection in the background.
 
+`conversation.include_subagent_conversations` controls whether Clyde offers new
+or changed subagent transcripts for semantic ingestion. Disabling this setting
+does not remove previously ingested content from semantic search.
+
 Ingestion prepares one batch of whole conversations per worker pass and waits
 while the preceding engine job runs. A conversation larger than the preparation
 target travels alone. Larger backlogs therefore span multiple worker intervals;
@@ -61,6 +65,10 @@ batching does not bound the memory needed to read one large conversation. Change
 projected metadata is delivered even when the message text stays the same.
 
 ## Reading
+
+Raw listing, info, single-conversation search, title matching, and export always
+include available subagent transcripts. Raw lookup accepts a conversation ID,
+native Agent ID, artifact path, or provider Request ID.
 
 Use `clyde conversation info CONVERSATION_ID` before exporting when you need
 static metadata or compaction segment numbers. The info command prints record
@@ -116,11 +124,6 @@ and meta-only messages. The count does not depend on content kinds and can
 differ from the count used by `--last-n`.
 
 ## Export Selection
-
-Explicit export accepts a subagent conversation ID, native Agent ID, artifact
-path, or provider Request ID even when
-`conversation.include_subagent_conversations` is false. That setting still filters
-ordinary discovery, title matching, and semantic ingestion.
 
 `clyde conversation export` includes segment `0` by default. This default keeps
 the latest compaction summary and the messages after it.
