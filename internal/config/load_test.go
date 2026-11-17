@@ -428,6 +428,7 @@ concern = "unknown"
 		It(
 			"loads openai_compat_passthrough upstream",
 			func() {
+				GinkgoT().Setenv("OPENAI_API_KEY", "test-upstream-credential")
 				tmpDir := GinkgoT().TempDir()
 				_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
 
@@ -457,6 +458,7 @@ concern = "unknown"
 		It(
 			"loads passthrough override upstreams",
 			func() {
+				GinkgoT().Setenv("LOCAL_API_KEY", "test-upstream-credential")
 				tmpDir := GinkgoT().TempDir()
 				_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
 

@@ -166,10 +166,11 @@ func blankHotFields(cfg Config) Config {
 	cfg.Adapter.DefaultModel = ""
 	cfg.Adapter.PassthroughOverrides = nil
 	cfg.Adapter.OpenAICompatPassthrough = AdapterOpenAICompatPassthrough{
-		BaseURL:   "",
-		APIKey:    "",
-		APIKeyEnv: "",
-		Model:     "",
+		BaseURL:    "",
+		APIKey:     "",
+		APIKeyEnv:  "",
+		APIKeyFile: nil,
+		Model:      "",
 	}
 	cfg.MITM.Providers = nil
 

@@ -8,9 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"math/big"
-	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +18,7 @@ import (
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation/vectorsearch"
 	"goodkind.io/clyde/internal/livetrack"
+	"goodkind.io/clyde/internal/util"
 )
 
 // semanticDialRegisterTimeout bounds each dial-and-register attempt so a slow
@@ -230,42 +229,18 @@ const localEmbeddingAPIKey = "local"
 // environment variable or key file. It returns localEmbeddingAPIKey when the
 // config sets neither.
 func conversationEmbeddingAPIKey(envName string, filePath string) (string, error) {
-	if envName != "" {
-		value := strings.TrimSpace(os.Getenv(envName))
-		if value == "" {
-			return "", fmt.Errorf("embedding API key environment variable %q is empty", envName)
-		}
-
-		return value, nil
+	if envName == "" && filePath == "" {
+		return localEmbeddingAPIKey, nil
 	}
 
-	if filePath != "" {
-		content, err := os.ReadFile(filePath)
-		if err != nil {
-			slog.Warn(
-				"daemon.conversation_semantic.embedding_key_read_failed",
-				"concern",
-				"conversation.semantic",
-				"component",
-				"daemon",
-				"path",
-				filePath,
-				"err",
-				err,
-			)
+	value, err := util.ReadSecretReference("embedding API key", envName, filePath)
+	if err != nil {
+		slog.Warn("daemon.embedding.credentials_invalid", "component", "daemon", "err", err)
 
-			return "", fmt.Errorf("read embedding API key file %q: %w", filePath, err)
-		}
-
-		value := strings.TrimSpace(string(content))
-		if value == "" {
-			return "", fmt.Errorf("embedding API key file %q is empty", filePath)
-		}
-
-		return value, nil
+		return "", fmt.Errorf("resolve embedding API key: %w", err)
 	}
 
-	return localEmbeddingAPIKey, nil
+	return value, nil
 }
 
 // OpenConversationSearchClient opens the configured local or Milvus backend.

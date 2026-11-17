@@ -134,6 +134,9 @@ default_model = "clyde-fable-5-high-thinking"
 # reasoning_content-only streaming reasoning. Omit to bind only the primary
 # port.
 cursor_ingress_port = 11435
+# Select one inbound bearer token source. Relative paths use this config directory.
+# require_token_env = "CLYDE_INBOUND_TOKEN"
+# require_token_file = "secrets/adapter-token"
 
 [adapter.notices]
 enabled = true
@@ -207,6 +210,7 @@ capability_policy = "passthrough"
 base_url = "http://[::1]:1234/v1"
 api_key = ""
 api_key_env = ""
+# api_key_file = "secrets/upstream-key"
 model = ""
 
 # Optional: route specific model aliases to named passthrough overrides.
@@ -216,6 +220,7 @@ model = ""
 # base_url = "http://localhost:1234/v1"
 # api_key = ""
 # api_key_env = ""
+# api_key_file = "secrets/local-key"
 # model = "local-model"
 #
 # [adapter.model_profiles.local]

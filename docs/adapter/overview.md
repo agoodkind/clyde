@@ -4,6 +4,33 @@ Clyde routes adapter requests through one declarative model catalog. Exact
 entries describe known capabilities, while ordered routes claim future model
 IDs without advertising speculative details.
 
+## Authenticate adapter requests
+
+`adapter.require_token` supplies a literal inbound bearer token.
+`adapter.require_token_env` reads a named environment variable, and
+`adapter.require_token_file` reads a credential file. Configure at most one
+source. Omit unused reference settings; explicit empty references fail
+validation. A nonempty `CLYDE_ADAPTER_TOKEN` overrides the configured
+token after Clyde validates its source.
+
+Both `adapter.openai_compat_passthrough` and entries under
+`adapter.passthrough_overrides` accept `api_key_file` alongside the existing
+`api_key` and `api_key_env` settings. A file source cannot accompany either
+other source. A literal `api_key` retains precedence over `api_key_env`.
+
+Clyde resolves relative credential paths against the directory containing
+`config.toml` and trims surrounding whitespace, including trailing newlines,
+from file and environment credentials. Missing, unreadable, and empty
+references reject configuration loading. Errors identify the setting without
+printing its credential.
+
+The adapter reads its inbound token during startup. Changing that credential
+requires a daemon reload. The configuration watcher watches `config.toml`,
+not credential files. Passthrough requests read their configured environment
+or file credential for each request. A read failure rejects that request
+before Clyde contacts the upstream. Invalid configuration reloads preserve
+the running adapter and its inbound token.
+
 ## Resolve a model
 
 Clyde resolves one model request across the Cursor, generic OpenAI-compatible,
