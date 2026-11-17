@@ -23,18 +23,10 @@ const (
 
 // ConversationConfig configures raw conversation indexing integrations.
 type ConversationConfig struct {
-	// IncludeSubagentConversations exposes the transcripts a dispatched agent
-	// wrote alongside the conversations a person started. It defaults to false
-	// because one working session that dispatches agents can write hundreds of
-	// agent transcripts in a day, which crowd list and search results and consume
-	// embedding capacity ahead of the user's own work. Turning it on takes effect
-	// on the next daemon generation and needs no cache deletion, because the index
-	// stores every conversation's origin and applies this setting when it reads.
-	//
-	// It selects whole conversations, which is a different level from
-	// [ConversationSemanticConfig.IndexedContent]. Explicit export can select a
-	// hidden conversation by ID, artifact path, or provider request ID. The engine
-	// retains conversations omitted from its ingestion manifest.
+	// IncludeSubagentConversations offers new or changed subagent transcripts
+	// for semantic ingestion. The default is false. Raw discovery, listing,
+	// lookup, title matching, and export always include available subagents.
+	// Disabling ingestion does not remove previously ingested content from search.
 	IncludeSubagentConversations bool                       `json:"includeSubagentConversations,omitempty" toml:"include_subagent_conversations,omitempty"`
 	Cursor                       CursorConversationConfig   `json:"cursor,omitzero" toml:"cursor,omitempty"`
 	Semantic                     ConversationSemanticConfig `json:"semantic,omitzero" toml:"semantic,omitempty"`

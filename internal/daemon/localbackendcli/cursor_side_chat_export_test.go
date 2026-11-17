@@ -26,7 +26,7 @@ const (
 	sideChatTwinText    = "top level twin export probe"
 )
 
-func TestCursorSideChatExportIgnoresSubagentIngestionSetting(t *testing.T) {
+func TestCursorSideChatRawReadsIgnoreSubagentIngestionSetting(t *testing.T) {
 	binaryPath := buildClydeCLI(t)
 
 	for _, include := range []bool{false, true} {
@@ -68,7 +68,12 @@ func TestCursorSideChatExportIgnoresSubagentIngestionSetting(t *testing.T) {
 
 				assertSideChatVisibility(t, index, include)
 
-				for _, selector := range []string{sideChatAgentID, sideChatRequestID, path} {
+				for _, selector := range []string{
+					sideChatAgentID,
+					sideChatRequestID,
+					"cursor:" + sideChatAgentID,
+					path,
+				} {
 					t.Run(
 						selector,
 						func(t *testing.T) {
@@ -84,6 +89,41 @@ func TestCursorSideChatExportIgnoresSubagentIngestionSetting(t *testing.T) {
 							}
 
 							assertSideChatExport(t, result.text(), selector == path)
+							info, infoErr := lookupProbeCLI(t, d, "info", selector, "")
+							if infoErr != nil || !strings.Contains(info, sideChatAgentID) {
+								t.Fatalf("CLI info: %v\n%s", infoErr, info)
+							}
+
+							mcpInfo := lookupProbeMCP(t, d, "info", selector, "")
+							if mcpInfo.IsError ||
+								!strings.Contains(mcpInfo.text(), sideChatAgentID) {
+								t.Fatalf("MCP info: %s", mcpInfo.text())
+							}
+
+							for _, surface := range d.surfaces() {
+								result := mustLocalProofSearch(
+									t,
+									surface,
+									localProofSearchRequest{
+										ConversationID: selector,
+										Query:          sideChatText,
+										Limit:          localProofPageLimit,
+									},
+								)
+								if len(result.Matches) != 1 ||
+									!strings.Contains(result.Matches[0].Snippet, sideChatText) {
+									t.Fatalf("%s search = %+v", surface.name, result)
+								}
+
+								if selector == path && result.Matches[0].Snippet != sideChatText {
+									t.Fatalf(
+										"%s selected the transcript twin for path %s: %+v",
+										surface.name,
+										path,
+										result,
+									)
+								}
+							}
 						},
 					)
 				}
@@ -100,7 +140,16 @@ func TestCursorSideChatExportIgnoresSubagentIngestionSetting(t *testing.T) {
 				}
 
 				assertSideChatVisibility(t, index, include)
-				assertSideChatExportMisses(t, index, d, include)
+				assertSideChatExportMisses(t, index, d)
+				if record, err := index.Resolve(t.Context(), sideChatText); err != nil ||
+					record.Title != sideChatText {
+					t.Fatalf("resolve side chat title: %+v, %v", record, err)
+				}
+
+				if record, ok := index.RecordByID("cursor:" + sideChatAgentID); !ok ||
+					!record.IsSubagent() {
+					t.Fatalf("lookup cached subagent: %+v, %t", record, ok)
+				}
 
 				outputPath := filepath.Join(t.TempDir(), "side-chat.md")
 				receipt, err := lookupProbeCLI(t, d, "export", path, outputPath)
@@ -149,7 +198,7 @@ func assertSideChatVisibility(t *testing.T, index *conversation.Index, include b
 		feederRecords = append(feederRecords, record.Record)
 	}
 
-	for _, records := range [][]conversation.Record{records, feederRecords} {
+	for position, records := range [][]conversation.Record{records, feederRecords} {
 		found := false
 
 		for _, record := range records {
@@ -158,8 +207,9 @@ func assertSideChatVisibility(t *testing.T, index *conversation.Index, include b
 			}
 		}
 
-		if found != include {
-			t.Fatalf("side chat visibility = %t, want %t", found, include)
+		expected := position == 0 || include
+		if found != expected {
+			t.Fatalf("side chat visibility = %t, want %t", found, expected)
 		}
 	}
 }
@@ -168,7 +218,6 @@ func assertSideChatExportMisses(
 	t *testing.T,
 	index *conversation.Index,
 	d *localProofDaemon,
-	include bool,
 ) {
 	t.Helper()
 
@@ -184,19 +233,26 @@ func assertSideChatExportMisses(
 			t.Fatalf("ambiguous request reason = %s", missing.Reason)
 		}
 
-		text, failure := lookupProbeCLI(t, d, "export", selector, "")
-		if failure == nil || !strings.Contains(text, "not found") {
-			t.Fatalf("CLI accepted request %s: %v\n%s", selector, failure, text)
+		for _, operation := range []string{"info", "export"} {
+			text, failure := lookupProbeCLI(t, d, operation, selector, "")
+			if failure == nil || !strings.Contains(text, "not found") {
+				t.Fatalf("CLI %s accepted request %s: %v\n%s", operation, selector, failure, text)
+			}
+
+			if result := lookupProbeMCP(t, d, operation, selector, ""); !result.IsError {
+				t.Fatalf("MCP %s accepted request %s: %s", operation, selector, result.text())
+			}
 		}
 
-		if result := lookupProbeMCP(t, d, "export", selector, ""); !result.IsError {
-			t.Fatalf("MCP accepted request %s: %s", selector, result.text())
-		}
-	}
-
-	if !include {
-		if _, err := index.ResolveForExport(t.Context(), sideChatText); err == nil {
-			t.Fatal("export selected a hidden conversation by title")
+		for _, surface := range d.surfaces() {
+			_, err := surface.search(localProofSearchRequest{
+				ConversationID: selector,
+				Query:          sideChatText,
+				Limit:          localProofPageLimit,
+			})
+			if err == nil {
+				t.Fatalf("%s accepted request %s: %v", surface.name, selector, err)
+			}
 		}
 	}
 }

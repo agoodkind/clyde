@@ -123,10 +123,7 @@ func containsArtifactFilename(records []conversation.Record, filename string) bo
 	return false
 }
 
-// TestIndexHidesSubagentConversationsByDefault proves the default setting keeps a
-// dispatched agent's transcript out of what a caller lists, while the user's own
-// conversation stays.
-func TestIndexHidesSubagentConversationsByDefault(t *testing.T) {
+func TestIndexListsSubagentConversationsWhenIngestionDisabled(t *testing.T) {
 	writeOriginFixtures(t)
 
 	records := refreshedIndexRecords(t, false)
@@ -138,9 +135,9 @@ func TestIndexHidesSubagentConversationsByDefault(t *testing.T) {
 		)
 	}
 
-	if containsArtifactFilename(records, originTestSubagentFilename) {
+	if !containsArtifactFilename(records, originTestSubagentFilename) {
 		t.Fatalf(
-			"listed artifacts = %v, want the subagent conversation absent",
+			"listed artifacts = %v, want the subagent conversation present",
 			artifactFilenames(records),
 		)
 	}
@@ -424,18 +421,15 @@ func TestClaudeDiscoverAdmitsSubagentTranscriptsForClassification(t *testing.T) 
 	}
 }
 
-// TestClaudeSubagentTranscriptFollowsTheSetting proves the fold-in end to end: the
-// same sidechain transcript is hidden by default and served once the operator
-// opts in, and the parent survives both ways.
-func TestClaudeSubagentTranscriptFollowsTheSetting(t *testing.T) {
+func TestClaudeSubagentTranscriptRemainsAvailableWithIngestionDisabled(t *testing.T) {
 	const parentSessionID = "6e2f9a45-parent-session"
 	_, agentPath := writeClaudeParentAndSidechain(t, parentSessionID)
 	agentFilename := filepath.Base(agentPath)
 
 	hidden := refreshedIndexRecords(t, false)
-	if containsArtifactFilename(hidden, agentFilename) {
+	if !containsArtifactFilename(hidden, agentFilename) {
 		t.Fatalf(
-			"listed artifacts = %v, want the sidechain transcript hidden by default",
+			"listed artifacts = %v, want the sidechain transcript available",
 			artifactFilenames(hidden),
 		)
 	}
@@ -517,17 +511,15 @@ func TestHiddenSubagentConversationIsOmittedFromTheEngineManifest(t *testing.T) 
 	}
 }
 
-// TestSkippedSubagentConversationStaysInTheCache pins the behavior that makes the
-// setting reversible: an index that hides subagent conversations still caches
-// them with their origin, so turning the setting on later needs no cache deletion
-// and no re-parse.
+// TestSkippedSubagentConversationStaysInTheCache checks that ingestion selection
+// does not remove subagent records from the raw cache.
 func TestSkippedSubagentConversationStaysInTheCache(t *testing.T) {
 	writeOriginFixtures(t)
 
 	hidden := refreshedIndexRecords(t, false)
-	if containsArtifactFilename(hidden, originTestSubagentFilename) {
+	if !containsArtifactFilename(hidden, originTestSubagentFilename) {
 		t.Fatalf(
-			"listed artifacts = %v, want the subagent conversation absent",
+			"listed artifacts = %v, want the subagent conversation present",
 			artifactFilenames(hidden),
 		)
 	}

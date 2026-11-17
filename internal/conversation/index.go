@@ -33,10 +33,8 @@ const (
 // provider parsers in once and every read and scan dispatches through them.
 type Index struct {
 	mu sync.Mutex
-	// includeSubagents exposes conversations a dispatched agent wrote. It is read
-	// when the index serves records rather than when it scans, so the cache holds
-	// every conversation regardless of the setting and flipping the setting needs
-	// no cache deletion and no re-parse.
+	// includeSubagents selects subagent transcripts for semantic ingestion.
+	// Raw discovery and reads always include available subagent transcripts.
 	includeSubagents bool
 	registry         *Registry
 	records          []Record
@@ -166,7 +164,7 @@ func (idx *Index) List(ctx context.Context) ([]Record, error) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
-	return idx.visibleRecords(), nil
+	return idx.allRecords(), nil
 }
 
 // Resolve finds one conversation by id, native id, title, artifact path, or
@@ -180,27 +178,19 @@ func (idx *Index) List(ctx context.Context) ([]Record, error) {
 // issued the request, and pasting a request id into a chat is how a title comes
 // to be one.
 func (idx *Index) Resolve(ctx context.Context, selector string) (Record, error) {
-	return idx.resolve(ctx, selector, resolutionVisible)
+	return idx.resolve(ctx, selector)
 }
 
 // ResolveForExport resolves a conversation for static transcript export.
 //
-// Exact IDs, artifact paths, and provider request IDs can select hidden subagent
-// conversations. Title matching follows the ordinary visibility setting.
+// Export uses the same selectors as other raw conversation reads.
 //
 // Example:
 //
 //	record, err := index.ResolveForExport(ctx, artifactPath)
 func (idx *Index) ResolveForExport(ctx context.Context, selector string) (Record, error) {
-	return idx.resolve(ctx, selector, resolutionExport)
+	return idx.Resolve(ctx, selector)
 }
-
-type resolutionScope uint8
-
-const (
-	resolutionVisible resolutionScope = iota
-	resolutionExport
-)
 
 // staleIndexNote is what a lookup says when it could not bring the index up to
 // date before answering, so a miss over records that may be out of date is not
@@ -257,9 +247,8 @@ func (idx *Index) refreshBeforeLookup(ctx context.Context) bool {
 func (idx *Index) resolveUUIDShapedSelector(
 	ctx context.Context,
 	selector string,
-	scope resolutionScope,
 ) (Record, error) {
-	records := idx.resolutionRecords(scope)
+	records := idx.recordsSnapshot()
 	if record, ok := resolveRecordIdentity(records, selector); ok {
 		return record, nil
 	}
@@ -283,7 +272,7 @@ func (idx *Index) resolveUUIDShapedSelector(
 	}
 
 	fresh := idx.refreshBeforeLookup(ctx)
-	records = idx.resolutionRecords(scope)
+	records = idx.recordsSnapshot()
 	if record, ok := resolveRecordIdentity(records, selector); ok {
 		return record, nil
 	}
@@ -533,7 +522,6 @@ func (idx *Index) RefreshWithReason(ctx context.Context, reason RefreshReason) (
 func (idx *Index) resolve(
 	ctx context.Context,
 	selector string,
-	scope resolutionScope,
 ) (Record, error) {
 	selector = strings.TrimSpace(selector)
 	if selector == "" {
@@ -544,22 +532,22 @@ func (idx *Index) resolve(
 		return Record{}, err
 	}
 
-	records := idx.resolutionRecords(scope)
+	records := idx.recordsSnapshot()
 	if looksLikeRequestID(selector) {
 		if record, ok := resolveRecordIdentity(records, selector); ok {
 			return record, nil
 		}
 
-		return idx.resolveUUIDShapedSelector(ctx, selector, scope)
+		return idx.resolveUUIDShapedSelector(ctx, selector)
 	}
 
-	if record, ok := idx.resolveScopedRecord(records, selector); ok {
+	if record, ok := resolveRecord(records, selector); ok {
 		return record, nil
 	}
 
 	fresh := idx.refreshBeforeLookup(ctx)
-	records = idx.resolutionRecords(scope)
-	if record, ok := idx.resolveScopedRecord(records, selector); ok {
+	records = idx.recordsSnapshot()
+	if record, ok := resolveRecord(records, selector); ok {
 		return record, nil
 	}
 
@@ -568,14 +556,6 @@ func (idx *Index) resolve(
 		Reason:   RequestNotFoundReasonUnspecified,
 		Fresh:    fresh,
 	}
-}
-
-func (idx *Index) resolveScopedRecord(records []Record, selector string) (Record, bool) {
-	if record, ok := resolveRecordIdentity(records, selector); ok {
-		return record, true
-	}
-
-	return resolveRecord(idx.recordsSnapshot(), selector)
 }
 
 func (idx *Index) refreshWithReason(ctx context.Context, reason RefreshReason) (err error) {
@@ -839,10 +819,8 @@ func (idx *Index) installRefreshResult(
 	idx.cachePresent = true
 }
 
-// reportSkippedSubagents names how many conversations the setting is hiding, so
-// someone hunting for a conversation that never appeared can see why. It says
-// nothing when the setting exposes subagent conversations or when the scan found
-// none.
+// reportSkippedSubagents reports how many subagent transcripts the setting
+// excludes from semantic ingestion.
 func (idx *Index) reportSkippedSubagents(ctx context.Context, records []Record) {
 	skipped := 0
 
@@ -863,7 +841,7 @@ func (idx *Index) reportSkippedSubagents(ctx context.Context, records []Record) 
 
 	slog.InfoContext(
 		ctx,
-		"conversation.index.subagent_conversations_skipped",
+		"conversation.index.subagent_ingestion_skipped",
 		"concern",
 		"conversation.index",
 		"component",
