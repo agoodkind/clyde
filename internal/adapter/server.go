@@ -80,6 +80,10 @@ func (s *Server) modelRegistry() *Registry {
 // reload, so the fields this Server reads directly off the fixed cfg stay
 // consistent.
 func (s *Server) ApplyConfig(newCfg config.AdapterConfig) error {
+	if err := newCfg.ValidateSecrets(); err != nil {
+		return fmt.Errorf("adapter apply config: %w", err)
+	}
+
 	registry, err := NewRegistry(newCfg)
 	if err != nil {
 		s.log.Warn(
@@ -199,9 +203,9 @@ func New(
 		maxConcurrent = DefaultMaxConcurrent
 	}
 
-	token := cfg.RequireToken
-	if v := os.Getenv("CLYDE_ADAPTER_TOKEN"); v != "" {
-		token = v
+	token, err := resolveServerToken(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("configure adapter authentication: %w", err)
 	}
 
 	registry, err := NewRegistry(cfg)
@@ -277,6 +281,25 @@ func New(
 	s.mux = s.routes()
 
 	return s, nil
+}
+
+func resolveServerToken(cfg config.AdapterConfig) (string, error) {
+	if err := cfg.ValidateSecrets(); err != nil {
+		slog.Warn("adapter.credentials.invalid", "component", "adapter", "err", err)
+
+		return "", fmt.Errorf("validate adapter credentials: %w", err)
+	}
+
+	token, err := cfg.ResolveRequireToken()
+	if err != nil {
+		return "", fmt.Errorf("resolve adapter inbound token: %w", err)
+	}
+
+	if override := os.Getenv("CLYDE_ADAPTER_TOKEN"); override != "" {
+		return override, nil
+	}
+
+	return token, nil
 }
 
 // registerProviders wires the optional Codex and Anthropic providers

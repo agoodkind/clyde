@@ -99,6 +99,10 @@ type AdapterConfig struct {
 	// RequireToken, when set, demands a matching bearer token on
 	// every request. The env var CLYDE_ADAPTER_TOKEN overrides.
 	RequireToken string `json:"requireToken,omitempty" toml:"require_token,omitempty"`
+	// RequireTokenEnv selects an environment variable for inbound authentication.
+	RequireTokenEnv *string `json:"requireTokenEnv,omitempty" toml:"require_token_env,omitempty"`
+	// RequireTokenFile selects a credential file for inbound authentication.
+	RequireTokenFile *string `json:"requireTokenFile,omitempty" toml:"require_token_file,omitempty"`
 	// ModelProfiles declares reusable exact-model capability profiles.
 	ModelProfiles map[string]AdapterModelProfile `json:"modelProfiles,omitempty" toml:"model_profiles,omitempty"`
 	// Models declares canonical exact request IDs and their provider mapping.
@@ -364,6 +368,8 @@ type AdapterOpenAICompatPassthrough struct {
 	// APIKeyEnv lets the user keep the secret out of the config file.
 	// When set the adapter reads os.Getenv(APIKeyEnv) at request time.
 	APIKeyEnv string `json:"apiKeyEnv,omitempty" toml:"api_key_env,omitempty"`
+	// APIKeyFile selects a credential file instead of a literal or environment key.
+	APIKeyFile *string `json:"apiKeyFile,omitempty" toml:"api_key_file,omitempty"`
 	// Model overrides the model name forwarded upstream. Empty means pass
 	// the caller's model string through unchanged.
 	Model string `json:"model,omitempty" toml:"model,omitempty"`
@@ -516,6 +522,8 @@ type AdapterPassthroughOverride struct {
 	// file. When set the adapter reads os.Getenv(APIKeyEnv) at
 	// request time.
 	APIKeyEnv string `json:"apiKeyEnv,omitempty" toml:"api_key_env,omitempty"`
+	// APIKeyFile selects a credential file instead of a literal or environment key.
+	APIKeyFile *string `json:"apiKeyFile,omitempty" toml:"api_key_file,omitempty"`
 	// Model overrides the model name forwarded upstream. Empty
 	// means pass the caller's model string through unchanged.
 	Model string `json:"model,omitempty" toml:"model,omitempty"`
