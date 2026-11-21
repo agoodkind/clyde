@@ -23,56 +23,65 @@ func TestOpenAIConformanceChatRequestBodyLimit(t *testing.T) {
 		limit         int
 	}{
 		{name: "default", acceptedBytes: 8_463_264, limit: 32 << 20},
-		{name: "configured", setting: "max_chat_request_body_bytes = 512\n", acceptedBytes: 512, limit: 512},
+		{
+			name:          "configured",
+			setting:       "max_chat_request_body_bytes = 512\n",
+			acceptedBytes: 512,
+			limit:         512,
+		},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			loaded, err := loadChatRequestBodyLimitConfig(t, test.setting)
-			if err != nil {
-				t.Fatalf("load global config: %v", err)
-			}
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				loaded, err := loadChatRequestBodyLimitConfig(t, test.setting)
+				if err != nil {
+					t.Fatalf("load global config: %v", err)
+				}
 
-			if limit := loaded.Adapter.ChatRequestBodyLimit(); limit != int64(test.limit) {
-				t.Fatalf("configured body limit = %d, want %d", limit, test.limit)
-			}
+				if limit := loaded.Adapter.ChatRequestBodyLimit(); limit != int64(test.limit) {
+					t.Fatalf("configured body limit = %d, want %d", limit, test.limit)
+				}
 
-			cfg := baseConfig()
-			cfg.MaxChatRequestBodyBytes = loaded.Adapter.MaxChatRequestBodyBytes
+				cfg := baseConfig()
+				cfg.MaxChatRequestBodyBytes = loaded.Adapter.MaxChatRequestBodyBytes
 
-			upstream := newConformanceUpstream(conformanceUsageWithoutDetails)
-			listeners := startConformanceServerWithConfig(t, upstream, cfg)
-			url := listeners.openAI + "/v1/chat/completions"
+				upstream := newConformanceUpstream(conformanceUsageWithoutDetails)
+				listeners := startConformanceServerWithConfig(t, upstream, cfg)
+				url := listeners.openAI + "/v1/chat/completions"
 
-			acceptedBody := chatRequest + strings.Repeat(" ", test.acceptedBytes-len(chatRequest))
-			accepted := postConformance(t, url, acceptedBody)
-			if accepted.status != http.StatusOK {
-				t.Fatalf(
-					"%d-byte request status = %d, want 200, body = %s",
-					test.acceptedBytes,
-					accepted.status,
-					accepted.body,
-				)
-			}
+				acceptedPadding := test.acceptedBytes - len(chatRequest)
+				acceptedBody := chatRequest + strings.Repeat(" ", acceptedPadding)
+				accepted := postConformance(t, url, acceptedBody)
+				if accepted.status != http.StatusOK {
+					t.Fatalf(
+						"%d-byte request status = %d, want 200, body = %s",
+						test.acceptedBytes,
+						accepted.status,
+						accepted.body,
+					)
+				}
 
-			drainConformanceRequest(t, upstream)
+				drainConformanceRequest(t, upstream)
 
-			rejectedBytes := test.limit + 1
-			rejectedBody := chatRequest + strings.Repeat(" ", rejectedBytes-len(chatRequest))
-			rejected := postConformance(t, url, rejectedBody)
-			rejection := decodeErrorEnvelope(t, rejected.body)
-			if rejected.status != http.StatusBadRequest ||
-				rejection.Type != "invalid_request_error" ||
-				rejection.Code != "invalid_request" ||
-				rejection.Message != "failed to read body" {
-				t.Fatalf(
-					"%d-byte request returned status %d and error %+v",
-					rejectedBytes,
-					rejected.status,
-					rejection,
-				)
-			}
+				rejectedBytes := test.limit + 1
+				rejectedBody := chatRequest + strings.Repeat(" ", rejectedBytes-len(chatRequest))
+				rejected := postConformance(t, url, rejectedBody)
+				rejection := decodeErrorEnvelope(t, rejected.body)
+				if rejected.status != http.StatusBadRequest ||
+					rejection.Type != "invalid_request_error" ||
+					rejection.Code != "invalid_request" ||
+					rejection.Message != "failed to read body" {
+					t.Fatalf(
+						"%d-byte request returned status %d and error %+v",
+						rejectedBytes,
+						rejected.status,
+						rejection,
+					)
+				}
 
-			requireNoUpstreamRequest(t, upstream)
-		})
+				requireNoUpstreamRequest(t, upstream)
+			},
+		)
 	}
 }
 
@@ -80,12 +89,16 @@ func TestOpenAIConformanceChatRequestBodyLimitRejectsNonpositiveConfig(t *testin
 	const invalidLimitMessage = "adapter.max_chat_request_body_bytes must be greater than zero"
 
 	for _, value := range []string{"0", "-1"} {
-		t.Run(value, func(t *testing.T) {
-			_, err := loadChatRequestBodyLimitConfig(t, "max_chat_request_body_bytes = "+value+"\n")
-			if err == nil || !strings.Contains(err.Error(), invalidLimitMessage) {
-				t.Fatalf("load global config returned %v for limit %s", err, value)
-			}
-		})
+		t.Run(
+			value,
+			func(t *testing.T) {
+				setting := "max_chat_request_body_bytes = " + value + "\n"
+				_, err := loadChatRequestBodyLimitConfig(t, setting)
+				if err == nil || !strings.Contains(err.Error(), invalidLimitMessage) {
+					t.Fatalf("load global config returned %v for limit %s", err, value)
+				}
+			},
+		)
 	}
 }
 
