@@ -3,12 +3,106 @@ package adapter
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	"goodkind.io/clyde/internal/config"
 )
+
+func TestOpenAIConformanceChatRequestBodyLimit(t *testing.T) {
+	const chatRequest = `{"model":"gpt-future","messages":[{"role":"user","content":"hi"}]}`
+
+	for _, test := range []struct {
+		name          string
+		setting       string
+		acceptedBytes int
+		limit         int
+	}{
+		{name: "default", acceptedBytes: 8_463_264, limit: 32 << 20},
+		{name: "configured", setting: "max_chat_request_body_bytes = 512\n", acceptedBytes: 512, limit: 512},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			loaded, err := loadChatRequestBodyLimitConfig(t, test.setting)
+			if err != nil {
+				t.Fatalf("load global config: %v", err)
+			}
+
+			if limit := loaded.Adapter.ChatRequestBodyLimit(); limit != int64(test.limit) {
+				t.Fatalf("configured body limit = %d, want %d", limit, test.limit)
+			}
+
+			cfg := baseConfig()
+			cfg.MaxChatRequestBodyBytes = loaded.Adapter.MaxChatRequestBodyBytes
+
+			upstream := newConformanceUpstream(conformanceUsageWithoutDetails)
+			listeners := startConformanceServerWithConfig(t, upstream, cfg)
+			url := listeners.openAI + "/v1/chat/completions"
+
+			acceptedBody := chatRequest + strings.Repeat(" ", test.acceptedBytes-len(chatRequest))
+			accepted := postConformance(t, url, acceptedBody)
+			if accepted.status != http.StatusOK {
+				t.Fatalf(
+					"%d-byte request status = %d, want 200, body = %s",
+					test.acceptedBytes,
+					accepted.status,
+					accepted.body,
+				)
+			}
+
+			drainConformanceRequest(t, upstream)
+
+			rejectedBytes := test.limit + 1
+			rejectedBody := chatRequest + strings.Repeat(" ", rejectedBytes-len(chatRequest))
+			rejected := postConformance(t, url, rejectedBody)
+			rejection := decodeErrorEnvelope(t, rejected.body)
+			if rejected.status != http.StatusBadRequest ||
+				rejection.Type != "invalid_request_error" ||
+				rejection.Code != "invalid_request" ||
+				rejection.Message != "failed to read body" {
+				t.Fatalf(
+					"%d-byte request returned status %d and error %+v",
+					rejectedBytes,
+					rejected.status,
+					rejection,
+				)
+			}
+
+			requireNoUpstreamRequest(t, upstream)
+		})
+	}
+}
+
+func TestOpenAIConformanceChatRequestBodyLimitRejectsNonpositiveConfig(t *testing.T) {
+	const invalidLimitMessage = "adapter.max_chat_request_body_bytes must be greater than zero"
+
+	for _, value := range []string{"0", "-1"} {
+		t.Run(value, func(t *testing.T) {
+			_, err := loadChatRequestBodyLimitConfig(t, "max_chat_request_body_bytes = "+value+"\n")
+			if err == nil || !strings.Contains(err.Error(), invalidLimitMessage) {
+				t.Fatalf("load global config returned %v for limit %s", err, value)
+			}
+		})
+	}
+}
+
+func loadChatRequestBodyLimitConfig(t *testing.T, setting string) (*config.Config, error) {
+	t.Helper()
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	path := config.GlobalConfigPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(path, []byte("[adapter]\n"+setting), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	return config.LoadGlobalOrDefault()
+}
 
 func TestOpenAIConformanceChatStreamUsageOptIn(t *testing.T) {
 	upstream := newConformanceUpstream(conformanceUsageWithReasoning)

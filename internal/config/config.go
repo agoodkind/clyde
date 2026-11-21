@@ -96,6 +96,8 @@ type AdapterConfig struct {
 	DefaultModel string `json:"defaultModel,omitempty" toml:"default_model,omitempty"`
 	// MaxConcurrent caps concurrently handled adapter requests.
 	MaxConcurrent int `json:"maxConcurrent,omitempty" toml:"max_concurrent,omitempty"`
+	// MaxChatRequestBodyBytes limits POST /v1/chat/completions. Omit it to use 32 MiB.
+	MaxChatRequestBodyBytes *int64 `json:"maxChatRequestBodyBytes,omitempty" toml:"max_chat_request_body_bytes,omitempty"`
 	// RequireToken, when set, demands a matching bearer token on
 	// every request. The env var CLYDE_ADAPTER_TOKEN overrides.
 	RequireToken string `json:"requireToken,omitempty" toml:"require_token,omitempty"`

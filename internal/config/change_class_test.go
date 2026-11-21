@@ -97,6 +97,14 @@ func TestClassifyConfigChange(t *testing.T) {
 			func(c *Config) { c.Adapter.MaxConcurrent = 8 },
 			RouteReload,
 		},
+		{
+			"chat request body limit",
+			func(c *Config) {
+				limit := int64(1024)
+				c.Adapter.MaxChatRequestBodyBytes = &limit
+			},
+			RouteReload,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(

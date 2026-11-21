@@ -262,7 +262,7 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) (err error) {
 	corr := hctx.Correlation
 	reqID := corr.RequestID
 	clydeingress.SetHTTPHeaders(corr, w.Header())
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 8<<20))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.chatRequestBodyLimit(r.URL.Path)))
 	if err != nil {
 		return adapterErrInvalidRequest("failed to read body", err)
 	}
@@ -1046,7 +1046,7 @@ func (s *Server) handleLegacy(ctx context.Context, hctx *handlerCtx) error {
 // text_completion objects and chunks.
 func (s *Server) handleDocumentedLegacy(ctx context.Context, hctx *handlerCtx) error {
 	r := hctx.Request
-	body, err := io.ReadAll(http.MaxBytesReader(hctx.Writer, r.Body, 8<<20))
+	body, err := io.ReadAll(http.MaxBytesReader(hctx.Writer, r.Body, maxLegacyRequestBodyBytes))
 	if err != nil {
 		return adapterErrInvalidRequest("failed to read body", err)
 	}

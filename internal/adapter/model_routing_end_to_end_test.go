@@ -267,7 +267,16 @@ func newRoutingFakeEndpoints(t *testing.T) routingFakeEndpoints {
 
 func newRoutingIntegrationServer(t *testing.T, fakes routingFakeEndpoints) *Server {
 	t.Helper()
-	cfg := baseConfig()
+
+	return newRoutingIntegrationServerWithConfig(t, fakes, baseConfig())
+}
+
+func newRoutingIntegrationServerWithConfig(
+	t *testing.T,
+	fakes routingFakeEndpoints,
+	cfg config.AdapterConfig,
+) *Server {
+	t.Helper()
 	cfg.Codex.Enabled = true
 	cfg.Codex.BaseURL = fakes.codex.URL + "/backend-api/codex/responses"
 	cfg.Codex.WebsocketEnabled = false

@@ -40,6 +40,15 @@ A disposition is one of five values. Implemented means Clyde produces the docume
 
 ## Chat Completions
 
+Clyde limits `POST /v1/chat/completions` request bodies on both listeners.
+`max_chat_request_body_bytes` under `[adapter]` sets the limit in bytes.
+Omit it to use 32 MiB. Clyde rejects nonpositive values and reloads when
+the setting changes. Larger request bodies return HTTP 400 with type
+`invalid_request_error`, code `invalid_request`, and message
+`failed to read body`.
+`TestOpenAIConformanceChatRequestBodyLimit` verifies this behavior on the
+generic OpenAI listener.
+
 | Behavior | Reference | Disposition | Test |
 | --- | --- | --- | --- |
 | A nonstreaming response always writes `choices[].logprobs`, `message.content`, and `message.refusal`, with JSON null for an absent value. | Chat completion object | Implemented | `TestOpenAIGoSDKConformanceCodexProvider` |
