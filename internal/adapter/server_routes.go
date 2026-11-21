@@ -251,6 +251,19 @@ func (s *Server) registerIngressSession(
 	return sess, true
 }
 
+const (
+	legacyCompletionsPath     = "/v1/completions"
+	maxLegacyRequestBodyBytes = 8 << 20
+)
+
+func (s *Server) chatRequestBodyLimit(path string) int64 {
+	if path == legacyCompletionsPath {
+		return maxLegacyRequestBodyBytes
+	}
+
+	return s.cfg.ChatRequestBodyLimit()
+}
+
 func (s *Server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handle(adapterRouteHealth, s.handleHealth))
@@ -258,7 +271,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("/v1/models/{model...}", s.handle(adapterRouteOpenAI, s.auth(s.handleModel)))
 	mux.HandleFunc("/v1/chat/completions", s.handle(adapterRouteOpenAI, s.auth(s.handleChat)))
 	mux.HandleFunc("/v1/responses", s.handle(adapterRouteOpenAI, s.auth(s.handleResponses)))
-	mux.HandleFunc("/v1/completions", s.handle(adapterRouteOpenAI, s.auth(s.handleLegacy)))
+	mux.HandleFunc(legacyCompletionsPath, s.handle(adapterRouteOpenAI, s.auth(s.handleLegacy)))
 	mux.HandleFunc(
 		"/v1/messages",
 		s.handle(adapterRouteAnthropic, s.authAnthropic(s.handleAnthropicMessages)),
@@ -292,7 +305,7 @@ func (s *Server) handleRoot(ctx context.Context, hctx *handlerCtx) error {
 			"/v1/models/{model}",
 			"/v1/chat/completions",
 			"/v1/responses",
-			"/v1/completions",
+			legacyCompletionsPath,
 			"/v1/messages",
 			"/v1/messages/count_tokens",
 			"/healthz",

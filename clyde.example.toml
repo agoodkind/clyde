@@ -106,6 +106,8 @@ daemon = ""
 [adapter]
 enabled = true
 direct_oauth = true
+# Limit POST /v1/chat/completions on both adapter listeners to a positive byte count.
+# max_chat_request_body_bytes = 33554432
 # Persist the raw OpenAI-shape ingress request and the rendered reply to
 # capture.db tagged client="adapter.ingress", alongside the always-on BYOK
 # egress capture. Off by default; it roughly doubles body volume against the

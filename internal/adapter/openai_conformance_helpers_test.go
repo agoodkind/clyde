@@ -11,6 +11,7 @@ import (
 
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	"goodkind.io/clyde/internal/config"
 )
 
 // The openai_conformance_*_test.go files verify
@@ -38,6 +39,16 @@ type conformanceListeners struct {
 
 func startConformanceServer(t *testing.T, upstream *conformanceUpstream) conformanceListeners {
 	t.Helper()
+
+	return startConformanceServerWithConfig(t, upstream, baseConfig())
+}
+
+func startConformanceServerWithConfig(
+	t *testing.T,
+	upstream *conformanceUpstream,
+	cfg config.AdapterConfig,
+) conformanceListeners {
+	t.Helper()
 	fakes := newRoutingFakeEndpoints(t)
 	fakes.codex = newLoopbackHTTPServer(
 		t,
@@ -59,7 +70,7 @@ func startConformanceServer(t *testing.T, upstream *conformanceUpstream) conform
 			upstream.reply(writer)
 		}),
 	)
-	srv := newRoutingIntegrationServer(t, fakes)
+	srv := newRoutingIntegrationServerWithConfig(t, fakes, cfg)
 	openAIURL, cursorURL := startRoutingListeners(t, srv)
 
 	return conformanceListeners{openAI: openAIURL, cursor: cursorURL}

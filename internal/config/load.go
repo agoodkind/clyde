@@ -356,6 +356,10 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 		return err
 	}
 
+	if err := cfg.Adapter.validateChatRequestBodyLimit(); err != nil {
+		return err
+	}
+
 	if err := applyDaemonDefaultsAndValidate(&cfg.Daemon); err != nil {
 		return err
 	}
