@@ -4,7 +4,9 @@ import "errors"
 
 const defaultMaxChatRequestBodyBytes = 32 << 20
 
-var errInvalidChatRequestBodyLimit = errors.New("adapter.max_chat_request_body_bytes must be greater than zero")
+var errInvalidChatRequestBodyLimit = errors.New(
+	"adapter.max_chat_request_body_bytes must be greater than zero",
+)
 
 // ChatRequestBodyLimit returns the effective limit for Chat Completions.
 func (cfg AdapterConfig) ChatRequestBodyLimit() int64 {

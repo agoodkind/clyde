@@ -251,8 +251,10 @@ func (s *Server) registerIngressSession(
 	return sess, true
 }
 
-const legacyCompletionsPath = "/v1/completions"
-const maxLegacyRequestBodyBytes = 8 << 20
+const (
+	legacyCompletionsPath     = "/v1/completions"
+	maxLegacyRequestBodyBytes = 8 << 20
+)
 
 func (s *Server) chatRequestBodyLimit(path string) int64 {
 	if path == legacyCompletionsPath {
