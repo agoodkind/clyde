@@ -25,6 +25,12 @@ var saveSQL string
 //go:embed sql/load.sql
 var loadSQL string
 
+//go:embed sql/tool_schema.sql
+var toolSchemaSQL string
+
+//go:embed sql/save_tool.sql
+var saveToolSQL string
+
 var (
 	errIncompleteRecord = errors.New(
 		"save Cursor replay: conversation ID, reply ID and both digests are required",
@@ -76,7 +82,14 @@ func (store Store) Save(ctx context.Context, record Record) error {
 		return storeError(ctx, "restrict database permissions", err)
 	}
 
-	if _, err := database.ExecContext(ctx, schemaSQL); err != nil {
+	transaction, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		return storeError(ctx, "begin reply save", err)
+	}
+
+	defer func() { _ = transaction.Rollback() }()
+
+	if _, err := transaction.ExecContext(ctx, schemaSQL); err != nil {
 		return storeError(ctx, "initialize database", err)
 	}
 
@@ -89,7 +102,7 @@ func (store Store) Save(ctx context.Context, record Record) error {
 		return storeError(ctx, "encode blocks", err)
 	}
 
-	result, err := database.ExecContext(
+	result, err := transaction.ExecContext(
 		ctx,
 		saveSQL,
 		record.Reference.ConversationID,
@@ -103,6 +116,43 @@ func (store Store) Save(ctx context.Context, record Record) error {
 		return storeError(ctx, "save reply", err)
 	}
 
+	if err := checkInsert(ctx, result); err != nil {
+		return err
+	}
+
+	if record.ToolDigest != "" {
+		if err := saveToolIndex(ctx, transaction, record); err != nil {
+			return err
+		}
+	}
+
+	if err := transaction.Commit(); err != nil {
+		return storeError(ctx, "commit reply", err)
+	}
+
+	return nil
+}
+
+func saveToolIndex(ctx context.Context, transaction *sql.Tx, record Record) error {
+	if _, err := transaction.ExecContext(ctx, toolSchemaSQL); err != nil {
+		return storeError(ctx, "initialize tool reply index", err)
+	}
+
+	result, err := transaction.ExecContext(
+		ctx,
+		saveToolSQL,
+		record.Reference.ConversationID,
+		record.Reference.ReplyID,
+		record.ToolDigest,
+	)
+	if err != nil {
+		return storeError(ctx, "index tool reply", err)
+	}
+
+	return checkInsert(ctx, result)
+}
+
+func checkInsert(ctx context.Context, result sql.Result) error {
 	count, err := result.RowsAffected()
 	if err != nil {
 		return storeError(ctx, "check insert", err)
@@ -115,55 +165,20 @@ func (store Store) Save(ctx context.Context, record Record) error {
 	return nil
 }
 
-// Load reads a reply without creating the database.
-//
-// A missing database or an unknown reference returns found=false.
-//
-//	record, found, err := store.Load(ctx, ref)
-func (store Store) Load(ctx context.Context, ref Reference) (Record, bool, error) {
-	var record Record
+func (store Store) openExisting(ctx context.Context) (*sql.DB, error) {
 	if store.Path == "" {
-		return record, false, errMissingPath
+		return nil, errMissingPath
 	}
 
 	if _, err := os.Stat(store.Path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return record, false, nil
+			return nil, nil
 		}
 
-		return record, false, storeError(ctx, "inspect database", err)
+		return nil, storeError(ctx, "inspect database", err)
 	}
 
-	database, err := store.open(ctx, false)
-	if err != nil {
-		return record, false, err
-	}
-
-	defer func() { _ = database.Close() }()
-
-	var blocks []byte
-	err = database.QueryRowContext(ctx, loadSQL, ref.ConversationID, ref.ReplyID).
-		Scan(
-			&record.Provider,
-			&record.Digest,
-			&record.VisibleDigest,
-			&blocks,
-		)
-	if errors.Is(err, sql.ErrNoRows) {
-		return record, false, nil
-	}
-
-	if err != nil {
-		return record, false, storeError(ctx, "read reply", err)
-	}
-
-	if err := json.Unmarshal(blocks, &record.Blocks); err != nil {
-		return record, false, storeError(ctx, "decode blocks", err)
-	}
-
-	record.Reference = ref
-
-	return record, true, nil
+	return store.open(ctx, false)
 }
 
 func (store Store) open(ctx context.Context, writable bool) (*sql.DB, error) {
@@ -176,19 +191,21 @@ func (store Store) open(ctx context.Context, writable bool) (*sql.DB, error) {
 		return nil, storeError(ctx, "resolve database path", err)
 	}
 
-	mode := "ro"
+	query := "mode=ro&_busy_timeout=5000"
 	if writable {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return nil, storeError(ctx, "create database directory", err)
 		}
 
-		mode = "rwc"
+		// Take the write lock before checking the schema. SQLite cannot wait
+		// when two deferred transactions try to upgrade their read locks.
+		query = "mode=rwc&_busy_timeout=5000&_txlock=immediate"
 	}
 
 	location := &url.URL{
 		Scheme:   "file",
 		Path:     path,
-		RawQuery: "mode=" + mode + "&_busy_timeout=5000",
+		RawQuery: query,
 	}
 	db, err := sql.Open("sqlite3", location.String())
 	if err != nil {

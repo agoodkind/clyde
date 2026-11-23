@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"hash"
 	"io"
+	"strings"
 
 	"goodkind.io/clyde/internal/adapter/openai"
 )
@@ -42,4 +43,23 @@ func Fingerprint(visible string, calls []openai.ToolCall) string {
 func writeField(digest hash.Hash, value string) {
 	_, _ = digest.Write(binary.AppendUvarint(nil, uint64(len(value))))
 	_, _ = io.WriteString(digest, value)
+}
+
+// ToolFingerprint identifies the ordered calls in a tool-only Cursor reply.
+//
+// Every call must include its ID before the reply qualifies for lookup.
+//
+//	digest := replay.ToolFingerprint(calls)
+func ToolFingerprint(calls []openai.ToolCall) string {
+	if len(calls) == 0 {
+		return ""
+	}
+
+	for _, call := range calls {
+		if strings.TrimSpace(call.ID) == "" {
+			return ""
+		}
+	}
+
+	return Fingerprint("", calls)
 }

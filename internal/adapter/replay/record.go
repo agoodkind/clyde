@@ -8,6 +8,7 @@ type Record struct {
 	Provider      string
 	Digest        string
 	VisibleDigest string
+	ToolDigest    string
 	Blocks        []Block
 }
 

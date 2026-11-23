@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"goodkind.io/clyde/internal/adapter/openai"
 	"goodkind.io/clyde/internal/adapter/render"
@@ -32,7 +33,11 @@ func saveReply(
 		Provider:      provider,
 		Digest:        replay.Fingerprint(visible, calls),
 		VisibleDigest: replay.TextFingerprint(visible),
+		ToolDigest:    "",
 		Blocks:        make([]replay.Block, 0, len(content.Blocks)),
+	}
+	if len(calls) != 0 && strings.TrimSpace(content.AnswerText()) == "" {
+		record.ToolDigest = replay.ToolFingerprint(calls)
 	}
 
 	for _, block := range content.Blocks {

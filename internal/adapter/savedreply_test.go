@@ -137,6 +137,101 @@ func TestCursorReplyDoesNotPublishReferenceWhenStorageFails(t *testing.T) {
 	}
 }
 
+func TestCursorToolResultContinuesReplyWithoutMarker(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		answer    string
+		continues bool
+	}{
+		{"tool call and generated thinking", "  ", true},
+		{"tool call and model text", "> **💭 Thinking...**", false},
+	} {
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				upstream := newConformanceUpstream(conformanceUsageWithReasoning)
+				upstream.reply = func(w http.ResponseWriter) {
+					w.Header().Set("Content-Type", "text/event-stream")
+					_, _ = w.Write([]byte(toolReplySSE(test.answer)))
+				}
+
+				url := startConformanceServer(t, upstream).cursor + "/v1/chat/completions"
+				const user = `{"role":"user","content":"inspect the file"}`
+				first := postConformance(
+					t,
+					url,
+					`{"model":"gpt-future","stream":true,"messages":[`+user+`]}`,
+				)
+				drainConformanceRequest(t, upstream)
+				if first.status != http.StatusOK ||
+					!strings.Contains(string(first.body), `"id":"call_read"`) ||
+					!strings.Contains(string(first.body), `"name":"read_file"`) ||
+					!strings.Contains(string(first.body), `"arguments":"{}"`) {
+					t.Fatalf(
+						"initial stream did not include the expected tool call: %s",
+						first.body,
+					)
+				}
+
+				visible, before, found := replay.StripReference(
+					cursorReplyText(t, first.body, true),
+				)
+				if !found || !strings.Contains(visible, "> Inspecting the file.") {
+					t.Fatalf(
+						"initial stream omitted the reasoning or reply reference: %s",
+						first.body,
+					)
+				}
+
+				const assistant = `{"role":"assistant","tool_calls":[{"id":"call_read","type":"function","function":{"name":"read_file","arguments":"{}"}}]}`
+				const result = `{"role":"tool","tool_call_id":"call_read","content":"read complete"}`
+				next := postConformance(
+					t,
+					url,
+					`{"model":"gpt-future","messages":[`+user+","+assistant+","+result+`]}`,
+				)
+				drainConformanceRequest(t, upstream)
+				if next.status != http.StatusOK {
+					t.Fatalf("tool continuation returned %d: %s", next.status, next.body)
+				}
+
+				_, after, found := replay.StripReference(cursorReplyText(t, next.body, false))
+				if !found || before.ReplyID == after.ReplyID ||
+					(before.ConversationID == after.ConversationID) != test.continues {
+					t.Fatalf("incorrect tool continuation: before=%+v after=%+v", before, after)
+				}
+			},
+		)
+	}
+}
+
+func toolReplySSE(answer string) string {
+	return strings.Join(
+		[]string{
+			"event: response.output_item.done",
+			`data: {"item":{"type":"reasoning","id":"rs_tool","summary":[{"type":"summary_text","text":"Inspecting the file."}],"encrypted_content":"opaque-tool-reasoning"}}`,
+			"",
+			"event: response.output_text.delta",
+			`data: {"delta":` + strconv.Quote(answer) + `}`,
+			"",
+			"event: response.output_item.added",
+			`data: {"item":{"id":"fc_read","type":"function_call","call_id":"call_read","name":"read_file","arguments":""}}`,
+			"",
+			"event: response.function_call_arguments.delta",
+			`data: {"item_id":"fc_read","delta":"{}"}`,
+			"",
+			"event: response.output_item.done",
+			`data: {"item":{"id":"fc_read","type":"function_call","call_id":"call_read","name":"read_file","arguments":"{}"}}`,
+			"",
+			"event: response.completed",
+			`data: {"type":"response.completed","response":{"id":"resp-tool","usage":` + conformanceUsageWithReasoning + `}}`,
+			"",
+			"",
+		},
+		"\n",
+	)
+}
+
 func TestCursorReplyDoesNotSaveInterruptedStream(t *testing.T) {
 	store := testReplyStore(t)
 	upstream := newConformanceUpstream(conformanceUsageWithReasoning)

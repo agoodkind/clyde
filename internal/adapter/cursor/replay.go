@@ -71,6 +71,10 @@ func prepareHistoricalReply(
 
 	visible, ref, referenced := replay.StripReference(original)
 	if !referenced {
+		if strings.TrimSpace(original) == "" {
+			return recoverToolReply(ctx, log, store, nativeID, message), nil
+		}
+
 		return empty, importLegacyReply(ctx, log, store, message, original)
 	}
 
@@ -95,6 +99,43 @@ func prepareHistoricalReply(
 	message.ReplayParts = parts
 
 	return ref, nil
+}
+
+func recoverToolReply(
+	ctx context.Context,
+	log *slog.Logger,
+	store replay.Store,
+	nativeID string,
+	message *adapteropenai.ChatMessage,
+) replay.Reference {
+	var empty replay.Reference
+	digest := replay.ToolFingerprint(message.ToolCalls)
+	if digest == "" {
+		return empty
+	}
+
+	record, found, err := store.FindToolReply(ctx, nativeID, digest)
+	if err != nil {
+		logReplayMiss(ctx, log, "tool_read_failed")
+
+		return empty
+	}
+
+	if !found {
+		return empty
+	}
+
+	parts := make([]render.SyntheticPart, 0, len(record.Blocks))
+	for _, block := range record.Blocks {
+		if block.Part.Kind == render.SyntheticKindThinking ||
+			block.Part.Kind == render.SyntheticRedactedThinking {
+			parts = append(parts, block.Part)
+		}
+	}
+
+	message.ReplayParts = parts
+
+	return record.Reference
 }
 
 func loadReplyParts(
@@ -131,6 +172,10 @@ func logReplayMiss(ctx context.Context, log *slog.Logger, reason string) {
 
 func assistantText(raw json.RawMessage) (string, bool) {
 	parts, kind := adaptercontent.NormalizeRaw(raw)
+	if kind == adaptercontent.KindEmpty {
+		return "", true
+	}
+
 	if kind != adaptercontent.KindString && kind != adaptercontent.KindParts {
 		return "", false
 	}
@@ -186,6 +231,7 @@ func importLegacyReply(
 		Provider:      "",
 		Digest:        digest,
 		VisibleDigest: replay.TextFingerprint(original),
+		ToolDigest:    "",
 		Blocks:        make([]replay.Block, 0, len(spans)),
 	}
 

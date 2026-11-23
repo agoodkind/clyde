@@ -72,14 +72,17 @@ func (reply *ReplyContent) ToolCalls() []adapteropenai.ToolCall {
 	return finalizeCollectedToolCalls(reply.calls, NativePatchRepresentationRaw)
 }
 
-// SetCollectedText records the final text after provider response formatting.
+// AnswerText returns the model's text outside generated thinking and notices.
 //
-// A formatter can replace the answer (for example, to satisfy a JSON schema).
-// In that case keep the visible thinking before the formatted answer.
+// Only recorded byte ranges count as generated Markdown.
 //
-//	reply.SetCollectedText(answer)
-func (reply *ReplyContent) SetCollectedText(text string) {
-	original := reply.visible.String()
+//	answer := reply.AnswerText()
+func (reply *ReplyContent) AnswerText() string {
+	original := reply.Text()
+	if len(reply.Blocks) == 0 {
+		return original
+	}
+
 	var answer strings.Builder
 	position := 0
 
@@ -89,10 +92,22 @@ func (reply *ReplyContent) SetCollectedText(text string) {
 	}
 
 	answer.WriteString(original[position:])
-	if text == answer.String() {
+
+	return answer.String()
+}
+
+// SetCollectedText records the final text after provider response formatting.
+//
+// A formatter can replace the answer (for example, to satisfy a JSON schema).
+// In that case keep the visible thinking before the formatted answer.
+//
+//	reply.SetCollectedText(answer)
+func (reply *ReplyContent) SetCollectedText(text string) {
+	if text == reply.AnswerText() {
 		return
 	}
 
+	original := reply.Text()
 	reply.visible.Reset()
 
 	for index := range reply.Blocks {

@@ -96,9 +96,10 @@ the conversation ID and reply ID.
 
 When Cursor sends a reply back, Clyde checks its text and tool calls before
 restoring provider metadata. Clyde uses the readable history if the saved
-record is missing or the reply changed. When an older reply still contains
-provider metadata in HTML comments, Clyde imports that metadata when Cursor
-resends the reply.
+record is missing or the reply changed. When Cursor returns only tool calls,
+Clyde looks up the reply by an exact, unique match on those calls. When an
+older reply still contains provider metadata in HTML comments, Clyde imports
+that metadata when Cursor resends the reply.
 
 ## Error Boundary
 

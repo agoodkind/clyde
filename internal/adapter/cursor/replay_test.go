@@ -186,6 +186,13 @@ func TestPrepareReplayResumesToolOnlyReply(t *testing.T) {
 			Function: openai.ToolCallFunction{Name: "Read", Arguments: `{"path":"test"}`},
 		},
 	}
+	thinking := render.SyntheticPart{
+		Kind:      render.SyntheticKindThinking,
+		Origin:    render.OriginCodex,
+		Body:      "choose the read tool",
+		Ref:       "rs_test",
+		Encrypted: "opaque",
+	}
 	err = store.Save(
 		t.Context(),
 		replay.Record{
@@ -193,6 +200,8 @@ func TestPrepareReplayResumesToolOnlyReply(t *testing.T) {
 			Provider:      "codex",
 			Digest:        replay.Fingerprint("", calls),
 			VisibleDigest: replay.TextFingerprint(""),
+			ToolDigest:    replay.ToolFingerprint(calls),
+			Blocks:        []replay.Block{{Start: 0, End: 0, Part: thinking}},
 		},
 	)
 	if err != nil {
@@ -217,9 +226,24 @@ func TestPrepareReplayResumesToolOnlyReply(t *testing.T) {
 		t.Fatalf("continuation reference = %+v", next)
 	}
 
-	if msg := req.Messages[1]; string(msg.Content) != `""` || len(msg.ReplayParts) != 0 ||
-		len(msg.ToolCalls) != 1 {
-		t.Fatalf("unexpected tool-only history: %+v", msg)
+	if msg := req.Messages[1]; string(msg.Content) != `""` || len(msg.ReplayParts) != 1 ||
+		msg.ReplayParts[0] != thinking || len(msg.ToolCalls) != 1 {
+		t.Fatalf("unexpected referenced tool-only history: %+v", msg)
+	}
+
+	req.Messages[1].Content = nil
+	req.Messages[1].ReplayParts = nil
+	next, err = NewIngress().PrepareReplay(t.Context(), log, store, "", &req)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if next.ConversationID != first.ConversationID || next.ReplyID == first.ReplyID {
+		t.Fatalf("tool-only continuation without a reference = %+v", next)
+	}
+
+	if msg := req.Messages[1]; len(msg.ReplayParts) != 1 || msg.ReplayParts[0] != thinking {
+		t.Fatalf("unexpected tool-only history without a reference: %+v", msg)
 	}
 }
 
