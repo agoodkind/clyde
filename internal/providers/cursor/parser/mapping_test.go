@@ -88,6 +88,7 @@ func TestMapComposerBubbleMapsRolesThinkingAndToolOutputGate(t *testing.T) {
 	}
 
 	withoutOutput, include := mapComposerBubble(
+		t.Context(),
 		assistant,
 		conversation.LoadOptions{
 			IncludeSystemPrompts:  false,
@@ -120,6 +121,7 @@ func TestMapComposerBubbleMapsRolesThinkingAndToolOutputGate(t *testing.T) {
 	}
 
 	withOutput, include := mapComposerBubble(
+		t.Context(),
 		assistant,
 		conversation.LoadOptions{
 			IncludeSystemPrompts:  false,
@@ -136,6 +138,7 @@ func TestMapComposerBubbleMapsRolesThinkingAndToolOutputGate(t *testing.T) {
 	}
 
 	user, include := mapComposerBubble(
+		t.Context(),
 		cursorstore.Bubble{
 			BubbleID:      "bubble-user",
 			Type:          cursorstore.BubbleTypeUser,
@@ -167,6 +170,7 @@ func TestMapComposerBubbleCarriesTheStoredWriteTime(t *testing.T) {
 	t.Parallel()
 
 	dated, include := mapComposerBubble(
+		t.Context(),
 		cursorstore.Bubble{
 			BubbleID:       "bubble-dated",
 			Type:           cursorstore.BubbleTypeUser,
@@ -193,6 +197,7 @@ func TestMapComposerBubbleCarriesTheStoredWriteTime(t *testing.T) {
 	}
 
 	undated, include := mapComposerBubble(
+		t.Context(),
 		cursorstore.Bubble{
 			BubbleID:       "bubble-undated",
 			Type:           cursorstore.BubbleTypeUser,
@@ -222,6 +227,7 @@ func TestMapComposerBubbleWrapsNonJSONArgs(t *testing.T) {
 	t.Parallel()
 
 	message, include := mapComposerBubble(
+		t.Context(),
 		cursorstore.Bubble{
 			BubbleID:      "bubble-tool",
 			Type:          cursorstore.BubbleTypeAssistant,
@@ -311,6 +317,7 @@ func TestMappingSkipsEmptyMessages(t *testing.T) {
 	}
 
 	_, includeComposer := mapComposerBubble(
+		t.Context(),
 		cursorstore.Bubble{
 			BubbleID:      "empty",
 			Type:          cursorstore.BubbleTypeAssistant,
@@ -366,6 +373,7 @@ func TestMapComposerBubbleStripsSyntheticEnvelopeExactOutputNoPadding(t *testing
 	t.Parallel()
 
 	message, include := mapComposerBubble(
+		t.Context(),
 		cursorstore.Bubble{
 			BubbleID:      "bubble-notice",
 			Type:          cursorstore.BubbleTypeAssistant,
@@ -394,6 +402,7 @@ func TestMapComposerBubbleNoMarkerByteIdentical(t *testing.T) {
 
 	const plain = "Plain assistant reply with no envelopes at all."
 	message, include := mapComposerBubble(
+		t.Context(),
 		cursorstore.Bubble{
 			BubbleID:      "bubble-plain",
 			Type:          cursorstore.BubbleTypeAssistant,
@@ -441,6 +450,7 @@ func TestMapComposerBubbleUserRoleNeverStripped(t *testing.T) {
 	)
 
 	user, includeUser := mapComposerBubble(
+		t.Context(),
 		cursorstore.Bubble{
 			BubbleID:      "bubble-user-pasted",
 			Type:          cursorstore.BubbleTypeUser,
@@ -470,6 +480,7 @@ func TestMapComposerBubbleUserRoleNeverStripped(t *testing.T) {
 	}
 
 	assistant, includeAssistant := mapComposerBubble(
+		t.Context(),
 		cursorstore.Bubble{
 			BubbleID:      "bubble-assistant-same-text",
 			Type:          cursorstore.BubbleTypeAssistant,
@@ -512,6 +523,7 @@ func TestMapComposerBubbleUnmatchedMarkerNeverStripped(t *testing.T) {
 			t.Parallel()
 			const text = "The closing marker is <!--/clyde-notice-->"
 			message, include := mapComposerBubble(
+				t.Context(),
 				cursorstore.Bubble{
 					BubbleID:      "bubble-mentions-close",
 					Type:          cursorstore.BubbleTypeAssistant,
@@ -553,6 +565,7 @@ func TestMapComposerBubbleUnmatchedMarkerNeverStripped(t *testing.T) {
 			text := "Before.\n\n" + abortedTail // no close marker anywhere
 
 			message, include := mapComposerBubble(
+				t.Context(),
 				cursorstore.Bubble{
 					BubbleID:      "bubble-dangling-open",
 					Type:          cursorstore.BubbleTypeAssistant,
@@ -598,6 +611,7 @@ func TestMapComposerBubbleUnknownTypeNeverStripped(t *testing.T) {
 	)
 
 	message, include := mapComposerBubble(
+		t.Context(),
 		cursorstore.Bubble{
 			BubbleID:      "bubble-unknown-type",
 			Type:          unknownBubbleType,
@@ -635,6 +649,7 @@ func TestMapComposerBubbleIndentedCodeAfterEnvelopeSurvives(t *testing.T) {
 	text := envelope + "    indented code line"
 
 	message, include := mapComposerBubble(
+		t.Context(),
 		cursorstore.Bubble{
 			BubbleID:      "bubble-indented-code",
 			Type:          cursorstore.BubbleTypeAssistant,
@@ -672,6 +687,7 @@ func TestMapComposerBubbleFullyStrippedEnvelopeExcludesMessage(t *testing.T) {
 
 	envelope := adapterrender.FormatSyntheticContent(adapterrender.SyntheticNotice, "just a notice")
 	_, include := mapComposerBubble(
+		t.Context(),
 		cursorstore.Bubble{
 			BubbleID:      "bubble-only-envelope",
 			Type:          cursorstore.BubbleTypeAssistant,
@@ -717,6 +733,7 @@ func TestMapComposerBubbleDualSurfaceReasoningKeepsThinkingFieldSeparate(t *test
 		duplicatedReasoning,
 	)
 	message, include := mapComposerBubble(
+		t.Context(),
 		cursorstore.Bubble{
 			BubbleID:      "bubble-dual-surface",
 			Type:          cursorstore.BubbleTypeAssistant,

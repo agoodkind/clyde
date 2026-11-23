@@ -30,6 +30,7 @@ func MergeEventsWithNativePatchRepresentation(
 		ReasoningContent: "",
 		Refusal:          "",
 		Annotations:      nil,
+		ReplayParts:      nil,
 	}
 	if collected.Reasoning != "" {
 		msg.Reasoning = collected.Reasoning

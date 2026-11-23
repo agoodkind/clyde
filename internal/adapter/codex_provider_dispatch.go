@@ -269,53 +269,19 @@ func (s *Server) dispatchCodexProviderStream(
 			slog.String("alias", alias),
 			slog.Any("err", err),
 		)
+		if writer.reply != nil {
+			aerr := adapterErrInternal("could not complete Cursor reply", err)
+			if writer.headersWritten {
+				_ = writer.writeStreamError(ctx, aerr)
+			} else {
+				s.respondAdapterError(w, r, aerr)
+			}
+		}
 
 		return
 	}
 
-	completedAttrs := codexCompletedAttrs(
-		reqID,
-		alias,
-		usage,
-		result,
-		finishReason,
-		clock.Since(started).Milliseconds(),
-		true,
-	)
-	completedAttrs = append(completedAttrs, corr.Attrs()...)
-	s.log.LogAttrs(
-		ctx,
-		slog.LevelInfo,
-		"adapter.chat.completed",
-		append([]slog.Attr{slog.String("concern", "adapter.chat.render")}, completedAttrs...)...,
-	)
-	adapterruntime.LogTerminal(
-		s.log,
-		ctx,
-		s.deps.RequestEvents,
-		adapterruntime.RequestEvent{
-			Stage:                      adapterruntime.RequestStageCompleted,
-			Provider:                   "codex_direct",
-			Backend:                    resolvedReq.Provider.String(),
-			RequestID:                  reqID,
-			ExecutionID:                adapterruntime.ExecutionIDFromContext(ctx),
-			Alias:                      alias,
-			ModelID:                    alias,
-			Stream:                     true,
-			FinishReason:               finishReason,
-			TokensIn:                   usage.PromptTokens,
-			TokensOut:                  usage.CompletionTokens,
-			CacheReadTokens:            usage.CachedTokens(),
-			CacheCreationTokens:        0,
-			DerivedCacheCreationTokens: result.DerivedCacheCreationTokens,
-			ToolCallCount:              result.ToolCallCount,
-			ToolCallNames:              result.ToolCallNames,
-			HasSubagentToolCall:        result.HasSubagentToolCall,
-			DurationMs:                 clock.Since(started).Milliseconds(),
-			Correlation:                corr,
-			Err:                        "",
-		},
-	)
+	s.logCodexProviderCompletion(ctx, resolvedReq, reqID, started, result, true)
 }
 
 func (s *Server) handleCodexProviderStreamError(
@@ -397,39 +363,33 @@ func (s *Server) dispatchCodexProviderCollect(
 	}
 
 	result.UsageNotices = notices
-	runResult := adaptercodex.RunResult{
-		Usage:                      result.Usage,
-		FinishReason:               finishReason,
-		ReasoningSignaled:          result.ReasoningSignaled,
-		ReasoningVisible:           result.ReasoningVisible,
-		DerivedCacheCreationTokens: result.DerivedCacheCreationTokens,
-		ToolCallCount:              result.ToolCallCount,
-		ToolCallNames:              result.ToolCallNames,
-		HasSubagentToolCall:        result.HasSubagentToolCall,
-		UsageTelemetry: adaptercodex.
-			UsageTelemetry{
-			UsagePresent:               false,
-			InputTokens:                0,
-			OutputTokens:               0,
-			TotalTokens:                0,
-			InputTokensDetailsPresent:  false,
-			CachedTokens:               0,
-			OutputTokensDetailsPresent: false,
-			ReasoningOutputTokens:      0,
-		},
-
-		ResponseID:  "",
-		OutputItems: nil,
+	mergedEvents := collector.events
+	if currentReply(ctx) == nil {
+		mergedEvents = adapterruntime.EventsWithInjectedUsageNotices(ctx, mergedEvents, notices)
 	}
-	mergedEvents := adapterruntime.EventsWithInjectedUsageNotices(ctx, collector.events, notices)
+
 	merged := adaptercodex.MergeEventsWithNativePatchRepresentation(
 		reqID,
 		alias,
 		systemFingerprint,
 		mergedEvents,
-		runResult,
+		codexRunResult(result),
 		nativePatchRepresentationForResolvedCursorRoute(resolvedReq),
 	)
+	if currentReply(ctx) != nil {
+		if err := s.saveCollectedReply(
+			ctx,
+			"codex",
+			&merged,
+			collector.events,
+			notices,
+		); err != nil {
+			s.respondAdapterError(w, r, adapterErrInternal("could not save Cursor reply", err))
+
+			return
+		}
+	}
+
 	usage := result.Usage
 	if resolvedReq.ContextBudget.InputTokens > 0 {
 		usage.MaxTokens = resolvedReq.ContextBudget.InputTokens
@@ -454,6 +414,36 @@ func (s *Server) dispatchCodexProviderCollect(
 	}
 
 	writeJSON(w, mergedBody)
+	result.Usage = usage
+	s.logCodexProviderCompletion(ctx, resolvedReq, reqID, started, result, false)
+}
+
+func codexRunResult(result adapterprovider.Result) adaptercodex.RunResult {
+	var runResult adaptercodex.RunResult
+	runResult.Usage = result.Usage
+	runResult.FinishReason = normalizedProviderFinishReason(result)
+	runResult.ReasoningSignaled = result.ReasoningSignaled
+	runResult.ReasoningVisible = result.ReasoningVisible
+	runResult.DerivedCacheCreationTokens = result.DerivedCacheCreationTokens
+	runResult.ToolCallCount = result.ToolCallCount
+	runResult.ToolCallNames = result.ToolCallNames
+	runResult.HasSubagentToolCall = result.HasSubagentToolCall
+
+	return runResult
+}
+
+func (s *Server) logCodexProviderCompletion(
+	ctx context.Context,
+	resolved adapterresolver.ResolvedRequest,
+	reqID string,
+	started time.Time,
+	result adapterprovider.Result,
+	stream bool,
+) {
+	alias := resolvedRequestAlias(&resolved)
+	usage := result.Usage
+	finishReason := normalizedProviderFinishReason(result)
+	corr := correlation.FromContext(ctx)
 	completedAttrs := codexCompletedAttrs(
 		reqID,
 		alias,
@@ -461,7 +451,7 @@ func (s *Server) dispatchCodexProviderCollect(
 		result,
 		finishReason,
 		clock.Since(started).Milliseconds(),
-		false,
+		stream,
 	)
 	completedAttrs = append(completedAttrs, corr.Attrs()...)
 	s.log.LogAttrs(
@@ -477,12 +467,12 @@ func (s *Server) dispatchCodexProviderCollect(
 		adapterruntime.RequestEvent{
 			Stage:                      adapterruntime.RequestStageCompleted,
 			Provider:                   "codex_direct",
-			Backend:                    resolvedReq.Provider.String(),
+			Backend:                    resolved.Provider.String(),
 			RequestID:                  reqID,
 			ExecutionID:                adapterruntime.ExecutionIDFromContext(ctx),
 			Alias:                      alias,
 			ModelID:                    alias,
-			Stream:                     false,
+			Stream:                     stream,
 			FinishReason:               finishReason,
 			TokensIn:                   usage.PromptTokens,
 			TokensOut:                  usage.CompletionTokens,

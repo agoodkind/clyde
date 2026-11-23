@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
+	"goodkind.io/clyde/internal/adapter/replay"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/gklog/correlation"
@@ -252,6 +254,14 @@ func TestProviderStreamWriterCursorIngressPreservesDualSurfaceReasoning(t *testi
 	srv, _ := newLoggingServer(t, config.LoggingConfig{})
 	rec := httptest.NewRecorder()
 	ctx := context.WithValue(context.Background(), ingressLabelKey{}, "cursor")
+	ctx = context.WithValue(
+		ctx,
+		pendingReplyKey{},
+		&pendingReply{
+			ref:   replay.Reference{ConversationID: "conversation", ReplyID: "reply"},
+			store: replay.Store{Path: filepath.Join(t.TempDir(), "replay.db")},
+		},
+	)
 	writer, err := newProviderStreamWriter(
 		ctx,
 		srv,
@@ -289,8 +299,8 @@ func TestProviderStreamWriterCursorIngressPreservesDualSurfaceReasoning(t *testi
 		t.Fatalf("body missing reasoning_content: %s", body)
 	}
 
-	if !strings.Contains(body, "clyde-thinking") {
-		t.Fatalf("body missing synthetic thinking markers: %s", body)
+	if strings.Contains(body, "clyde-thinking") || !strings.Contains(body, "💭 Thinking...") {
+		t.Fatalf("expected a visible thinking heading without a hidden envelope: %s", body)
 	}
 }
 

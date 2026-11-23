@@ -250,12 +250,12 @@ func reasoningEventsFromItem(
 				out,
 				adapterrender.ReasoningDelta{
 					Text:          part.Text,
-					ReasoningKind: "summary",
+					ReasoningKind: reasoningKindSummary,
 					SummaryIndex:  &idx,
 					Signature:     "",
 					RedactedData:  "",
 					ItemID:        itemID,
-					ItemType:      "reasoning",
+					ItemType:      string(codexItemTypeReasoning),
 				},
 			)
 		}
@@ -278,7 +278,7 @@ func reasoningEventsFromItem(
 						Signature:     "",
 						RedactedData:  "",
 						ItemID:        itemID,
-						ItemType:      "reasoning",
+						ItemType:      string(codexItemTypeReasoning),
 					},
 				)
 			}

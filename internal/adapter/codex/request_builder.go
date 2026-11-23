@@ -291,7 +291,14 @@ func emitReasoningItemsFromAssistantContent(
 	contentText string,
 	cfg RequestBuilderConfig,
 ) []codexwire.InputItem {
-	parts := adapterrender.ExtractSyntheticParts(contentText)
+	return emitReasoningItems(out, adapterrender.ExtractSyntheticParts(contentText), cfg)
+}
+
+func emitReasoningItems(
+	out []codexwire.InputItem,
+	parts []adapterrender.SyntheticPart,
+	cfg RequestBuilderConfig,
+) []codexwire.InputItem {
 	if len(parts) == 0 {
 		return out
 	}

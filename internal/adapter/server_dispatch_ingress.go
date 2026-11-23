@@ -2,11 +2,13 @@ package adapter
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 
 	"goodkind.io/clyde/internal/adapter/ingresscontract"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
+	"goodkind.io/clyde/internal/logevent"
 	"goodkind.io/clyde/internal/slogger"
 	"goodkind.io/gklog/correlation"
 )
@@ -17,6 +19,62 @@ import (
 // vendor-typed log attributes goes through ingress.LogAttrs in this
 // file, and the rest of the dispatcher in server_dispatch.go speaks
 // only ChatRequest, ResolvedAlias, and the typed adapter types.
+
+func (s *Server) recordChatIngress(
+	ctx context.Context,
+	request *http.Request,
+	corr correlation.Context,
+	ingress ingresscontract.IngressContract,
+) (context.Context, *http.Request, correlation.Context, *logevent.Recorder) {
+	ctx, request, corr, facets := applyHeaderIngressContext(ctx, request, corr, ingress)
+	recorder := s.beginChatLogRecorder(request, corr)
+	s.emitChatRequestLeg(
+		ctx,
+		recorder,
+		logevent.LegAdapterIngress,
+		logevent.PhaseStarted,
+		logevent.StatusOK,
+		facets,
+	)
+
+	return ctx, request, corr, recorder
+}
+
+func (s *Server) resolveChatForDispatch(
+	ctx context.Context,
+	corr correlation.Context,
+	req ChatRequest,
+	ingress ingresscontract.IngressContract,
+	ingressCtx ingresscontract.IngressContext,
+	recorder *logevent.Recorder,
+	bodyFacets []logevent.Facet,
+) (adapterresolver.ResolvedRequest, error) {
+	resolved, err := resolveCursorChatRequest(
+		openAIIngressSurface(ctx),
+		req,
+		adapterresolver.NewModelRegistryAdapter(s.modelRegistry()),
+	)
+	if err == nil {
+		resolved.RequestID = corr.RequestID
+		resolved.Correlation = corr
+		effort := resolved.Effort.String()
+		s.logChatResolved(ctx, corr, corr.RequestID, req, ingressCtx, ingress, &resolved, effort)
+		s.emitChatModelResolveLeg(ctx, recorder, corr, &resolved, effort, bodyFacets)
+		s.logResolverOutcome(ctx, corr, corr.RequestID, req, ingressCtx, &resolved, nil)
+
+		return resolved, nil
+	}
+
+	s.logChatResolveFailed(ctx, corr, corr.RequestID, req, ingressCtx, ingress, err)
+	recorder.EmitError(ctx, "model_resolve_failed", err.Error())
+	if invalidRequest, isInvalid := errors.AsType[*adapterresolver.InvalidRequestError](
+		err,
+	); isInvalid {
+		return resolved, adapterErrInvalidRequest(invalidRequest.Error(), err)
+	}
+
+	return resolved, adapterErrModelNotFound(err.Error())
+}
 
 // logChatResolveFailed records a model lookup failure with vendor
 // ingress context. Vendor-specific log attrs come back through the

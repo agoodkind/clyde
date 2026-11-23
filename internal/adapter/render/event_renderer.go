@@ -165,6 +165,7 @@ type RendererState struct {
 // EventRenderer converts normalized adapter events into OpenAI-compatible stream
 // chunks while preserving synthetic reasoning state when enabled.
 type EventRenderer struct {
+	reply                     *ReplyContent
 	createdUnix               int64
 	modelAlias                string
 	reqID                     string
@@ -297,6 +298,7 @@ func NewEventRendererWithContextAndOptions(
 	log = slogger.WithConcern(log, slogger.ConcernAdapterChatRender)
 
 	return &EventRenderer{
+		reply:               nil,
 		createdUnix:         clock.Now().Unix(),
 		modelAlias:          modelAlias,
 		reqID:               reqID,
@@ -446,7 +448,7 @@ func (r *EventRenderer) handleReasoningSignaled(ev ReasoningSignaled) []adaptero
 
 	// Open the synthetic content block that makes reasoning visible in Cursor BYOK.
 	// Later reasoning deltas fill it; otherwise finish closes an empty block.
-	if r.reasoningVisible || r.reasoningOpen {
+	if r.reasoningOpen || (r.reasoningVisible && r.reply == nil) {
 		return nil
 	}
 
@@ -492,12 +494,21 @@ func (r *EventRenderer) handleReasoningDelta(ev ReasoningDelta) []adapteropenai.
 // and the Anthropic per-block signature. Both are independently optional;
 // each provider populates only the field it owns.
 func (r *EventRenderer) handleReasoningFinished(ev ReasoningFinished) []adapteropenai.StreamChunk {
+	if r.reply != nil {
+		r.captureReasoningItemIDFromString(ev.ItemID)
+	}
+
 	if enc := strings.TrimSpace(ev.EncryptedContent); enc != "" {
 		r.lastReasoningEncrypted = enc
 	}
 
 	if sig := strings.TrimSpace(ev.Signature); sig != "" {
 		r.lastReasoningSignature = sig
+	}
+
+	if r.reply != nil && !r.reasoningOpen && ev.EncryptedContent != "" {
+		r.reply.start = r.reply.visible.Len()
+		r.reasoningOpen = true
 	}
 
 	if r.reasoningRenderMode == ReasoningRenderModeReasoningContentOnly {
@@ -522,13 +533,13 @@ func (r *EventRenderer) handleReasoningFinished(ev ReasoningFinished) []adaptero
 // handleAssistantTextDelta closes any open reasoning block and emits the
 // assistant text chunk.
 func (r *EventRenderer) handleAssistantTextDelta(ev TextDelta) []adapteropenai.StreamChunk {
-	return r.appendReasoningCloseAnd(r.renderText(ev.Text))
+	return renderedChunks(r.renderReasoningClose(), r.renderText(ev.Text))
 }
 
 // handleAssistantRefusalDelta closes any open reasoning block and emits the
 // refusal chunk.
 func (r *EventRenderer) handleAssistantRefusalDelta(ev RefusalDelta) []adapteropenai.StreamChunk {
-	return r.appendReasoningCloseAnd(r.renderRefusal(ev.Text))
+	return renderedChunks(r.renderReasoningClose(), r.renderRefusal(ev.Text))
 }
 
 // handleToolCallDelta closes any open reasoning block and emits the tool call
@@ -539,7 +550,7 @@ func (r *EventRenderer) handleToolCallDelta(ev ToolCallDelta) []adapteropenai.St
 		toolCalls = r.renderNativePatchToolCalls(toolCalls, *ev.NativePatchInput)
 	}
 
-	return r.appendReasoningCloseAnd(r.renderToolCalls(toolCalls))
+	return renderedChunks(r.renderReasoningClose(), r.renderToolCalls(toolCalls))
 }
 
 func (r *EventRenderer) renderNativePatchToolCalls(
@@ -589,14 +600,12 @@ func (r *EventRenderer) renderJSONPatchFragment(index int, patch NativePatchInpu
 	return arguments
 }
 
-// appendReasoningCloseAnd prepends a reasoning-close chunk (when one is
-// emitted) ahead of the supplied chunk, returning the ordered slice. Either
-// chunk may be nil.
-func (r *EventRenderer) appendReasoningCloseAnd(
+func renderedChunks(
+	closeChunk *adapteropenai.StreamChunk,
 	chunk *adapteropenai.StreamChunk,
 ) []adapteropenai.StreamChunk {
 	var out []adapteropenai.StreamChunk
-	if closeChunk := r.renderReasoningClose(); closeChunk != nil {
+	if closeChunk != nil {
 		out = append(out, *closeChunk)
 	}
 
@@ -679,6 +688,10 @@ func (r *EventRenderer) renderToolCalls(
 }
 
 func (r *EventRenderer) baseChunk(delta adapteropenai.StreamDelta) adapteropenai.StreamChunk {
+	if r.reply != nil {
+		r.reply.record(delta)
+	}
+
 	return adapteropenai.StreamChunk{
 		ID:      r.reqID,
 		Object:  "chat.completion.chunk",

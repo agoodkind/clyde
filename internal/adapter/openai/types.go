@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	adaptercontent "goodkind.io/clyde/internal/adapter/content"
 	"goodkind.io/clyde/internal/adapter/errcontract"
 )
 
@@ -264,6 +265,9 @@ type ChatMessage struct {
 	ReasoningContent string              `json:"reasoning_content,omitempty"`
 	Refusal          string              `json:"refusal,omitempty"`
 	Annotations      []MessageAnnotation `json:"annotations,omitempty"`
+	// ReplayParts contains the reply segments resolved by the ingress.
+	// A nil slice lets the provider apply its usual wire translation.
+	ReplayParts []adaptercontent.ReplayPart `json:"-"`
 }
 
 // MessageAnnotation is part of Clyde's typed adapter surface.

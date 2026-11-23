@@ -27,6 +27,8 @@ type providerStreamWriter struct {
 	headersWritten    bool
 	flusher           http.Flusher
 	renderer          *adapterrender.EventRenderer
+	reply             *adapterrender.ReplyContent
+	provider          string
 	reqID             string
 	modelAlias        string
 	logContext        func() context.Context
@@ -98,7 +100,8 @@ func newProviderStreamWriterWithOptions(
 	flusher, _ := w.(http.Flusher)
 	renderOptions.ReasoningRenderMode = streamReasoningRenderMode(ctx)
 
-	return &providerStreamWriter{
+	writer := &providerStreamWriter{
+		reply:             nil,
 		sse:               sse,
 		systemFingerprint: systemFingerprint,
 		flusher:           flusher,
@@ -111,6 +114,7 @@ func newProviderStreamWriterWithOptions(
 			renderOptions,
 		),
 		reqID:           reqID,
+		provider:        backend,
 		modelAlias:      modelAlias,
 		logContext:      func() context.Context { return ctx },
 		log:             slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPEgress),
@@ -119,7 +123,12 @@ func newProviderStreamWriterWithOptions(
 		streamChunkSeq:  0,
 		onStreamOpened:  nil,
 		documentedUsage: listenerFollowsDocumentedContract(ctx),
-	}, nil
+	}
+	if currentReply(ctx) != nil {
+		writer.reply = writer.renderer.CaptureReply()
+	}
+
+	return writer, nil
 }
 
 func (p *providerStreamWriter) context() context.Context {
@@ -424,21 +433,8 @@ func (p *providerStreamWriter) finalizeStream(
 		return err
 	}
 
-	for _, notice := range result.UsageNotices {
-		includeRole := p == nil || p.renderer == nil || !p.renderer.HasEmittedRole()
-		if err := p.writeRenderedChunk(
-			ctx,
-			adapterruntime.OpenAINoticeChunk(
-				p.reqID,
-				p.modelAlias,
-				adapterruntime.FormattedNoticeText(notice.Text),
-				includeRole,
-			),
-		); err != nil {
-			return err
-		}
-
-		adapterruntime.LogNoticeEmission(ctx, notice, "stream_finalized")
+	if err := p.finishReplyOutput(ctx, result.UsageNotices); err != nil {
+		return err
 	}
 
 	finishReason := normalizedProviderFinishReason(result)
@@ -504,6 +500,48 @@ func (p *providerStreamWriter) finalizeStream(
 	}
 
 	return p.writeStreamDone(ctx)
+}
+
+func (p *providerStreamWriter) finishReplyOutput(
+	ctx context.Context,
+	notices []adapterruntime.UsageNotice,
+) error {
+	formatNotice := adapterruntime.FormattedNoticeText
+	if p.reply != nil {
+		if chunk := p.renderer.FinishReply(); chunk != nil {
+			if err := p.writeRenderedChunk(ctx, *chunk); err != nil {
+				return err
+			}
+		}
+
+		formatNotice = p.reply.AppendNotice
+	}
+
+	for _, notice := range notices {
+		if err := p.writeContent(ctx, formatNotice(notice.Text)); err != nil {
+			return err
+		}
+
+		adapterruntime.LogNoticeEmission(ctx, notice, "stream_finalized")
+	}
+
+	if p.reply == nil {
+		return nil
+	}
+
+	marker, err := saveReply(ctx, p.log, p.provider, p.reply, p.reply.ToolCalls())
+	if err != nil {
+		return err
+	}
+
+	return p.writeContent(ctx, marker)
+}
+
+func (p *providerStreamWriter) writeContent(ctx context.Context, text string) error {
+	includeRole := p.renderer == nil || !p.renderer.HasEmittedRole()
+	chunk := adapterruntime.OpenAINoticeChunk(p.reqID, p.modelAlias, text, includeRole)
+
+	return p.writeRenderedChunk(ctx, chunk)
 }
 
 // finalizeDocumentedStream writes the finish chunk without usage. When the

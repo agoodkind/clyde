@@ -103,6 +103,19 @@ func appendAssistantInput(
 		input = append(input, functionCallItem(tc, toolIDs))
 	}
 
+	if msg.ReplayParts != nil {
+		input = emitReasoningItems(input, msg.ReplayParts, cfg)
+		text := sanitizeAssistantParts(msg.ReplayParts, strategy, cfg.RoundTripEncrypted)
+		if strings.TrimSpace(text) != "" {
+			input = append(
+				input,
+				MessageContent("assistant", string(codexwire.ContentItemOutputText), text),
+			)
+		}
+
+		return input
+	}
+
 	input = emitReasoningItemsFromAssistantContent(input, rawText, cfg)
 	if content := codexContentFromRaw(
 		msg.Content,

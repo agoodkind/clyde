@@ -527,13 +527,17 @@ func openAIMessageToAssistantBlocks(
 	parts, _ := normalizeContent(msg.Content)
 	var blocks []AnthContentBlock
 
-	for partIdx, p := range parts {
-		partBlocks, err := assistantPartToBlocks(msgIdx, partIdx, p, inboundThinkingStrategy)
-		if err != nil {
-			return nil, err
-		}
+	if msg.ReplayParts != nil {
+		blocks = materializeAssistantParts(msg.ReplayParts, inboundThinkingStrategy)
+	} else {
+		for partIdx, p := range parts {
+			partBlocks, err := assistantPartToBlocks(msgIdx, partIdx, p, inboundThinkingStrategy)
+			if err != nil {
+				return nil, err
+			}
 
-		blocks = append(blocks, partBlocks...)
+			blocks = append(blocks, partBlocks...)
+		}
 	}
 
 	for _, tc := range msg.ToolCalls {
@@ -653,7 +657,16 @@ func materializeSyntheticAssistantText(
 	text string,
 	inboundThinkingStrategy adapterrender.MaterializationStrategy,
 ) []AnthContentBlock {
-	parts := adapterrender.ExtractSyntheticParts(text)
+	return materializeAssistantParts(
+		adapterrender.ExtractSyntheticParts(text),
+		inboundThinkingStrategy,
+	)
+}
+
+func materializeAssistantParts(
+	parts []adapterrender.SyntheticPart,
+	inboundThinkingStrategy adapterrender.MaterializationStrategy,
+) []AnthContentBlock {
 	materialized := adapterrender.MaterializeSyntheticParts(parts, inboundThinkingStrategy)
 	var blocks []AnthContentBlock
 
@@ -726,7 +739,7 @@ func nativeThinkingBlock(mp adapterrender.MaterializedPart) (AnthContentBlock, b
 			return nil, false
 		}
 
-		return ThinkingBlock{Thinking: body, Signature: mp.Signature}, true
+		return ThinkingBlock{Thinking: mp.Body, Signature: mp.Signature}, true
 	}
 
 	log.Debug(

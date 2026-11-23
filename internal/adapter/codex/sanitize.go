@@ -62,7 +62,18 @@ func sanitizeForUpstreamCacheWithEncryptedMode(
 	strategy adapterrender.MaterializationStrategy,
 	encryptedMode RoundTripEncrypted,
 ) string {
-	parts := adapterrender.ExtractSyntheticParts(text)
+	return sanitizeAssistantParts(
+		adapterrender.ExtractSyntheticParts(text),
+		strategy,
+		encryptedMode,
+	)
+}
+
+func sanitizeAssistantParts(
+	parts []adapterrender.SyntheticPart,
+	strategy adapterrender.MaterializationStrategy,
+	encryptedMode RoundTripEncrypted,
+) string {
 	if len(parts) == 1 && parts[0].Kind == adapterrender.SyntheticKindText {
 		return parts[0].Body
 	}
