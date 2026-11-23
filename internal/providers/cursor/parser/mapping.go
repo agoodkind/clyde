@@ -1,12 +1,12 @@
 package parser
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"strings"
 	"time"
 
-	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	"goodkind.io/clyde/internal/conversation"
 	cursorjsonl "goodkind.io/clyde/internal/providers/cursor/jsonl"
 	cursorstore "goodkind.io/clyde/internal/providers/cursor/store"
@@ -27,6 +27,7 @@ func mapJSONLMessage(
 ) (transcript.Message, bool) {
 	defer transcript.ContainMappingPanic()
 	textParts := make([]string, 0)
+	thinkingParts := make([]string, 0)
 	tools := make([]transcript.ToolCall, 0)
 	stamped := time.Time{}
 	injected := false
@@ -35,13 +36,13 @@ func mapJSONLMessage(
 		switch part.Type {
 		case cursorjsonl.PartTypeText:
 			text := part.Text
-			// Clyde injects synthetic envelopes into the assistant stream
-			// only, so stripping is scoped to an assistant turn. Running it
-			// on a user turn would risk deleting part of what the user
-			// actually wrote, e.g. a pasted transcript or source file that
-			// happens to quote the marker syntax.
+			// Users can quote Clyde's replay syntax in their own messages.
 			if message.Role == cursorjsonl.RoleAssistant {
-				text = stripClydeSyntheticEnvelopes(text)
+				var thinking string
+				text, thinking = projectAssistantText(context.Background(), text, "")
+				if thinking != "" {
+					thinkingParts = append(thinkingParts, thinking)
+				}
 			}
 
 			// Cursor frames a user turn in its own envelope, so the stored
@@ -99,20 +100,14 @@ func mapJSONLMessage(
 		visibility = transcript.MessageVisibilityMetaOnly
 	}
 
-	text := strings.Join(textParts, "\n")
-	// A turn Cursor recorded as failed or aborted, or one that ended at a boundary
-	// Clyde could not read, must not reach a reader as an ordinary finished
-	// answer. The transcript message model carries no turn-outcome field, so the
-	// marker goes in the text, where every renderer already shows it.
+	// Transcript renderers display incomplete turn outcomes in the message text.
 	if marker := turnOutcomeMarker(message.Outcome); marker != "" {
-		if text == "" {
-			text = marker
-		} else {
-			text += "\n" + marker
-		}
+		textParts = append(textParts, marker)
 	}
 
-	if text == "" && len(tools) == 0 {
+	text := strings.Join(textParts, "\n")
+	thinking := strings.Join(thinkingParts, "\n\n")
+	if text == "" && thinking == "" && len(tools) == 0 {
 		return emptyMessage(), false
 	}
 
@@ -125,7 +120,7 @@ func mapJSONLMessage(
 		Compaction:        nil,
 		Timestamp:         stamped,
 		Text:              text,
-		Thinking:          "",
+		Thinking:          thinking,
 		HasTools:          len(tools) > 0,
 		Tools:             tools,
 		Attachments:       nil,
@@ -134,8 +129,8 @@ func mapJSONLMessage(
 }
 
 // turnOutcomeMarker renders what the transcript said about how a turn ended.
-// A turn that simply ran into the next role change, or into the end of the file,
-// gets no marker, because the artifact says nothing about it either way.
+// Cursor does not report an outcome when a role change or the end of the file
+// ends the turn.
 func turnOutcomeMarker(outcome cursorjsonl.TurnOutcome) string {
 	if outcome.Uncertain {
 		return turnBoundaryUnreadableMarker
@@ -163,13 +158,14 @@ const (
 )
 
 func mapComposerBubble(
+	ctx context.Context,
 	bubble cursorstore.Bubble,
 	opts conversation.LoadOptions,
 ) (transcript.Message, bool) {
 	defer transcript.ContainMappingPanic()
-	role := "assistant"
+	role := cursorjsonl.RoleAssistant
 	if bubble.Type == cursorstore.BubbleTypeUser {
-		role = "user"
+		role = cursorjsonl.RoleUser
 	}
 
 	tools := make([]transcript.ToolCall, 0)
@@ -198,25 +194,15 @@ func mapComposerBubble(
 		)
 	}
 
-	// Cursor persists whatever Clyde's MITM/BYOK ingress streamed into
-	// delta.content as an ordinary bubble, so a prior turn's synthetic
-	// envelope (thinking, notice, redacted-thinking) reads back here
-	// looking like genuine assistant prose unless it is stripped before
-	// Clyde re-ingests its own conversation. Clyde injects only into the
-	// assistant stream, so stripping requires bubble.Type to say assistant
-	// explicitly, rather than merely "not user": a bubble whose type is
-	// neither (a partial write, or a future value this parser does not
-	// yet know) must not fall into the destructive branch by default. A
-	// match on anything other than a confirmed assistant bubble is the
-	// user's own text (e.g. a pasted transcript or source file quoting the
-	// marker syntax), not Clyde's content, and stripping it could delete
-	// part of what the user actually wrote, up to the entire message.
+	// Clyde adds replay references and visible thinking only to the assistant
+	// stream. Require an explicit assistant type before removing either.
 	text := bubble.Text
+	thinking := bubble.Thinking.Text
 	if bubble.Type == cursorstore.BubbleTypeAssistant {
-		text = stripClydeSyntheticEnvelopes(bubble.Text)
+		text, thinking = projectAssistantText(ctx, text, thinking)
 	}
 
-	if text == "" && bubble.Thinking.Text == "" && len(tools) == 0 {
+	if text == "" && thinking == "" && len(tools) == 0 {
 		return emptyMessage(), false
 	}
 
@@ -229,7 +215,7 @@ func mapComposerBubble(
 		Compaction:        nil,
 		Timestamp:         composerBubbleTimestamp(bubble.CreatedAt),
 		Text:              text,
-		Thinking:          bubble.Thinking.Text,
+		Thinking:          thinking,
 		HasTools:          len(tools) > 0,
 		Tools:             tools,
 		Attachments:       nil,
@@ -238,14 +224,11 @@ func mapComposerBubble(
 }
 
 // composerBubbleTimestamp reads the write time Cursor stored on a bubble. The
-// value is the same one that orders the chat, so a message that carries it in
-// one place and not the other would be describing two different conversations,
-// which is why both sides go through [cursorstore.OrderableTimestamp].
+// message mapper and the chat sorter both accept the same timestamps through
+// [cursorstore.OrderableTimestamp].
 //
-// A row with no timestamp keeps the zero time rather than an invented one. A row
-// carrying one this build cannot parse also keeps the zero time, and says so:
-// that is a value Cursor wrote and Clyde did not understand, which is worth
-// knowing about and is not the same as a row that carried nothing.
+// The mapper returns the zero time for a missing or invalid timestamp. It
+// logs the invalid value if Cursor supplied one.
 func composerBubbleTimestamp(createdAt string) time.Time {
 	// Ordering decides which stored values it can place a message by, so asking it
 	// first is what keeps the two from disagreeing. Parsing here independently
@@ -292,21 +275,20 @@ func mapLegacyBubble(
 	var role string
 	switch bubble.Type {
 	case cursorstore.LegacyChatRoleUser:
-		role = "user"
+		role = cursorjsonl.RoleUser
 	case cursorstore.LegacyChatRoleAssistant:
-		role = "assistant"
+		role = cursorjsonl.RoleAssistant
 	default:
 		return emptyMessage(), false
 	}
 
-	// See mapComposerBubble: Clyde injects only into the assistant stream,
-	// so a user bubble is never stripped.
 	text := bubble.Text
-	if role == "assistant" {
-		text = stripClydeSyntheticEnvelopes(bubble.Text)
+	thinking := ""
+	if role == cursorjsonl.RoleAssistant {
+		text, thinking = projectAssistantText(context.Background(), text, "")
 	}
 
-	if text == "" {
+	if text == "" && thinking == "" {
 		return emptyMessage(), false
 	}
 
@@ -319,7 +301,7 @@ func mapLegacyBubble(
 		Compaction:        nil,
 		Timestamp:         time.Time{},
 		Text:              text,
-		Thinking:          "",
+		Thinking:          thinking,
 		HasTools:          false,
 		Tools:             nil,
 		Attachments:       nil,
@@ -343,51 +325,6 @@ func emptyMessage() transcript.Message {
 		Attachments:       nil,
 		TextParts:         nil,
 	}
-}
-
-// stripClydeSyntheticEnvelopes removes every Clyde-owned synthetic content
-// envelope (reasoning, notice, redacted-thinking) from Cursor-owned
-// assistant message text, keeping only the surrounding prose. Kept text
-// segments are joined with a blank line, because an envelope removed from
-// between two prose spans leaves no separator of its own: the open marker
-// carries no leading newline and the close marker's trailing blank line is
-// discarded as decoration, so concatenating the surviving spans directly
-// would fuse the end of one into the start of the next.
-//
-// Clyde's MITM proxy and BYOK ingress inject these envelopes into the
-// assistant delta.content stream Cursor renders; Cursor's app then persists
-// that stream verbatim as an ordinary bubble or transcript line. Left
-// unstripped, a prior turn's injected envelope reads back through this
-// parser as if it were genuine conversation content. [render.ExtractSyntheticParts]
-// is the single parser for the marker format; this helper never re-parses
-// or matches the marker text itself.
-//
-// Callers must apply this to assistant-authored text only. Clyde injects
-// envelopes into the assistant stream alone, so a marker match on a user
-// turn is never Clyde's own content; it is the user's own text (e.g. a
-// pasted transcript or source file quoting the marker syntax), and
-// stripping it there would delete part of what the user actually wrote.
-//
-// Text is unchanged unless the extractor finds a complete open-and-close
-// pair somewhere in it (the single-part, same-body fast path covers both
-// "no marker at all" and "a marker present but never paired"). A marker
-// with no matching counterpart is equally consistent with prose that
-// quotes or discusses the marker syntax as it is with a genuinely
-// truncated envelope, so it is left as ordinary text rather than assumed
-// to be Clyde's own content and removed.
-func stripClydeSyntheticEnvelopes(text string) string {
-	parts := adapterrender.ExtractSyntheticParts(text)
-
-	textBodies := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if part.Kind != adapterrender.SyntheticKindText {
-			continue
-		}
-
-		textBodies = append(textBodies, part.Body)
-	}
-
-	return strings.Join(textBodies, "\n\n")
 }
 
 func cloneRaw(raw json.RawMessage) json.RawMessage {

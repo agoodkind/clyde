@@ -78,9 +78,18 @@ func (s *Server) dispatchAnthropicProviderCollect(
 
 	result.UsageNotices = notices
 	finalResponse := *result.FinalResponse
-	updated, _ := adapterruntime.AppendUsageNoticesToResponse(ctx, finalResponse, notices)
-	if len(notices) > 0 {
-		finalResponse = updated
+	if currentReply(ctx) != nil {
+		if err := s.saveCollectedReply(
+			ctx,
+			"anthropic",
+			&finalResponse,
+			collector.events,
+			notices,
+		); err != nil {
+			return adapterErrInternal("could not save Cursor reply", err)
+		}
+	} else if len(notices) != 0 {
+		finalResponse, _ = adapterruntime.AppendUsageNoticesToResponse(ctx, finalResponse, notices)
 	}
 
 	respBody, err := marshalChatResponseForListener(ctx, finalResponse)
@@ -170,6 +179,13 @@ func (s *Server) dispatchAnthropicProviderStream(
 		slog.Int("usage_total_tokens", result.Usage.TotalTokens),
 	)
 	if err := streamWriter.finalizeStream(ctx, result, includeUsage); err != nil {
+		if streamWriter.reply != nil && streamWriter.headersWritten {
+			return streamWriter.writeStreamError(
+				ctx,
+				adapterErrInternal("could not complete Cursor reply", err),
+			)
+		}
+
 		return adapterErrUpstreamFailed("anthropic", err.Error(), err)
 	}
 
@@ -193,6 +209,10 @@ func (s *Server) handleAnthropicStreamRunErr(
 	includeUsage bool,
 ) error {
 	aerr := anthropicProviderAdapterError(runErr)
+	if streamWriter.reply != nil && streamWriter.headersWritten {
+		return streamWriter.writeStreamError(ctx, aerr)
+	}
+
 	if !streamWriter.headersWritten {
 		s.log.LogAttrs(
 			ctx,

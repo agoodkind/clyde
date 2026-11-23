@@ -737,7 +737,7 @@ func composerSourceMessages(
 		header,
 		func(bubble cursorstore.Bubble) bool {
 			kept[bubble.BubbleID] = true
-			mapped, include := mapComposerBubble(bubble, opts)
+			mapped, include := mapComposerBubble(ctx, bubble, opts)
 			if include {
 				source.Messages = append(source.Messages, mapped)
 				key, _ := bubbleChronologyKey(bubble)
@@ -790,7 +790,7 @@ func composerSourceMessages(
 				return nil
 			}
 
-			if mapped, include := mapComposerBubble(bubble, opts); include {
+			if mapped, include := mapComposerBubble(ctx, bubble, opts); include {
 				source.Copies = append(source.Copies, mapped)
 				copyKeys = append(copyKeys, key)
 			}

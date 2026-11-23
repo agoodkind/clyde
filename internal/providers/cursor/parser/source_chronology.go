@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	cursorjsonl "goodkind.io/clyde/internal/providers/cursor/jsonl"
 	cursorstore "goodkind.io/clyde/internal/providers/cursor/store"
 )
 
@@ -45,9 +46,9 @@ func bubbleChronologyKey(bubble cursorstore.Bubble) (chronologyKey, bool) {
 	var role string
 	switch bubble.Type {
 	case cursorstore.BubbleTypeUser:
-		role = "user"
+		role = cursorjsonl.RoleUser
 	case cursorstore.BubbleTypeAssistant:
-		role = "assistant"
+		role = cursorjsonl.RoleAssistant
 	default:
 		return chronologyKey{role: "", text: ""}, false
 	}
@@ -76,7 +77,7 @@ func nativeChronologyKeys(native cursorstore.NativeToolCalls) map[chronologyKey]
 
 func nativeChronologyKey(message cursorstore.NativeMessage) (chronologyKey, bool) {
 	if message.Missing || message.Text == "" ||
-		(message.Role != "user" && message.Role != "assistant") {
+		(message.Role != cursorjsonl.RoleUser && message.Role != cursorjsonl.RoleAssistant) {
 		return chronologyKey{role: "", text: ""}, false
 	}
 
@@ -374,7 +375,7 @@ func (resolver chronologyResolver) boundaryUser(
 
 func (resolver chronologyResolver) requestUser(index int) bool {
 	message := resolver.messages[index]
-	return !message.Missing && message.Role == "user" && message.RequestID != ""
+	return !message.Missing && message.Role == cursorjsonl.RoleUser && message.RequestID != ""
 }
 
 // linkedUser finds a user in the adjacent sequence only when exactly one

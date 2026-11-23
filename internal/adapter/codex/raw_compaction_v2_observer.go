@@ -437,7 +437,8 @@ func rawResponsesCompactionV2SSECounts(body []byte) (int, int, int) {
 			} `json:"item"`
 		}
 		if json.Unmarshal([]byte(strings.Join(data, "\n")), &value) == nil {
-			if value.Type == "response.output_item.done" && value.Item.Type == "compaction" {
+			if value.Type == string(rawCompactionSSEOutputItemDone) &&
+				value.Item.Type == "compaction" {
 				compactionItemCount++
 			}
 
@@ -524,7 +525,7 @@ func rawResponsesCompactionV2SSEDataIsValid(
 		return false
 	}
 
-	if value.Type == "response.output_item.done" {
+	if value.Type == string(rawCompactionSSEOutputItemDone) {
 		if value.Item.Type != "compaction" {
 			return true
 		}

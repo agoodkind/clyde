@@ -837,7 +837,7 @@ func streamComposer(
 		discovered.ComposerID,
 		discovered.ComposerHeader,
 		func(bubble cursorstore.Bubble) bool {
-			mapped, include := mapComposerBubble(bubble, opts)
+			mapped, include := mapComposerBubble(ctx, bubble, opts)
 			if !include {
 				return true
 			}

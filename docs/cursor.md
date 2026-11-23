@@ -87,6 +87,20 @@ envelope, semantic tool fields, ordering, correlation identifiers, and an
 explicit decode error when the body cannot be decoded. The decoded record does
 not replace the raw body.
 
+## Reply metadata
+
+Clyde stores Cursor BYOK reply metadata in the private SQLite database
+`adapter/cursor/replay.db` under its state directory. Cursor displays
+thinking and warnings as Markdown. Each reply includes one HTML comment with
+the conversation ID and reply ID.
+
+When Cursor sends a reply back, Clyde checks its text and tool calls before
+restoring provider metadata. Clyde uses the readable history if the saved
+record is missing or the reply changed. When Cursor returns only tool calls,
+Clyde looks up the reply by an exact, unique match on those calls. When an
+older reply still contains provider metadata in HTML comments, Clyde imports
+that metadata when Cursor resends the reply.
+
 ## Error Boundary
 
 Cursor shows a full BYOK error message when the status is a 4xx. 

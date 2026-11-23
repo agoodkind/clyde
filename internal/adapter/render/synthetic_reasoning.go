@@ -26,6 +26,15 @@ func (r *EventRenderer) renderReasoningFromDelta(ev ReasoningDelta) *adapteropen
 	}
 
 	decorated := r.decorateReasoningFromDelta(ev)
+	if r.reply != nil {
+		body := decorated
+		if r.backendOrigin() == OriginAnthropic {
+			body = ev.Text
+		}
+
+		r.reply.reasoning.WriteString(body)
+	}
+
 	if isThinkingPlaceholder(text) && !r.reasoningBodyEmitted {
 		if r.reasoningRenderMode == ReasoningRenderModeReasoningContentOnly {
 			return nil
@@ -66,14 +75,8 @@ func (r *EventRenderer) renderReasoningFromDelta(ev ReasoningDelta) *adapteropen
 	// line lands at column 0 and terminates the markdown blockquote.
 	leadingQuote := open || !r.reasoningBodyEmitted
 	kind := r.activeSyntheticReasoningKind()
-	contentOut := FormatSyntheticContentDeltaWithRef(
-		kind,
-		open,
-		leadingQuote,
-		r.lastReasoningItemID,
-		r.backendOrigin(),
-		decorated,
-	)
+	contentOut := r.reasoningDeltaContent(kind, open, leadingQuote, decorated)
+
 	r.reasoningOpen = true
 	r.reasoningBodyEmitted = true
 	delta := adapteropenai.StreamDelta{
@@ -94,15 +97,36 @@ func (r *EventRenderer) renderReasoningFromDelta(ev ReasoningDelta) *adapteropen
 	return &ch
 }
 
+func (r *EventRenderer) reasoningDeltaContent(
+	kind SyntheticContentKind,
+	open bool,
+	leadingQuote bool,
+	text string,
+) string {
+	if r.reply == nil {
+		return FormatSyntheticContentDeltaWithRef(
+			kind,
+			open,
+			leadingQuote,
+			r.lastReasoningItemID,
+			r.backendOrigin(),
+			text,
+		)
+	}
+
+	body := formatSyntheticBody(specFor(kind), text, leadingQuote)
+	if open {
+		return r.reasoningHeader(kind) + body
+	}
+
+	return body
+}
+
 func (r *EventRenderer) renderReasoningOpen() *adapteropenai.StreamChunk {
 	r.reasoningOpen = true
 	kind := r.activeSyntheticReasoningKind()
 	delta := adapteropenai.StreamDelta{
-		Content: SyntheticContentOpenWithRef(
-			kind,
-			r.lastReasoningItemID,
-			r.backendOrigin(),
-		),
+		Content:          r.reasoningHeader(kind),
 		Role:             "",
 		Reasoning:        "",
 		ReasoningContent: "",
@@ -117,6 +141,19 @@ func (r *EventRenderer) renderReasoningOpen() *adapteropenai.StreamChunk {
 	ch := r.baseChunk(delta)
 
 	return &ch
+}
+
+func (r *EventRenderer) reasoningHeader(kind SyntheticContentKind) string {
+	if r.reply == nil {
+		return SyntheticContentOpenWithRef(kind, r.lastReasoningItemID, r.backendOrigin())
+	}
+
+	r.reply.start = r.reply.visible.Len()
+	if r.reply.start != 0 {
+		return "\n\n" + specFor(kind).Header
+	}
+
+	return specFor(kind).Header
 }
 
 // backendOrigin maps the renderer's backend string to the typed origin
@@ -248,14 +285,42 @@ func (r *EventRenderer) renderReasoningClose() *adapteropenai.StreamChunk {
 	r.lastReasoningRedactedData = ""
 	// Reset the kind so a later reasoning span starts fresh.
 	r.lastReasoningKind = ""
-	ch := r.baseChunk(adapteropenai.StreamDelta{
-		Content:          SyntheticContentCloseWithAttrs(kind, encrypted, signature),
+	closeText := "\n\n"
+	if r.reply == nil {
+		closeText = SyntheticContentCloseWithAttrs(kind, encrypted, signature)
+	} else if r.reply.start == r.reply.visible.Len() {
+		closeText = ""
+	}
+
+	chunk := r.baseChunk(adapteropenai.StreamDelta{
+		Content:          closeText,
 		Role:             "",
 		Reasoning:        "",
 		ReasoningContent: "",
 		ToolCalls:        nil,
 		Refusal:          "",
 	})
+	if r.reply != nil {
+		r.reply.Blocks = append(
+			r.reply.Blocks,
+			ReplyBlock{
+				Start: r.reply.start,
+				End:   r.reply.visible.Len(),
+				Part: SyntheticPart{
+					Kind:      kind,
+					Body:      r.reply.reasoning.String(),
+					Ref:       r.lastReasoningItemID,
+					Encrypted: encrypted,
+					Signature: signature,
+					Origin:    r.backendOrigin(),
+				},
+			},
+		)
+		r.reply.reasoning.Reset()
+		r.reasoningBodyEmitted = false
+		r.haveSummaryIdx = false
+		r.lastReasoningItemID = ""
+	}
 
-	return &ch
+	return &chunk
 }

@@ -49,7 +49,7 @@ func (p *sseEventParser) handleCustomToolOutputItem(
 		input = state.Input.String()
 	}
 
-	if eventName == "response.output_item.done" && item != nil {
+	if eventName == string(codexSSEEventOutputItemDone) && item != nil {
 		completed := item.toInputItem()
 		completed.Input = input
 		p.out.OutputItems = append(p.out.OutputItems, completed)
@@ -58,14 +58,14 @@ func (p *sseEventParser) handleCustomToolOutputItem(
 	if state.ClientCustomTool {
 		// The client owns this tool's payload, so it rides through
 		// verbatim on the final item with no patch handling at all.
-		if eventName != "response.output_item.done" || input == "" {
+		if eventName != string(codexSSEEventOutputItemDone) || input == "" {
 			return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
 		}
 
 		return p.emitNativeParsedArguments(ctx, eventName, itemType, state, state.Name, input)
 	}
 
-	if p.nativePatchRepresentation != "" && eventName == "response.output_item.done" {
+	if p.nativePatchRepresentation != "" && eventName == string(codexSSEEventOutputItemDone) {
 		finalInput := input
 		if p.nativePatchRepresentation == adapterrender.NativePatchRepresentationJSON &&
 			state.ArgumentDeltaSeen {
@@ -81,7 +81,7 @@ func (p *sseEventParser) handleCustomToolOutputItem(
 		return p.emitNativeParsedArguments(ctx, eventName, itemType, state, state.Name, args)
 	}
 
-	if eventName == "response.output_item.done" && !state.ArgumentsEmitted {
+	if eventName == string(codexSSEEventOutputItemDone) && !state.ArgumentsEmitted {
 		LogToolingEvent(
 			nil,
 			ctx,

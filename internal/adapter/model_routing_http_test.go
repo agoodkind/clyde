@@ -110,7 +110,7 @@ func TestHTTPListenersPassTypedModelRoutingSurfaces(t *testing.T) {
 		context.Background(),
 		cfg,
 		config.LoggingConfig{},
-		Deps{},
+		Deps{ReplyStore: testReplyStore(t)},
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
 	if err != nil {

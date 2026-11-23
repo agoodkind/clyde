@@ -3,21 +3,15 @@ package render
 import (
 	"regexp"
 	"strings"
+
+	adaptercontent "goodkind.io/clyde/internal/adapter/content"
 )
 
-// SyntheticContentKind identifies a marker-wrapped synthetic block kind.
-type SyntheticContentKind string
+// SyntheticContentKind identifies a segment of an assistant reply.
+type SyntheticContentKind = adaptercontent.ReplayKind
 
-// SyntheticOrigin identifies which model family produced a synthetic
-// thinking piece. It is parsed off the open marker's `data-origin`
-// attribute on the next turn so the receiving adapter can decide between
-// replaying the piece in its own native form (same-family) or injecting
-// the body as plain text (foreign or unknown family).
-//
-// Empty / absent `data-origin` on the open marker resolves to
-// [OriginUnknown], which routes through the same plain-text injection
-// path the foreign-origin case uses.
-type SyntheticOrigin string
+// SyntheticOrigin identifies the model family that produced a reasoning block.
+type SyntheticOrigin = adaptercontent.ReplayOrigin
 
 const (
 	// OriginUnknown is the resolved origin when the open marker carries
@@ -69,45 +63,8 @@ const (
 	SyntheticRedactedThinking SyntheticContentKind = "redacted_thinking"
 )
 
-// SyntheticPart is one ordered segment of an assistant content string after
-// envelope detection. Body carries the raw upstream-ready text with all
-// envelope decoration (markers, header line, blockquote prefixes) stripped.
-//
-// Ref carries the optional data-ref attribute parsed off the open marker.
-// For Codex thinking parts, the renderer emits the upstream item id (e.g.
-// "rs_abc123") as data-ref so the inbound mapper can correlate the round-
-// tripped envelope with provider state. Empty for parts produced by
-// markers without a data-ref attribute (the legacy shape).
-//
-// Encrypted carries the optional data-encrypted attribute parsed off the
-// CLOSE marker. For Codex thinking parts, this is the opaque server-signed
-// `encrypted_content` blob the upstream attaches to the matching Reasoning
-// item. The blob rides inline on the close marker so Cursor's transcript
-// owns persistence; on the next turn the inbound mapper attaches it to the
-// round-tripped Reasoning item directly. Empty for parts produced by
-// markers without a data-encrypted attribute (legacy and Anthropic spans).
-//
-// Signature carries the optional data-signature attribute parsed off the
-// CLOSE marker. For Anthropic thinking parts, this is the opaque per-block
-// signature the upstream emits via the `signature_delta` SSE event. The
-// value rides inline on the close marker as a sibling of data-encrypted so
-// Cursor's transcript owns persistence; on the next turn the Anthropic
-// mapper copies it onto the materialized native thinking block so
-// signature validation passes upstream. Empty for parts produced by
-// markers without a data-signature attribute (legacy and Codex spans).
-type SyntheticPart struct {
-	Kind      SyntheticContentKind
-	Body      string
-	Ref       string
-	Encrypted string
-	Signature string
-	// Origin identifies the model family that produced this thinking
-	// piece, parsed off the open marker's `data-origin` attribute. The
-	// receiving adapter uses it to decide between native replay (same
-	// family) and plain-text injection (foreign or unknown family).
-	// Empty for non-thinking parts and for pre-upgrade transcripts.
-	Origin SyntheticOrigin
-}
+// SyntheticPart represents one ordered segment of an assistant reply.
+type SyntheticPart = adaptercontent.ReplayPart
 
 // syntheticContentSpec describes the rendering and stripping rules for one
 // synthetic content kind. Header is the visible block header rendered inside
@@ -682,17 +639,7 @@ func spliceSyntheticParts(text string, matches []syntheticMatch) []SyntheticPart
 			parts = appendTextPart(parts, text[cursor:m.start])
 		}
 
-		parts = append(
-			parts,
-			SyntheticPart{
-				Kind:      m.kind,
-				Body:      m.bodyTrim,
-				Ref:       m.ref,
-				Encrypted: m.encrypted,
-				Signature: m.signature,
-				Origin:    m.origin,
-			},
-		)
+		parts = append(parts, m.part())
 		cursor = m.end
 	}
 
@@ -701,6 +648,48 @@ func spliceSyntheticParts(text string, matches []syntheticMatch) []SyntheticPart
 	}
 
 	return parts
+}
+
+// SyntheticSpan marks a generated block within assistant text.
+type SyntheticSpan struct {
+	Start int
+	End   int
+	Part  SyntheticPart
+}
+
+// LegacySyntheticSpans identifies complete blocks in an older reply.
+//
+// It returns byte ranges in message order and leaves unmatched comments in
+// the surrounding prose.
+//
+//	spans := LegacySyntheticSpans(assistantText)
+func LegacySyntheticSpans(text string) []SyntheticSpan {
+	matches := collectSyntheticMatches(text)
+	sortSyntheticMatches(matches)
+	var spans []SyntheticSpan
+	end := 0
+
+	for _, match := range matches {
+		if match.start < end {
+			continue
+		}
+
+		spans = append(spans, SyntheticSpan{Start: match.start, End: match.end, Part: match.part()})
+		end = match.end
+	}
+
+	return spans
+}
+
+func (m syntheticMatch) part() SyntheticPart {
+	return SyntheticPart{
+		Kind:      m.kind,
+		Body:      m.bodyTrim,
+		Ref:       m.ref,
+		Encrypted: m.encrypted,
+		Signature: m.signature,
+		Origin:    m.origin,
+	}
 }
 
 func appendTextPart(parts []SyntheticPart, text string) []SyntheticPart {
@@ -880,7 +869,7 @@ func materializeReasoningPart(
 		return []MaterializedPart{
 			{
 				Kind:      MaterializedKindNativeThinking,
-				Body:      trimmed,
+				Body:      body,
 				Signature: signature,
 				Origin:    origin,
 			},

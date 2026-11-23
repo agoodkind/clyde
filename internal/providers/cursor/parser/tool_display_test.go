@@ -137,6 +137,7 @@ func TestCursorFixtureFillsToolDisplay(t *testing.T) {
 func TestMapComposerBubbleFillsToolDisplay(t *testing.T) {
 	t.Parallel()
 	message, include := mapComposerBubble(
+		t.Context(),
 		cursorstore.Bubble{
 			BubbleID:      "bubble-tool",
 			Type:          cursorstore.BubbleTypeAssistant,

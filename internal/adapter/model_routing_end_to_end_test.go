@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
+	"goodkind.io/clyde/internal/adapter/replay"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/clyde/internal/config"
 )
@@ -454,6 +456,10 @@ func postRoutingJSON(t *testing.T, url string, body string) routingHTTPResponse 
 
 func startRoutingListeners(t *testing.T, srv *Server) (string, string) {
 	t.Helper()
+	if srv.deps.ReplyStore.Path == "" {
+		srv.deps.ReplyStore = testReplyStore(t)
+	}
+
 	openAIListener := listenLoopback(t)
 	cursorListener := listenLoopback(t)
 	// The accept hook labels a connection "cursor" when its local port equals
@@ -478,6 +484,12 @@ func startRoutingListeners(t *testing.T, srv *Server) (string, string) {
 	})
 
 	return listenerURL(t, openAIListener), listenerURL(t, cursorListener)
+}
+
+func testReplyStore(t *testing.T) replay.Store {
+	t.Helper()
+
+	return replay.Store{Path: filepath.Join(t.TempDir(), "replay.db")}
 }
 
 func assertCodexWildcardRequest(t *testing.T, request adaptercodex.HTTPTransportRequest) {

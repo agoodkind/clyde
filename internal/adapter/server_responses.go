@@ -646,6 +646,7 @@ func responsesSystemMessage(instructions string) ChatMessage {
 		ReasoningContent: "",
 		Refusal:          "",
 		Annotations:      nil,
+		ReplayParts:      nil,
 	}
 }
 
@@ -662,6 +663,7 @@ func responsesUserMessage(content json.RawMessage) ChatMessage {
 		ReasoningContent: "",
 		Refusal:          "",
 		Annotations:      nil,
+		ReplayParts:      nil,
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
+	"goodkind.io/clyde/internal/adapter/replay"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/clyde/internal/agentgateaction"
 	"goodkind.io/clyde/internal/clock"
@@ -685,6 +686,7 @@ func startAdapter(
 		GetAuth:                getAuth(cfg, log),
 		RawResponsesCompaction: codexCompactionSplitter(cfg),
 		CaptureStore:           store,
+		ReplyStore:             replay.DefaultStore(),
 		Group:                  group,
 	}
 	server, err := adapter.New(ctx, cfg.Adapter, cfg.Logging, deps, log)

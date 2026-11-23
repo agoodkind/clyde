@@ -3,6 +3,7 @@ package adapter
 import (
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
+	"goodkind.io/clyde/internal/adapter/replay"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/clyde/internal/livetrack"
@@ -42,6 +43,8 @@ type Deps struct {
 	// operator-actionable HTTP 503, while the codex path falls back to its
 	// compiled-in identity constants.
 	CaptureStore *capture.Store
+	// ReplyStore persists completed adapter reply metadata across reloads.
+	ReplyStore replay.Store
 	// Group is the daemon lifecycle group the adapter attaches its ingress,
 	// egress, and codex websocket session registries to. The daemon sets the
 	// real group; when nil (isolated adapter tests), New constructs a throwaway

@@ -115,7 +115,7 @@ func rawCompactionStrictFinalAnswerOutput(output []json.RawMessage) bool {
 			return false
 		}
 
-		if itemType == "reasoning" {
+		if codexItemType(itemType) == codexItemTypeReasoning {
 			continue
 		}
 

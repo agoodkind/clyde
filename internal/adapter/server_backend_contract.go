@@ -94,7 +94,22 @@ func (s *Server) dispatchResolvedChat(
 	// Provider.Execute contract without contortion, so it stays as the one
 	// explicit branch handled before the registry lookup.
 	if resolvedReq.Provider == adapterresolver.ProviderPassthrough {
+		if currentReply(r.Context()) != nil {
+			var err error
+			body, err = s.marshalForwardedChatHistory(r.Context(), body, req)
+			if err != nil {
+				s.respondAdapterError(
+					w,
+					r,
+					adapterErrInternal("could not prepare forwarded chat history", err),
+				)
+
+				return
+			}
+		}
+
 		s.forwardPassthroughOverride(w, r, &resolvedReq, body)
+
 		return
 	}
 

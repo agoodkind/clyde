@@ -3,12 +3,10 @@ package adapter
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
@@ -267,7 +265,6 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) (err error) {
 		return adapterErrInvalidRequest("failed to read body", err)
 	}
 
-	bodyBytes := len(body)
 	ingress := s.ingress
 	if ingress == nil {
 		return adapterErrInternal("ingress contract not registered", nil)
@@ -280,21 +277,11 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) (err error) {
 		}()
 	}
 
-	ctx, r, corr, headerFacets := applyHeaderIngressContext(ctx, r, corr, ingress)
-
-	recorder := s.beginChatLogRecorder(r, corr)
+	ctx, r, corr, recorder := s.recordChatIngress(ctx, r, corr, ingress)
 	defer s.completeChatLogRecorder(ctx, recorder)
-	s.emitChatRequestLeg(
-		ctx,
-		recorder,
-		logevent.LegAdapterIngress,
-		logevent.PhaseStarted,
-		logevent.StatusOK,
-		headerFacets,
-	)
 	discovery := DiscoverRequest(body)
 
-	req, err := s.prepareChatRequest(ctx, corr, reqID, body, bodyBytes, recorder)
+	req, err := s.prepareChatRequest(ctx, corr, reqID, body, len(body), recorder)
 	if err != nil {
 		return err
 	}
@@ -313,32 +300,31 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) (err error) {
 	// correlation built at handler construction does not have it yet.
 	hctx.Correlation = corr
 
+	ctx, err = s.prepareReplyReplay(ctx, r, ingress, ingressCtx, &req)
+	if err != nil {
+		return err
+	}
+
+	r = r.WithContext(ctx)
+
 	// The resolver is the authoritative single resolution path. It maps
 	// the alias and reasoning effort to a typed ResolvedRequest carrying
 	// provider identity, effort, budget, and the per-provider knobs the
 	// dispatcher and backends consume directly.
-	resolvedReq, resolverErr := resolveCursorChatRequest(
-		openAIIngressSurface(ctx),
+	resolvedReq, resolverErr := s.resolveChatForDispatch(
+		ctx,
+		corr,
 		req,
-		adapterresolver.NewModelRegistryAdapter(s.modelRegistry()),
+		ingress,
+		ingressCtx,
+		recorder,
+		bodyFacets,
 	)
 	if resolverErr != nil {
-		s.logChatResolveFailed(ctx, corr, reqID, req, ingressCtx, ingress, resolverErr)
-		recorder.EmitError(ctx, "model_resolve_failed", resolverErr.Error())
-		var invalidRequestErr *adapterresolver.InvalidRequestError
-		if errors.As(resolverErr, &invalidRequestErr) {
-			return adapterErrInvalidRequest(invalidRequestErr.Error(), resolverErr)
-		}
-
-		return adapterErrModelNotFound(resolverErr.Error())
+		return resolverErr
 	}
 
-	resolvedReq.RequestID = reqID
-	resolvedReq.Correlation = corr
 	effort := resolvedReq.Effort.String()
-	s.logChatResolved(ctx, corr, reqID, req, ingressCtx, ingress, &resolvedReq, effort)
-	s.emitChatModelResolveLeg(ctx, recorder, corr, &resolvedReq, effort, bodyFacets)
-	s.logResolverOutcome(ctx, corr, reqID, req, ingressCtx, &resolvedReq, nil)
 
 	if err := s.applyBackendOverride(r, req, &resolvedReq, reqID); err != nil {
 		recorder.EmitError(ctx, "backend_override_failed", err.Error())
@@ -356,8 +342,7 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) (err error) {
 		return contractErr
 	}
 
-	toolNames := chatToolNames(req)
-	s.logChatReceived(ctx, corr, reqID, req, ingressCtx, ingress, &resolvedReq, toolNames)
+	s.logChatReceived(ctx, corr, reqID, req, ingressCtx, ingress, &resolvedReq, chatToolNames(req))
 	if ingressCtx.PathKind == ingresscontract.PathKindSubagent && ingressCtx.GenerationID == "" {
 		s.logSubagentMissingGenerationID(ctx, r, corr, reqID, ingressCtx, ingress, discovery)
 	}
@@ -782,6 +767,7 @@ func parseMessagesFromInput(req *ChatRequest) (int, error) {
 				ReasoningContent: "",
 				Refusal:          "",
 				Annotations:      nil,
+				ReplayParts:      nil,
 			},
 		)
 	}
@@ -951,220 +937,6 @@ func normalizeResponsesInputImageURL(raw json.RawMessage) (json.RawMessage, bool
 	}
 
 	return encoded, true
-}
-
-func (s *Server) handleLegacy(ctx context.Context, hctx *handlerCtx) error {
-	r := hctx.Request
-	if r.Method != http.MethodPost {
-		return newAdapterError(adapterErrorMethodNotAllowed, "POST required")
-	}
-
-	if listenerFollowsDocumentedContract(ctx) {
-		return s.handleDocumentedLegacy(ctx, hctx)
-	}
-
-	var legacy struct {
-		Model           string `json:"model"`
-		Prompt          string `json:"prompt"`
-		Stream          bool   `json:"stream,omitempty"`
-		ReasoningEffort string `json:"reasoning_effort,omitempty"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&legacy); err != nil {
-		return adapterErrInvalidJSON(err.Error(), err)
-	}
-
-	synthetic := ChatRequest{
-		Model:           legacy.Model,
-		Stream:          legacy.Stream,
-		ReasoningEffort: legacy.ReasoningEffort,
-		Messages: []ChatMessage{
-			{
-				Role:             "user",
-				Content:          json.RawMessage(strconv.Quote(legacy.Prompt)),
-				Name:             "",
-				ToolCalls:        nil,
-				ToolCallID:       "",
-				Reasoning:        "",
-				ReasoningContent: "",
-				Refusal:          "",
-				Annotations:      nil,
-			},
-		},
-		Input:            nil,
-		StreamOptions:    nil,
-		Reasoning:        nil,
-		Tools:            nil,
-		ToolChoice:       nil,
-		Functions:        nil,
-		FunctionCall:     nil,
-		N:                0,
-		User:             "",
-		Temperature:      nil,
-		TopP:             nil,
-		MaxTokens:        nil,
-		MaxComplTokens:   nil,
-		MaxOutputTokens:  nil,
-		PresencePenalty:  nil,
-		FrequencyPenalty: nil,
-		LogitBias:
-
-		// forceStreamUsageOptIn applies the generic OpenAI route family policy that
-		// every streaming completion emits the trailing usage chunk regardless of what
-		// the client requested via `stream_options.include_usage`.
-		nil,
-		Logprobs:             nil,
-		TopLogprobs:          nil,
-		Stop:                 nil,
-		Seed:                 nil,
-		ResponseFormat:       nil,
-		Audio:                nil,
-		Modalities:           nil,
-		ParallelTools:        nil,
-		Store:                nil,
-		Metadata:             nil,
-		Include:              nil,
-		ServiceTier:          "",
-		Text:                 nil,
-		Truncation:           "",
-		PromptCacheRetention: "",
-	}
-	body, err := json.Marshal(synthetic)
-	if err != nil {
-		return adapterErrInternal("serialize legacy completion request", err)
-	}
-
-	r.Body = io.NopCloser(strings.NewReader(string(body)))
-	r.ContentLength = int64(len(body))
-	r.Header.Set("Content-Type", "application/json")
-	hctx.Request = r
-
-	return s.handleChat(ctx, hctx)
-}
-
-// handleDocumentedLegacy runs a legacy prompt as a one-message Chat
-// Completions request. LegacyCompletionWriter rewrites the Chat output into
-// text_completion objects and chunks.
-func (s *Server) handleDocumentedLegacy(ctx context.Context, hctx *handlerCtx) error {
-	r := hctx.Request
-	body, err := io.ReadAll(http.MaxBytesReader(hctx.Writer, r.Body, maxLegacyRequestBodyBytes))
-	if err != nil {
-		return adapterErrInvalidRequest("failed to read body", err)
-	}
-
-	fields, err := adapteropenai.DecodeFieldSet(body)
-	if err != nil {
-		return adapterErrInvalidJSON("invalid JSON: "+err.Error(), err)
-	}
-
-	var legacy adapteropenai.CompletionRequest
-	if err := json.Unmarshal(body, &legacy); err != nil {
-		return adapterErrInvalidJSON("invalid JSON: "+err.Error(), err)
-	}
-
-	prompt, rejectErr := legacyCompletionPrompt(legacy, fields)
-	if rejectErr != nil {
-		return rejectErr
-	}
-
-	chatBody, err := json.Marshal(legacyChatRequest(legacy, prompt))
-	if err != nil {
-		return adapterErrInternal("serialize legacy completion request", err)
-	}
-
-	r.Body = io.NopCloser(strings.NewReader(string(chatBody)))
-	r.ContentLength = int64(len(chatBody))
-	r.Header.Set("Content-Type", "application/json")
-	hctx.Request = r
-	includeUsage := legacy.StreamOptions != nil && legacy.StreamOptions.IncludeUsage
-	writer := adapteropenai.NewLegacyCompletionWriter(hctx.Writer, includeUsage)
-	hctx.Writer = writer
-	if chatErr := s.handleChat(ctx, hctx); chatErr != nil {
-		return chatErr
-	}
-
-	if finishErr := writer.Finish(); finishErr != nil {
-		return adapterErrInternal("write legacy completion", finishErr)
-	}
-
-	return nil
-}
-
-func legacyCompletionPrompt(
-	legacy adapteropenai.CompletionRequest,
-	fields adapteropenai.ResponsesFieldSet,
-) (string, *adapterError) {
-	if unknown := fields.UnknownCompletionKeys(); len(unknown) > 0 {
-		return "", adapterErrRejectedParameter(adaptercompat.Rejection{
-			Code:    adaptercompat.RejectionCodeUnknownParameter,
-			Param:   unknown[0],
-			Message: "Unrecognized request argument supplied: " + unknown[0],
-		})
-	}
-
-	unsupported := []struct {
-		param   string
-		present bool
-	}{
-		{param: "suffix", present: legacy.Suffix != nil && *legacy.Suffix != ""},
-		{param: "echo", present: legacy.Echo != nil && *legacy.Echo},
-		{param: "logprobs", present: legacy.Logprobs != nil},
-		{param: "best_of", present: legacy.BestOf != nil && *legacy.BestOf > 1},
-		{param: "n", present: legacy.N != nil && *legacy.N > 1},
-	}
-	for _, field := range unsupported {
-		if field.present {
-			return "", adapterErrRejectedParameter(adaptercompat.Rejection{
-				Code:    adaptercompat.RejectionCodeUnsupportedParameter,
-				Param:   field.param,
-				Message: "Unsupported parameter: '" + field.param + "' is not supported by Clyde.",
-			})
-		}
-	}
-
-	prompt, err := legacy.PromptText()
-	if err != nil {
-		return "", adapterErrRejectedParameter(adaptercompat.Rejection{
-			Code:    adaptercompat.RejectionCodeUnsupportedParameter,
-			Param:   "prompt",
-			Message: err.Error(),
-		})
-	}
-
-	return prompt, nil
-}
-
-// handleChat rejects each copied field that the resolved provider cannot
-// honor.
-func legacyChatRequest(legacy adapteropenai.CompletionRequest, prompt string) ChatRequest {
-	var chat ChatRequest
-	chat.Model = legacy.Model
-	chat.Messages = []ChatMessage{
-		{
-			Role:             "user",
-			Content:          json.RawMessage(strconv.Quote(prompt)),
-			Name:             "",
-			ToolCalls:        nil,
-			ToolCallID:       "",
-			Reasoning:        "",
-			ReasoningContent: "",
-			Refusal:          "",
-			Annotations:      nil,
-		},
-	}
-	chat.Stream = legacy.Stream
-	chat.StreamOptions = legacy.StreamOptions
-	chat.MaxTokens = legacy.MaxTokens
-	chat.Temperature = legacy.Temperature
-	chat.TopP = legacy.TopP
-	chat.Stop = legacy.Stop
-	chat.PresencePenalty = legacy.PresencePenalty
-	chat.FrequencyPenalty = legacy.FrequencyPenalty
-	chat.LogitBias = legacy.LogitBias
-	chat.Seed = legacy.Seed
-	chat.User = legacy.User
-	chat.ReasoningEffort = legacy.ReasoningEffort
-
-	return chat
 }
 
 func forceStreamUsageOptIn(req *ChatRequest) {
