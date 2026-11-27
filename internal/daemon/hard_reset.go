@@ -514,28 +514,8 @@ func validateResetTarget(ctx context.Context, target resetTarget, cfg *config.Co
 		return err
 	}
 
-	if cfg != nil {
-		credentialPaths, err := resetProtectedCredentialFiles(cfg)
-		if err != nil {
-			return err
-		}
-
-		for _, path := range credentialPaths {
-			if path == "" {
-				continue
-			}
-
-			resolved, err := resolvedResetPath(homedir.Expand(path))
-			if err != nil {
-				return err
-			}
-
-			if resolved == resolvedTarget ||
-				withinResetRoot(resolved, resolvedTarget) ||
-				withinResetRoot(resolvedTarget, resolved) {
-				return fmt.Errorf("%w: %s", errProtectedCredentialReset, target.Path)
-			}
-		}
+	if err := validateResetCredentialPaths(target.Path, resolvedTarget, cfg); err != nil {
+		return err
 	}
 
 	if target.AllowProtected {
@@ -608,6 +588,42 @@ func resetProtectedFiles(cfg *config.Config) []string {
 	}
 
 	return protected
+}
+
+func validateResetCredentialPaths(target, resolvedTarget string, cfg *config.Config) error {
+	if cfg == nil {
+		return nil
+	}
+
+	paths, err := resetProtectedCredentialFiles(cfg)
+	if err != nil {
+		return err
+	}
+
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+
+		resolved, err := resolvedResetPath(homedir.Expand(path))
+		if err != nil {
+			return err
+		}
+
+		if resolved == resolvedTarget ||
+			withinResetRoot(resolved, resolvedTarget) ||
+			withinResetRoot(resolvedTarget, resolved) {
+			slog.Warn(
+				"daemon.hard_reset.credential_overlap",
+				"concern", "process.daemon.lifecycle",
+				"target", target,
+			)
+
+			return fmt.Errorf("%w: %s", errProtectedCredentialReset, target)
+		}
+	}
+
+	return nil
 }
 
 func resetProtectedCredentialFiles(cfg *config.Config) ([]string, error) {
