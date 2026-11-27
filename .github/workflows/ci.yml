@@ -48,20 +48,12 @@ jobs:
         with:
           path: ${{ env.GOCACHE }}
           key: clyde-race-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.mod', 'go.sum', 'Makefile', 'bootstrap.mk', 'third_party/gksyntax/**') }}
-      # Prepare the workspace and native dependencies before running go test.
       - name: Native build prerequisites
         run: make native-prereqs
       - name: Build CLI dependencies for subprocess tests
         run: go build -o "${RUNNER_TEMP}/clyde" ./cmd/clyde
-      # Race coverage runs the suites with `go test -race` (Go's own runner)
-      # rather than `ginkgo -r --race`. The ginkgo CLI orchestrator wedges after
-      # the suites finish on linux/amd64 under -race (reproduced on every CI run,
-      # both ginkgo v2.28.1 and v2.29.0; clean on arm64; go test runs the same
-      # RunSpecs suites fine), matching ginkgo issue #871. -shuffle=on keeps the
-      # randomized-order coverage; -timeout makes any real deadlock fail fast with
-      # a full goroutine dump instead of hanging. -count stays at 1 because Ginkgo
-      # rejects -count>1 ("Only -count=1 is allowed"), so any higher value fails
-      # every RunSpecs package before a test executes.
+      # Ginkgo issue #871 can hang its CLI on Linux amd64 with race detection.
+      # go test runs the same suites. Ginkgo requires -count=1.
       - name: Race tests
         env:
           GOTRACEBACK: all
