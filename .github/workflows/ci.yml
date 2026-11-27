@@ -30,38 +30,24 @@ jobs:
     name: Project Race Tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      GOCACHE: ${{ github.workspace }}/.make/ci-go-race
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
       - uses: actions/setup-go@v7
+        id: setup-go
+        env:
+          GOCACHE: ${{ runner.temp }}/setup-go-build
         with:
           go-version-file: go.mod
-          cache: false
-      - name: Identify race cache inputs
-        id: race-cache-inputs
-        env:
-          GO_MODULE_DIGEST: ${{ hashFiles('go.mod', 'go.sum', 'Makefile', 'bootstrap.mk') }}
-        run: |
-          printf 'build=%s\n' "$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
-          printf 'modules=%s\n' "$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
-          {
-            go version
-            cc --version
-            c++ --version
-            git rev-parse HEAD:third_party/gksyntax
-            printf '%s\n' "$GO_MODULE_DIGEST"
-          } > "$RUNNER_TEMP/clyde-race-inputs"
-          read -r digest _ < <(sha256sum "$RUNNER_TEMP/clyde-race-inputs")
-          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
-      - name: Restore race build cache
-        id: race-cache
-        uses: actions/cache/restore@v6
+          cache-dependency-path: go.sum
+      - name: Cache compiled race packages
+        uses: actions/cache@v6
         with:
-          path: |
-            ${{ steps.race-cache-inputs.outputs.build }}
-            ${{ steps.race-cache-inputs.outputs.modules }}
-          key: clyde-race-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.race-cache-inputs.outputs.digest }}
+          path: ${{ env.GOCACHE }}
+          key: clyde-race-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.mod', 'go.sum', 'Makefile', 'bootstrap.mk', 'third_party/gksyntax/**') }}
       # Prepare the workspace and native dependencies before running go test.
       - name: Native build prerequisites
         run: make native-prereqs
@@ -80,11 +66,3 @@ jobs:
         env:
           GOTRACEBACK: all
         run: go test -race -shuffle=on -count=1 -timeout=8m ./...
-      - name: Save race build cache
-        if: steps.race-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
-        with:
-          path: |
-            ${{ steps.race-cache-inputs.outputs.build }}
-            ${{ steps.race-cache-inputs.outputs.modules }}
-          key: ${{ steps.race-cache.outputs.cache-primary-key }}
