@@ -14,12 +14,13 @@ permissions:
 
 jobs:
   go:
-    uses: agoodkind/go-makefile/.github/workflows/_ci.yml@main
+    uses: agoodkind/go-makefile/.github/workflows/_ci.yml@codex/ci-compiled-go-cache-benchmark
     with:
       golangci_lint_install_mode: goinstall
       cgo: true
       submodules: recursive
       darwin_runner: macos-15
+      skip_unchanged: false
     permissions:
       contents: read
       id-token: write
