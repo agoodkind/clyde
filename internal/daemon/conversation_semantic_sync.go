@@ -396,6 +396,7 @@ func startConversationSemanticSync(
 	)
 	worker.freshness = freshness
 	worker.interval = interval
+	worker.now = ingestionClock(ctx)
 	freshness.workerStarted()
 	go func() {
 		defer close(done)

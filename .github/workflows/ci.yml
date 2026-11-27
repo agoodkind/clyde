@@ -19,6 +19,7 @@ jobs:
       golangci_lint_install_mode: goinstall
       cgo: true
       submodules: recursive
+      darwin_runner: macos-15
     permissions:
       contents: read
       id-token: write
@@ -29,32 +30,28 @@ jobs:
     name: Project Race Tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      GOCACHE: ${{ github.workspace }}/.make/ci-go-race
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
       - uses: actions/setup-go@v7
+        id: setup-go
+        env:
+          GOCACHE: ${{ runner.temp }}/setup-go-build
         with:
           go-version-file: go.mod
-      # Prepare the workspace and native dependencies before running go test.
+          cache-dependency-path: go.sum
+      - name: Cache compiled race packages
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.GOCACHE }}
+          key: clyde-race-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.mod', 'go.sum', 'Makefile', 'bootstrap.mk', 'third_party/gksyntax/**') }}
       - name: Native build prerequisites
         run: make native-prereqs
-      # The step builds clyde with the flags used by the test helpers.
-      # It compiles and links every race test binary, then runs true in place of each binary.
-      # The timed race run reuses those build cache entries.
-      - name: Build race test inputs
-        run: |
-          go build -o "${RUNNER_TEMP}/clyde" ./cmd/clyde
-          go test -race -count=1 -exec true ./...
-      # Race coverage runs the suites with `go test -race` (Go's own runner)
-      # rather than `ginkgo -r --race`. The ginkgo CLI orchestrator wedges after
-      # the suites finish on linux/amd64 under -race (reproduced on every CI run,
-      # both ginkgo v2.28.1 and v2.29.0; clean on arm64; go test runs the same
-      # RunSpecs suites fine), matching ginkgo issue #871. -shuffle=on keeps the
-      # randomized-order coverage; -timeout makes any real deadlock fail fast with
-      # a full goroutine dump instead of hanging. -count stays at 1 because Ginkgo
-      # rejects -count>1 ("Only -count=1 is allowed"), so any higher value fails
-      # every RunSpecs package before a test executes.
+      # Ginkgo issue #871 can hang its CLI on Linux amd64 with race detection.
+      # go test runs the same suites. Ginkgo requires -count=1.
       - name: Race tests
         env:
           GOTRACEBACK: all

@@ -78,9 +78,26 @@ func WriteRawTextTranscript(t *testing.T, path string, session string, minute in
 }
 
 // StartRawTextDaemon runs the daemon in this process with every Clyde path and
-// every provider store under temporary directories. It returns the Claude
-// project directory.
-func StartRawTextDaemon(t *testing.T, daemonConfig string) string {
+// every provider store under temporary directories.
+func StartRawTextDaemon(t *testing.T, daemonConfig string) {
+	t.Helper()
+	StartRawTextDaemonWithFixtures(t, daemonConfig, func(*testing.T, string) {})
+}
+
+// StartRawTextDaemonWithFixtures prepares additional fixtures before starting
+// the daemon's index workers.
+//
+// The fixture callback receives the Claude project directory after the helper
+// creates the provider directories and sets the test environment.
+//
+// For example, a fixture can add an archived conversation before discovery:
+//
+//	StartRawTextDaemonWithFixtures(t, config, writeArchivedFixture)
+func StartRawTextDaemonWithFixtures(
+	t *testing.T,
+	daemonConfig string,
+	prepare func(*testing.T, string),
+) {
 	t.Helper()
 	roots, err := sandbox.NewRoots()
 	if err != nil {
@@ -138,6 +155,8 @@ func StartRawTextDaemon(t *testing.T, daemonConfig string) string {
 		t.Fatalf("write config: %v", err)
 	}
 
+	prepare(t, projectDir)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
@@ -161,8 +180,6 @@ func StartRawTextDaemon(t *testing.T, daemonConfig string) string {
 			t.Error("daemon did not stop")
 		}
 	})
-
-	return projectDir
 }
 
 // LocalBackendSearchCLIOutput searches the daemon in the test process through Cobra commands rendered from registry.

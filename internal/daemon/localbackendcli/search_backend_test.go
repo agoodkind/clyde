@@ -105,6 +105,8 @@ func seedBackendLocalIndex(t *testing.T, binaryPath string, home string, localRo
 }
 
 func TestSearchBackendCLIAndMCP(t *testing.T) {
+	t.Parallel()
+
 	binaryPath := buildClydeCLI(t)
 	home := writeLocalProofHome(t)
 	localRoot := filepath.Join(t.TempDir(), "local-index")

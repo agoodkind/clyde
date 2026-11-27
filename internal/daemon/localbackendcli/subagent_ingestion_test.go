@@ -9,6 +9,8 @@ import (
 )
 
 func TestSubagentIngestionSettingRetainsSemanticContent(t *testing.T) {
+	t.Parallel()
+
 	binaryPath := buildClydeCLI(t)
 	home := t.TempDir()
 	localRoot := filepath.Join(t.TempDir(), "local-index")
