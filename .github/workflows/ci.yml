@@ -6,7 +6,7 @@ on:
     branches: ['**']
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  group: ${{ github.workflow }}-verify-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -52,8 +52,6 @@ jobs:
       # Prepare the workspace and native dependencies before running go test.
       - name: Native build prerequisites
         run: make native-prereqs
-      - name: Build CLI dependencies for subprocess tests
-        run: go build -o "${RUNNER_TEMP}/clyde" ./cmd/clyde
       # Race coverage runs the suites with `go test -race` (Go's own runner)
       # rather than `ginkgo -r --race`. The ginkgo CLI orchestrator wedges after
       # the suites finish on linux/amd64 under -race (reproduced on every CI run,
