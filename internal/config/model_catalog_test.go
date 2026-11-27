@@ -468,6 +468,16 @@ func TestLoadModelCatalogValidatesProvidersAndRoutes(t *testing.T) {
 			body:    routeTOML("gpt-*", "openai", false),
 			wantSub: "disabled provider",
 		},
+		{
+			name:    "undeclared route passthrough override",
+			body:    "[[adapter.model_routes]]\nmatch = \"gemini-*\"\nsurfaces = [\"cursor\"]\nprovider = \"passthrough_override\"\npassthrough_override = \"missing\"\nwire_model_policy = \"preserve\"\ncapability_policy = \"passthrough\"\n",
+			wantSub: "model_routes[0].passthrough_override is not declared: \"missing\"",
+		},
+		{
+			name:    "route passthrough override on codex",
+			body:    routeTOML("gpt-*", "cursor", true) + "passthrough_override = \"local\"\n",
+			wantSub: "model_routes[0].passthrough_override is only valid for provider passthrough_override",
+		},
 	}
 	for _, test := range tests {
 		t.Run(

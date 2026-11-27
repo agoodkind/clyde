@@ -48,6 +48,42 @@ func TestRegistryRoutesWildcardModelBeforeOpenAICompatFallback(t *testing.T) {
 	}
 }
 
+func TestRegistryRoutesWildcardModelToPassthroughOverride(t *testing.T) {
+	cfg := catalogTestConfig()
+	cfg.PassthroughOverrides = map[string]config.AdapterPassthroughOverride{
+		"cliproxy": {BaseURL: "http://localhost:8317/v1"},
+	}
+	route := catalogRoute("gemini-*", config.AdapterModelProviderPassthroughOverride, IngressCursor)
+	route.PassthroughOverride = "cliproxy"
+	cfg.ModelRoutes = []config.AdapterModelRoute{route}
+
+	registry, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	resolved, _, err := registry.Resolve(IngressCursor, "gemini-3-flash", "")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	if resolved.Backend != BackendPassthroughOverride {
+		t.Fatalf("backend = %q, want %q", resolved.Backend, BackendPassthroughOverride)
+	}
+
+	if resolved.PassthroughOverride != "cliproxy" {
+		t.Fatalf("passthrough override = %q, want cliproxy", resolved.PassthroughOverride)
+	}
+
+	if resolved.PassthroughConfig.BaseURL != "http://localhost:8317/v1" {
+		t.Fatalf("passthrough base URL = %q", resolved.PassthroughConfig.BaseURL)
+	}
+
+	if resolved.WireModel != "gemini-3-flash" {
+		t.Fatalf("wire model = %q, want gemini-3-flash", resolved.WireModel)
+	}
+}
+
 func TestRegistryAnthropicWildcardUsesConfiguredDefaultWireProfile(t *testing.T) {
 	cfg := exactCatalogConfig()
 	cfg.Anthropic.DefaultWireProfile = "claude-code-interactive-default"

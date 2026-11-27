@@ -114,11 +114,13 @@ type registryRecord struct {
 }
 
 type routeRule struct {
-	pattern         string
-	surfaces        []IngressSurface
-	provider        BackendID
-	providerEnabled bool
-	wireProfile     string
+	pattern             string
+	surfaces            []IngressSurface
+	provider            BackendID
+	providerEnabled     bool
+	wireProfile         string
+	passthroughOverride string
+	passthroughConfig   config.AdapterPassthroughOverride
 }
 
 // Registry owns the exact catalog, ordered routes, and fallback transport.
@@ -215,13 +217,7 @@ func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 
 		registry.routes = append(
 			registry.routes,
-			routeRule{
-				pattern:         configured.Match,
-				surfaces:        append([]IngressSurface(nil), configured.Surfaces...),
-				provider:        backendForProvider(configured.Provider),
-				providerEnabled: providerEnabled(cfg, configured.Provider),
-				wireProfile:     defaultWireProfile(cfg, configured.Provider),
-			},
+			newRouteRule(cfg, registry.passthroughOverrides, configured),
 		)
 	}
 
@@ -658,12 +654,7 @@ func (registry *Registry) Resolve(
 			)
 		}
 
-		return wildcardResolved(
-			requested,
-			route.provider,
-			route.wireProfile,
-			requestedEffort,
-		), requestedEffort, nil
+		return wildcardResolved(requested, route, requestedEffort), requestedEffort, nil
 	}
 
 	if registry.openAICompat.BaseURL != "" {
@@ -745,19 +736,34 @@ func defaultEffort(resolved ResolvedAlias) string {
 	return resolved.DefaultEffort
 }
 
-func wildcardResolved(
-	requested string,
-	provider BackendID,
-	wireProfile string,
-	effort string,
-) ResolvedAlias {
+func newRouteRule(
+	cfg config.AdapterConfig,
+	passthroughOverrides map[string]config.AdapterPassthroughOverride,
+	configured config.AdapterModelRoute,
+) routeRule {
+	passthroughName := strings.TrimSpace(configured.PassthroughOverride)
+
+	return routeRule{
+		pattern:             configured.Match,
+		surfaces:            append([]IngressSurface(nil), configured.Surfaces...),
+		provider:            backendForProvider(configured.Provider),
+		providerEnabled:     providerEnabled(cfg, configured.Provider),
+		wireProfile:         defaultWireProfile(cfg, configured.Provider),
+		passthroughOverride: passthroughName,
+		passthroughConfig:   passthroughOverrides[modelKey(passthroughName)],
+	}
+}
+
+func wildcardResolved(requested string, route routeRule, effort string) ResolvedAlias {
 	var resolved ResolvedAlias
 	resolved.Alias = requested
-	resolved.Backend = provider
+	resolved.Backend = route.provider
 	resolved.WireModel = requested
-	resolved.WireProfile = strings.TrimSpace(wireProfile)
+	resolved.WireProfile = strings.TrimSpace(route.wireProfile)
 	resolved.Effort = effort
 	resolved.WireEffort = effort
+	resolved.PassthroughOverride = route.passthroughOverride
+	resolved.PassthroughConfig = route.passthroughConfig
 
 	return resolved
 }
