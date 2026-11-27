@@ -6,7 +6,7 @@ on:
     branches: ['**']
 
 concurrency:
-  group: ${{ github.workflow }}-warm-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
