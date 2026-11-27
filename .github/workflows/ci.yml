@@ -14,12 +14,24 @@ permissions:
 
 jobs:
   go:
-    uses: agoodkind/go-makefile/.github/workflows/_ci.yml@main
+    uses: agoodkind/go-makefile/.github/workflows/_ci.yml@e3831dd4a075bdb37a4f4fc7feb25567910c3cb8
     with:
+      bootstrap_ref: e3831dd4a075bdb37a4f4fc7feb25567910c3cb8
       golangci_lint_install_mode: goinstall
       cgo: true
       submodules: recursive
       darwin_runner: macos-15
+      prepare_fetch_depth: 1
+      test_shards: |
+        [
+          {"name": "Daemon", "packages": ["goodkind.io/clyde/internal/daemon"]},
+          {"name": "Local backend CLI", "packages": ["goodkind.io/clyde/internal/daemon/localbackendcli"]},
+          {"name": "Local backend and status", "packages": [
+            "goodkind.io/clyde/internal/daemon/localbackend",
+            "goodkind.io/clyde/internal/daemon/statusproof"
+          ]},
+          {"name": "Remaining packages", "packages": []}
+        ]
     permissions:
       contents: read
       id-token: write
