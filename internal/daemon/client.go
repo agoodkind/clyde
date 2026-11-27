@@ -313,16 +313,16 @@ func SearchConversations(
 
 	matches := make([]conversation.SearchMatch, 0, len(resp.GetMatches()))
 	for _, wire := range resp.GetMatches() {
-		record := conversationRecordFromProto(wire.GetConversation())
 		matches = append(
 			matches,
 			conversation.SearchMatch{
-				Record:        record,
+				Record:        conversationRecordFromProto(wire.GetConversation()),
 				MessageIndex:  int(wire.GetMessageIndex()),
 				Role:          wire.GetRole(),
 				Timestamp:     time.Unix(wire.GetTimestampUnix(), 0),
 				Snippet:       wire.GetSnippet(),
 				Score:         wire.GetScore(),
+				Backend:       searchMatchBackendFromProto(wire.GetBackend()),
 				ContextWindow: wire.GetContextWindow(),
 				LoadRules:     wire.GetLoadRules(),
 				ContextState:  searchContextStateFromProto(wire.GetContextState()),
@@ -424,14 +424,15 @@ func searchSourceFromProto(source clydev1.SearchSource) conversation.SearchSourc
 		return conversation.SearchSourceRawText
 	case clydev1.SearchSource_SEARCH_SOURCE_LOCAL:
 		return conversation.SearchSourceLocal
+	case clydev1.SearchSource_SEARCH_SOURCE_MIXED:
+		return conversation.SearchSourceMixed
 	case clydev1.SearchSource_SEARCH_SOURCE_UNSPECIFIED:
-		return conversation.SearchSourceUnspecified
-	default:
-		return conversation.SearchSourceUnspecified
 	}
+
+	return conversation.SearchSourceUnspecified
 }
 
-// searchContextStateFromProto maps the wire context state onto its domain enum.
+// searchContextStateFromProto maps the wire state onto its domain enum.
 func searchContextStateFromProto(state clydev1.SearchContextState) conversation.SearchContextState {
 	switch state {
 	case clydev1.SearchContextState_SEARCH_CONTEXT_STATE_EXCERPT_ONLY:
@@ -441,10 +442,9 @@ func searchContextStateFromProto(state clydev1.SearchContextState) conversation.
 	case clydev1.SearchContextState_SEARCH_CONTEXT_STATE_UNAVAILABLE:
 		return conversation.SearchContextStateUnavailable
 	case clydev1.SearchContextState_SEARCH_CONTEXT_STATE_UNSPECIFIED:
-		return conversation.SearchContextStateUnspecified
-	default:
-		return conversation.SearchContextStateUnspecified
 	}
+
+	return conversation.SearchContextStateUnspecified
 }
 
 // searchFacetsFromProto maps the wire facets onto the domain facets. A nil

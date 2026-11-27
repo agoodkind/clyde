@@ -73,10 +73,7 @@ func expandOverBudget(chunks []storedChunk, byteBudget int) []storedChunk {
 // in the original content plus one. A child of a split chunk adds the offset of
 // its parent. Identical pieces then have different primary keys.
 func splitChunkAtBudget(chunk storedChunk, budget int) []storedChunk {
-	baseOffset := 0
-	if chunk.SplitPart > 0 {
-		baseOffset = int(chunk.SplitPart) - 1
-	}
+	baseOffset := splitByteOffset(chunk.SplitPart)
 
 	pieces := splitTextByBytes(chunk.Content, budget)
 	children := make([]storedChunk, 0, len(pieces))
@@ -91,6 +88,10 @@ func splitChunkAtBudget(chunk storedChunk, budget int) []storedChunk {
 	}
 
 	return children
+}
+
+func splitByteOffset(part int32) int {
+	return max(0, int(part)-1)
 }
 
 func splitChunkInHalf(chunk storedChunk) []storedChunk {

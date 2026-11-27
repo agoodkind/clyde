@@ -96,6 +96,7 @@ const (
 	SearchSource_SEARCH_SOURCE_RAW_TEXT SearchSource = 4
 	// SEARCH_SOURCE_LOCAL means the local backend produced the matches.
 	SearchSource_SEARCH_SOURCE_LOCAL SearchSource = 5
+	SearchSource_SEARCH_SOURCE_MIXED SearchSource = 6
 )
 
 // Enum value maps for SearchSource.
@@ -105,12 +106,14 @@ var (
 		1: "SEARCH_SOURCE_SEMANTIC",
 		4: "SEARCH_SOURCE_RAW_TEXT",
 		5: "SEARCH_SOURCE_LOCAL",
+		6: "SEARCH_SOURCE_MIXED",
 	}
 	SearchSource_value = map[string]int32{
 		"SEARCH_SOURCE_UNSPECIFIED": 0,
 		"SEARCH_SOURCE_SEMANTIC":    1,
 		"SEARCH_SOURCE_RAW_TEXT":    4,
 		"SEARCH_SOURCE_LOCAL":       5,
+		"SEARCH_SOURCE_MIXED":       6,
 	}
 )
 
@@ -2406,8 +2409,10 @@ type ConversationSearchMatch struct {
 	// back on GetConversationContextRequest so the window is counted over the
 	// same message sequence message_index refers to. Empty on rows written
 	// before tagging existed.
-	LoadRules     string             `protobuf:"bytes,8,opt,name=load_rules,json=loadRules,proto3" json:"load_rules,omitempty"`
-	ContextState  SearchContextState `protobuf:"varint,9,opt,name=context_state,json=contextState,proto3,enum=clyde.v1.SearchContextState" json:"context_state,omitempty"`
+	LoadRules    string             `protobuf:"bytes,8,opt,name=load_rules,json=loadRules,proto3" json:"load_rules,omitempty"`
+	ContextState SearchContextState `protobuf:"varint,9,opt,name=context_state,json=contextState,proto3,enum=clyde.v1.SearchContextState" json:"context_state,omitempty"`
+	// backend identifies the index that returned this match.
+	Backend       SemanticBackend `protobuf:"varint,10,opt,name=backend,proto3,enum=clyde.v1.SemanticBackend" json:"backend,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2503,6 +2508,13 @@ func (x *ConversationSearchMatch) GetContextState() SearchContextState {
 		return x.ContextState
 	}
 	return SearchContextState_SEARCH_CONTEXT_STATE_UNSPECIFIED
+}
+
+func (x *ConversationSearchMatch) GetBackend() SemanticBackend {
+	if x != nil {
+		return x.Backend
+	}
+	return SemanticBackend_SEMANTIC_BACKEND_UNSPECIFIED
 }
 
 // SearchFacetCount is one facet value and how many matched conversations carry
@@ -4716,7 +4728,7 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\abackend\x18\x0f \x01(\tR\abackendB\f\n" +
 	"\n" +
 	"_from_unixB\r\n" +
-	"\v_until_unix\"\xf4\x02\n" +
+	"\v_until_unix\"\xa9\x03\n" +
 	"\x17ConversationSearchMatch\x12@\n" +
 	"\fconversation\x18\x01 \x01(\v2\x1c.clyde.v1.ConversationRecordR\fconversation\x12#\n" +
 	"\rmessage_index\x18\x02 \x01(\x03R\fmessageIndex\x12\x12\n" +
@@ -4727,7 +4739,9 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\x0econtext_window\x18\a \x01(\tR\rcontextWindow\x12\x1d\n" +
 	"\n" +
 	"load_rules\x18\b \x01(\tR\tloadRules\x12A\n" +
-	"\rcontext_state\x18\t \x01(\x0e2\x1c.clyde.v1.SearchContextStateR\fcontextState\">\n" +
+	"\rcontext_state\x18\t \x01(\x0e2\x1c.clyde.v1.SearchContextStateR\fcontextState\x123\n" +
+	"\abackend\x18\n" +
+	" \x01(\x0e2\x19.clyde.v1.SemanticBackendR\abackend\">\n" +
 	"\x10SearchFacetCount\x12\x14\n" +
 	"\x05value\x18\x01 \x01(\tR\x05value\x12\x14\n" +
 	"\x05count\x18\x02 \x01(\x03R\x05count\"\xb8\x01\n" +
@@ -4924,12 +4938,13 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	" SEARCH_CONTEXT_STATE_UNSPECIFIED\x10\x00\x12%\n" +
 	"!SEARCH_CONTEXT_STATE_EXCERPT_ONLY\x10\x01\x12\"\n" +
 	"\x1eSEARCH_CONTEXT_STATE_AVAILABLE\x10\x02\x12$\n" +
-	" SEARCH_CONTEXT_STATE_UNAVAILABLE\x10\x03*\x8a\x01\n" +
+	" SEARCH_CONTEXT_STATE_UNAVAILABLE\x10\x03*\xa3\x01\n" +
 	"\fSearchSource\x12\x1d\n" +
 	"\x19SEARCH_SOURCE_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16SEARCH_SOURCE_SEMANTIC\x10\x01\x12\x1a\n" +
 	"\x16SEARCH_SOURCE_RAW_TEXT\x10\x04\x12\x17\n" +
-	"\x13SEARCH_SOURCE_LOCAL\x10\x05\"\x04\b\x02\x10\x02\"\x04\b\x03\x10\x03*\xb6\x01\n" +
+	"\x13SEARCH_SOURCE_LOCAL\x10\x05\x12\x17\n" +
+	"\x13SEARCH_SOURCE_MIXED\x10\x06\"\x04\b\x02\x10\x02\"\x04\b\x03\x10\x03*\xb6\x01\n" +
 	"\x17RequestResolutionOrigin\x12)\n" +
 	"%REQUEST_RESOLUTION_ORIGIN_UNSPECIFIED\x10\x00\x12#\n" +
 	"\x1fREQUEST_RESOLUTION_ORIGIN_INDEX\x10\x01\x12\"\n" +
@@ -5074,75 +5089,76 @@ var file_clyde_v1_daemon_service_proto_depIdxs = []int32{
 	57, // 14: clyde.v1.SearchConversationsRequest.provider:type_name -> clyde.v1.Provider
 	51, // 15: clyde.v1.ConversationSearchMatch.conversation:type_name -> clyde.v1.ConversationRecord
 	0,  // 16: clyde.v1.ConversationSearchMatch.context_state:type_name -> clyde.v1.SearchContextState
-	35, // 17: clyde.v1.SearchFacets.workspaces:type_name -> clyde.v1.SearchFacetCount
-	35, // 18: clyde.v1.SearchFacets.providers:type_name -> clyde.v1.SearchFacetCount
-	35, // 19: clyde.v1.SearchFacets.models:type_name -> clyde.v1.SearchFacetCount
-	38, // 20: clyde.v1.FilterAccounting.stages:type_name -> clyde.v1.FilterStage
-	34, // 21: clyde.v1.SearchConversationsResponse.matches:type_name -> clyde.v1.ConversationSearchMatch
-	1,  // 22: clyde.v1.SearchConversationsResponse.source:type_name -> clyde.v1.SearchSource
-	36, // 23: clyde.v1.SearchConversationsResponse.facets:type_name -> clyde.v1.SearchFacets
-	37, // 24: clyde.v1.SearchConversationsResponse.semantic_freshness:type_name -> clyde.v1.SemanticSearchFreshness
-	39, // 25: clyde.v1.SearchConversationsResponse.filter_accounting:type_name -> clyde.v1.FilterAccounting
-	51, // 26: clyde.v1.GetConversationInfoResponse.conversation:type_name -> clyde.v1.ConversationRecord
-	41, // 27: clyde.v1.GetConversationInfoResponse.stats:type_name -> clyde.v1.ConversationInfoStats
-	42, // 28: clyde.v1.GetConversationInfoResponse.segments:type_name -> clyde.v1.ConversationCompactionSegment
-	2,  // 29: clyde.v1.ResolveConversationRequestResponse.origin:type_name -> clyde.v1.RequestResolutionOrigin
-	3,  // 30: clyde.v1.ResolveConversationRequestResponse.not_found_reason:type_name -> clyde.v1.RequestResolutionNotFoundReason
-	51, // 31: clyde.v1.ResolveConversationRequestResponse.conversation:type_name -> clyde.v1.ConversationRecord
-	57, // 32: clyde.v1.ReorientConversationRef.provider:type_name -> clyde.v1.Provider
-	47, // 33: clyde.v1.ReorientConversationResponse.current_conversation:type_name -> clyde.v1.ReorientConversationRef
-	57, // 34: clyde.v1.ConversationLineage.parent_provider:type_name -> clyde.v1.Provider
-	57, // 35: clyde.v1.ConversationRecord.provider:type_name -> clyde.v1.Provider
-	50, // 36: clyde.v1.ConversationRecord.lineage:type_name -> clyde.v1.ConversationLineage
-	51, // 37: clyde.v1.ListConversationsResponse.conversations:type_name -> clyde.v1.ConversationRecord
-	4,  // 38: clyde.v1.SemanticStatus.connection:type_name -> clyde.v1.SemanticConnectionState
-	5,  // 39: clyde.v1.SemanticStatus.backend:type_name -> clyde.v1.SemanticBackend
-	56, // 40: clyde.v1.SemanticStatus.detail:type_name -> clyde.v1.StatusMetric
-	53, // 41: clyde.v1.GetDaemonStatusResponse.semantic:type_name -> clyde.v1.SemanticStatus
-	54, // 42: clyde.v1.GetDaemonStatusResponse.listeners:type_name -> clyde.v1.BoundListenerStatus
-	54, // 43: clyde.v1.GetDaemonStatusResponse.profiling:type_name -> clyde.v1.BoundListenerStatus
-	56, // 44: clyde.v1.GetDaemonStatusResponse.process:type_name -> clyde.v1.StatusMetric
-	58, // 45: clyde.v1.ClydeService.GetDaemonStatus:input_type -> google.protobuf.Empty
-	59, // 46: clyde.v1.ClydeService.ReloadDaemon:input_type -> clyde.v1.ReloadDaemonRequest
-	59, // 47: clyde.v1.ClydeService.RebindDaemon:input_type -> clyde.v1.ReloadDaemonRequest
-	60, // 48: clyde.v1.ClydeService.GetProviderStats:input_type -> clyde.v1.GetProviderStatsRequest
-	61, // 49: clyde.v1.ClydeService.SubscribeProviderStats:input_type -> clyde.v1.SubscribeProviderStatsRequest
-	27, // 50: clyde.v1.ClydeService.ListConversations:input_type -> clyde.v1.ListConversationsRequest
-	29, // 51: clyde.v1.ClydeService.GetConversationInfo:input_type -> clyde.v1.GetConversationInfoRequest
-	33, // 52: clyde.v1.ClydeService.SearchConversations:input_type -> clyde.v1.SearchConversationsRequest
-	44, // 53: clyde.v1.ClydeService.ResolveConversationRequest:input_type -> clyde.v1.ResolveConversationRequestRequest
-	46, // 54: clyde.v1.ClydeService.ReorientConversation:input_type -> clyde.v1.ReorientConversationRequest
-	28, // 55: clyde.v1.ClydeService.StreamConversation:input_type -> clyde.v1.GetConversationRequest
-	32, // 56: clyde.v1.ClydeService.StreamConversationContext:input_type -> clyde.v1.GetConversationContextRequest
-	49, // 57: clyde.v1.ClydeService.StreamExportTranscript:input_type -> clyde.v1.ExportTranscriptRequest
-	24, // 58: clyde.v1.ClydeService.GetMITMStatus:input_type -> clyde.v1.GetMITMStatusRequest
-	17, // 59: clyde.v1.ClydeService.ShowCapture:input_type -> clyde.v1.ShowCaptureRequest
-	15, // 60: clyde.v1.ClydeService.SeedBaseline:input_type -> clyde.v1.SeedBaselineRequest
-	8,  // 61: clyde.v1.ClydeService.LogsInventory:input_type -> clyde.v1.LogsInventoryRequest
-	6,  // 62: clyde.v1.ClydeService.GetSemanticSearchFreshness:input_type -> clyde.v1.GetSemanticSearchFreshnessRequest
-	55, // 63: clyde.v1.ClydeService.GetDaemonStatus:output_type -> clyde.v1.GetDaemonStatusResponse
-	62, // 64: clyde.v1.ClydeService.ReloadDaemon:output_type -> clyde.v1.ReloadDaemonResponse
-	62, // 65: clyde.v1.ClydeService.RebindDaemon:output_type -> clyde.v1.ReloadDaemonResponse
-	63, // 66: clyde.v1.ClydeService.GetProviderStats:output_type -> clyde.v1.GetProviderStatsResponse
-	64, // 67: clyde.v1.ClydeService.SubscribeProviderStats:output_type -> clyde.v1.ProviderStatsEvent
-	52, // 68: clyde.v1.ClydeService.ListConversations:output_type -> clyde.v1.ListConversationsResponse
-	43, // 69: clyde.v1.ClydeService.GetConversationInfo:output_type -> clyde.v1.GetConversationInfoResponse
-	40, // 70: clyde.v1.ClydeService.SearchConversations:output_type -> clyde.v1.SearchConversationsResponse
-	45, // 71: clyde.v1.ClydeService.ResolveConversationRequest:output_type -> clyde.v1.ResolveConversationRequestResponse
-	48, // 72: clyde.v1.ClydeService.ReorientConversation:output_type -> clyde.v1.ReorientConversationResponse
-	30, // 73: clyde.v1.ClydeService.StreamConversation:output_type -> clyde.v1.ConversationChunk
-	30, // 74: clyde.v1.ClydeService.StreamConversationContext:output_type -> clyde.v1.ConversationChunk
-	31, // 75: clyde.v1.ClydeService.StreamExportTranscript:output_type -> clyde.v1.ExportChunk
-	26, // 76: clyde.v1.ClydeService.GetMITMStatus:output_type -> clyde.v1.GetMITMStatusResponse
-	23, // 77: clyde.v1.ClydeService.ShowCapture:output_type -> clyde.v1.ShowCaptureResponse
-	16, // 78: clyde.v1.ClydeService.SeedBaseline:output_type -> clyde.v1.SeedBaselineResponse
-	14, // 79: clyde.v1.ClydeService.LogsInventory:output_type -> clyde.v1.LogsInventoryResponse
-	7,  // 80: clyde.v1.ClydeService.GetSemanticSearchFreshness:output_type -> clyde.v1.GetSemanticSearchFreshnessResponse
-	63, // [63:81] is the sub-list for method output_type
-	45, // [45:63] is the sub-list for method input_type
-	45, // [45:45] is the sub-list for extension type_name
-	45, // [45:45] is the sub-list for extension extendee
-	0,  // [0:45] is the sub-list for field type_name
+	5,  // 17: clyde.v1.ConversationSearchMatch.backend:type_name -> clyde.v1.SemanticBackend
+	35, // 18: clyde.v1.SearchFacets.workspaces:type_name -> clyde.v1.SearchFacetCount
+	35, // 19: clyde.v1.SearchFacets.providers:type_name -> clyde.v1.SearchFacetCount
+	35, // 20: clyde.v1.SearchFacets.models:type_name -> clyde.v1.SearchFacetCount
+	38, // 21: clyde.v1.FilterAccounting.stages:type_name -> clyde.v1.FilterStage
+	34, // 22: clyde.v1.SearchConversationsResponse.matches:type_name -> clyde.v1.ConversationSearchMatch
+	1,  // 23: clyde.v1.SearchConversationsResponse.source:type_name -> clyde.v1.SearchSource
+	36, // 24: clyde.v1.SearchConversationsResponse.facets:type_name -> clyde.v1.SearchFacets
+	37, // 25: clyde.v1.SearchConversationsResponse.semantic_freshness:type_name -> clyde.v1.SemanticSearchFreshness
+	39, // 26: clyde.v1.SearchConversationsResponse.filter_accounting:type_name -> clyde.v1.FilterAccounting
+	51, // 27: clyde.v1.GetConversationInfoResponse.conversation:type_name -> clyde.v1.ConversationRecord
+	41, // 28: clyde.v1.GetConversationInfoResponse.stats:type_name -> clyde.v1.ConversationInfoStats
+	42, // 29: clyde.v1.GetConversationInfoResponse.segments:type_name -> clyde.v1.ConversationCompactionSegment
+	2,  // 30: clyde.v1.ResolveConversationRequestResponse.origin:type_name -> clyde.v1.RequestResolutionOrigin
+	3,  // 31: clyde.v1.ResolveConversationRequestResponse.not_found_reason:type_name -> clyde.v1.RequestResolutionNotFoundReason
+	51, // 32: clyde.v1.ResolveConversationRequestResponse.conversation:type_name -> clyde.v1.ConversationRecord
+	57, // 33: clyde.v1.ReorientConversationRef.provider:type_name -> clyde.v1.Provider
+	47, // 34: clyde.v1.ReorientConversationResponse.current_conversation:type_name -> clyde.v1.ReorientConversationRef
+	57, // 35: clyde.v1.ConversationLineage.parent_provider:type_name -> clyde.v1.Provider
+	57, // 36: clyde.v1.ConversationRecord.provider:type_name -> clyde.v1.Provider
+	50, // 37: clyde.v1.ConversationRecord.lineage:type_name -> clyde.v1.ConversationLineage
+	51, // 38: clyde.v1.ListConversationsResponse.conversations:type_name -> clyde.v1.ConversationRecord
+	4,  // 39: clyde.v1.SemanticStatus.connection:type_name -> clyde.v1.SemanticConnectionState
+	5,  // 40: clyde.v1.SemanticStatus.backend:type_name -> clyde.v1.SemanticBackend
+	56, // 41: clyde.v1.SemanticStatus.detail:type_name -> clyde.v1.StatusMetric
+	53, // 42: clyde.v1.GetDaemonStatusResponse.semantic:type_name -> clyde.v1.SemanticStatus
+	54, // 43: clyde.v1.GetDaemonStatusResponse.listeners:type_name -> clyde.v1.BoundListenerStatus
+	54, // 44: clyde.v1.GetDaemonStatusResponse.profiling:type_name -> clyde.v1.BoundListenerStatus
+	56, // 45: clyde.v1.GetDaemonStatusResponse.process:type_name -> clyde.v1.StatusMetric
+	58, // 46: clyde.v1.ClydeService.GetDaemonStatus:input_type -> google.protobuf.Empty
+	59, // 47: clyde.v1.ClydeService.ReloadDaemon:input_type -> clyde.v1.ReloadDaemonRequest
+	59, // 48: clyde.v1.ClydeService.RebindDaemon:input_type -> clyde.v1.ReloadDaemonRequest
+	60, // 49: clyde.v1.ClydeService.GetProviderStats:input_type -> clyde.v1.GetProviderStatsRequest
+	61, // 50: clyde.v1.ClydeService.SubscribeProviderStats:input_type -> clyde.v1.SubscribeProviderStatsRequest
+	27, // 51: clyde.v1.ClydeService.ListConversations:input_type -> clyde.v1.ListConversationsRequest
+	29, // 52: clyde.v1.ClydeService.GetConversationInfo:input_type -> clyde.v1.GetConversationInfoRequest
+	33, // 53: clyde.v1.ClydeService.SearchConversations:input_type -> clyde.v1.SearchConversationsRequest
+	44, // 54: clyde.v1.ClydeService.ResolveConversationRequest:input_type -> clyde.v1.ResolveConversationRequestRequest
+	46, // 55: clyde.v1.ClydeService.ReorientConversation:input_type -> clyde.v1.ReorientConversationRequest
+	28, // 56: clyde.v1.ClydeService.StreamConversation:input_type -> clyde.v1.GetConversationRequest
+	32, // 57: clyde.v1.ClydeService.StreamConversationContext:input_type -> clyde.v1.GetConversationContextRequest
+	49, // 58: clyde.v1.ClydeService.StreamExportTranscript:input_type -> clyde.v1.ExportTranscriptRequest
+	24, // 59: clyde.v1.ClydeService.GetMITMStatus:input_type -> clyde.v1.GetMITMStatusRequest
+	17, // 60: clyde.v1.ClydeService.ShowCapture:input_type -> clyde.v1.ShowCaptureRequest
+	15, // 61: clyde.v1.ClydeService.SeedBaseline:input_type -> clyde.v1.SeedBaselineRequest
+	8,  // 62: clyde.v1.ClydeService.LogsInventory:input_type -> clyde.v1.LogsInventoryRequest
+	6,  // 63: clyde.v1.ClydeService.GetSemanticSearchFreshness:input_type -> clyde.v1.GetSemanticSearchFreshnessRequest
+	55, // 64: clyde.v1.ClydeService.GetDaemonStatus:output_type -> clyde.v1.GetDaemonStatusResponse
+	62, // 65: clyde.v1.ClydeService.ReloadDaemon:output_type -> clyde.v1.ReloadDaemonResponse
+	62, // 66: clyde.v1.ClydeService.RebindDaemon:output_type -> clyde.v1.ReloadDaemonResponse
+	63, // 67: clyde.v1.ClydeService.GetProviderStats:output_type -> clyde.v1.GetProviderStatsResponse
+	64, // 68: clyde.v1.ClydeService.SubscribeProviderStats:output_type -> clyde.v1.ProviderStatsEvent
+	52, // 69: clyde.v1.ClydeService.ListConversations:output_type -> clyde.v1.ListConversationsResponse
+	43, // 70: clyde.v1.ClydeService.GetConversationInfo:output_type -> clyde.v1.GetConversationInfoResponse
+	40, // 71: clyde.v1.ClydeService.SearchConversations:output_type -> clyde.v1.SearchConversationsResponse
+	45, // 72: clyde.v1.ClydeService.ResolveConversationRequest:output_type -> clyde.v1.ResolveConversationRequestResponse
+	48, // 73: clyde.v1.ClydeService.ReorientConversation:output_type -> clyde.v1.ReorientConversationResponse
+	30, // 74: clyde.v1.ClydeService.StreamConversation:output_type -> clyde.v1.ConversationChunk
+	30, // 75: clyde.v1.ClydeService.StreamConversationContext:output_type -> clyde.v1.ConversationChunk
+	31, // 76: clyde.v1.ClydeService.StreamExportTranscript:output_type -> clyde.v1.ExportChunk
+	26, // 77: clyde.v1.ClydeService.GetMITMStatus:output_type -> clyde.v1.GetMITMStatusResponse
+	23, // 78: clyde.v1.ClydeService.ShowCapture:output_type -> clyde.v1.ShowCaptureResponse
+	16, // 79: clyde.v1.ClydeService.SeedBaseline:output_type -> clyde.v1.SeedBaselineResponse
+	14, // 80: clyde.v1.ClydeService.LogsInventory:output_type -> clyde.v1.LogsInventoryResponse
+	7,  // 81: clyde.v1.ClydeService.GetSemanticSearchFreshness:output_type -> clyde.v1.GetSemanticSearchFreshnessResponse
+	64, // [64:82] is the sub-list for method output_type
+	46, // [46:64] is the sub-list for method input_type
+	46, // [46:46] is the sub-list for extension type_name
+	46, // [46:46] is the sub-list for extension extendee
+	0,  // [0:46] is the sub-list for field type_name
 }
 
 func init() { file_clyde_v1_daemon_service_proto_init() }

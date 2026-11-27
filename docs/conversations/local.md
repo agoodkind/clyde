@@ -31,7 +31,7 @@ Enable conversation search and use an existing index for the selected backend.
 
 2. Set `backend` to `local` or `milvus` when calling `clyde_search` through MCP.
 
-An explicit backend applies only to that query. It uses the existing local index or the configured Milvus and embedding settings. Omitting `local_root` selects the same default directory as local ingestion. An unavailable backend returns an error. Omitting the argument preserves the configured backend and raw text fallback.
+An explicit backend applies only to that query. It uses the existing local index or the configured Milvus and embedding settings. Omitting `local_root` selects the same default directory as local ingestion. An unavailable explicit backend returns an error.
 
 ## Index both stores and keep Milvus as the default
 
@@ -52,6 +52,14 @@ An explicit backend applies only to that query. It uses the existing local index
 4. Run `clyde status` to inspect each worker's existing progress counters under `semantic_backends.milvus` and `semantic_backends.local`.
 
 Omitting `backends` enables only the store selected by `backend`. When `backends` is present, include the default store and list each enabled store once.
+
+## Use both and search Milvus first, then local fallback
+
+With both backends configured, set `milvus_first_local_fallback = true` under `[conversation.semantic]`. Searches without a backend selection list Milvus matches first and add local matches for content that Milvus has yet to embed. Clyde uses local search if the Milvus connection or search fails. Searches that specify a backend use that backend directly.
+
+JSON and MCP output report `"source":"mixed"` when the result includes matches from both stores. Each indexed match identifies its backend.
+
+The fallback setting defaults to `false` and takes effect after a daemon reload.
 
 ## Select the local store
 

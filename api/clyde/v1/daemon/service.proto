@@ -306,6 +306,7 @@ enum SearchSource {
   SEARCH_SOURCE_RAW_TEXT = 4;
   // SEARCH_SOURCE_LOCAL means the local backend produced the matches.
   SEARCH_SOURCE_LOCAL = 5;
+  SEARCH_SOURCE_MIXED = 6;
 }
 
 message ConversationSearchMatch {
@@ -325,6 +326,8 @@ message ConversationSearchMatch {
   // before tagging existed.
   string load_rules = 8;
   SearchContextState context_state = 9;
+  // backend identifies the index that returned this match.
+  SemanticBackend backend = 10;
 }
 
 // SearchFacetCount is one facet value and how many matched conversations carry

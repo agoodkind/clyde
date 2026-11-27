@@ -77,13 +77,14 @@ type searchConversationsOutput struct {
 }
 
 type searchConversationsMatchOutput struct {
-	Conversation  conv.Record `json:"conversation"`
-	MessageIndex  int         `json:"message_index"`
-	Role          string      `json:"role"`
-	Timestamp     time.Time   `json:"timestamp,omitzero"`
-	Snippet       string      `json:"snippet"`
-	Score         float64     `json:"score"`
-	ContextWindow string      `json:"context_window,omitempty"`
+	Backend       conv.SearchBackend `json:"backend,omitempty"`
+	Conversation  conv.Record        `json:"conversation"`
+	MessageIndex  int                `json:"message_index"`
+	Role          string             `json:"role"`
+	Timestamp     time.Time          `json:"timestamp,omitzero"`
+	Snippet       string             `json:"snippet"`
+	Score         float64            `json:"score"`
+	ContextWindow string             `json:"context_window,omitempty"`
 	// LoadRules is the loading-rules tag stored with the matched row; pass it
 	// back as load_rules on an around read so the window counts over the same
 	// message sequence message_index refers to.
@@ -212,6 +213,7 @@ func searchConversationsOutputFromDomain(
 				Timestamp:     match.Timestamp,
 				Snippet:       match.Snippet,
 				Score:         match.Score,
+				Backend:       match.Backend,
 				ContextWindow: match.ContextWindow,
 				LoadRules:     match.LoadRules,
 				ContextState:  match.ContextState,

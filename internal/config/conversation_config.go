@@ -80,6 +80,8 @@ type ConversationSemanticConfig struct {
 	Backend ConversationSemanticBackend `json:"backend,omitempty" toml:"backend,omitempty"`
 	// Backends enables independent ingestion pipelines. Omission uses Backend alone.
 	Backends []ConversationSemanticBackend `json:"backends,omitempty" toml:"backends,omitempty"`
+	// MilvusFirstLocalFallback searches local for content Milvus has not embedded.
+	MilvusFirstLocalFallback bool `json:"milvusFirstLocalFallback,omitempty" toml:"milvus_first_local_fallback,omitempty"`
 	// LocalRoot applies to the local backend only. An empty value selects a
 	// directory under the Clyde state directory.
 	LocalRoot string `json:"localRoot,omitempty" toml:"local_root,omitempty"`

@@ -18,6 +18,77 @@ func loadConversationSemanticTestConfig(t *testing.T, contents string) (*Config,
 	return loadConfig(dir)
 }
 
+func TestConversationSemanticMilvusFirstFallback(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		settings string
+		fallback bool
+		reject   bool
+	}{
+		{name: "defaults"},
+		{
+			name:     "fallback requires both",
+			settings: "milvus_first_local_fallback = true",
+			reject:   true,
+		},
+		{name: "parallel without fallback", settings: "backends = [\"milvus\", \"local\"]"},
+		{
+			name:     "fallback with both backends",
+			settings: "backends = [\"local\", \"milvus\"]\nmilvus_first_local_fallback = true",
+			fallback: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				cfg, err := loadConversationSemanticTestConfig(
+					t,
+					"[conversation.semantic]\n"+test.settings,
+				)
+				if test.reject {
+					if err == nil ||
+						!strings.Contains(
+							err.Error(),
+							"conversation.semantic.milvus_first_local_fallback",
+						) {
+						t.Fatalf("expected fallback configuration error, got %v", err)
+					}
+
+					return
+				}
+
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				settings := cfg.Conversation.Semantic
+				if settings.MilvusFirstLocalFallback != test.fallback {
+					t.Fatalf(
+						"fallback = %v, want %v",
+						settings.MilvusFirstLocalFallback,
+						test.fallback,
+					)
+				}
+			},
+		)
+	}
+}
+
+func TestConversationSemanticMilvusFirstFallbackRequiresReload(t *testing.T) {
+	t.Parallel()
+
+	base := *NewConfigWithDefaults()
+	fallback := base
+
+	fallback.Conversation.Semantic.MilvusFirstLocalFallback = true
+	if got := ClassifyConfigChange(base, fallback); got != RouteReload {
+		t.Fatalf("config change classified as %s, want reload", got)
+	}
+}
+
 // TestConversationSemanticProductionConfigStillLoads loads the key set that
 // production uses today and confirms that the loader accepts it and selects
 // the lm-semantic-search daemon.

@@ -95,13 +95,52 @@ func engineSearchMatches(
 	collectionID string,
 	options conversation.SearchConversationsOptions,
 ) (engineSearchPage, error) {
-	if snapshots, exact := localSearchDispatch(idx, semantic); exact {
-		return localSearchMatches(ctx, snapshots, semantic, collectionID, options)
-	}
-
 	limit, offset, searchLimit, err := semanticSearchPageBounds(options)
 	if err != nil {
 		return emptyEngineSearchPage(), err
+	}
+
+	return engineSearchMatchesAt(
+		ctx,
+		idx,
+		semantic,
+		collectionID,
+		options,
+		engineSearchBounds{
+			limit:       limit,
+			offset:      offset,
+			searchLimit: searchLimit,
+			complete:    false,
+		},
+	)
+}
+
+type engineSearchBounds struct {
+	limit       int
+	offset      int
+	searchLimit int
+	complete    bool
+}
+
+func engineSearchMatchesAt(
+	ctx context.Context,
+	idx conversationSearchIndex,
+	semantic conversationSemanticSearchClient,
+	collectionID string,
+	options conversation.SearchConversationsOptions,
+	bounds engineSearchBounds,
+) (engineSearchPage, error) {
+	limit, offset, searchLimit := bounds.limit, bounds.offset, bounds.searchLimit
+	if snapshots, exact := localSearchDispatch(idx, semantic); exact {
+		return localSearchMatches(
+			ctx,
+			snapshots,
+			semantic,
+			collectionID,
+			options,
+			offset,
+			searchLimit,
+		)
 	}
 
 	filter, scoped, err := engineSearchFilter(ctx, idx, options)
@@ -140,7 +179,8 @@ func engineSearchMatches(
 
 		page = resolveEngineHits(idx, hits, limit, offset, options.IncludeArchived, engineLimit)
 		nextLimit := nextEngineOverfetchLimit(engineLimit)
-		attemptsSpent := attempt >= searchOverfetchAttempts && len(page.matches) > 0
+		attemptsSpent := !bounds.complete && attempt >= searchOverfetchAttempts &&
+			len(page.matches) > 0
 		if !page.needsMoreHeadroom(limit) || attemptsSpent || nextLimit == engineLimit {
 			break
 		}
@@ -152,43 +192,34 @@ func engineSearchMatches(
 		return page, nil
 	}
 
-	if engineLimit >= maxEngineOverfetchLimit {
-		slog.WarnContext(
-			ctx,
-			"daemon.search_conversations.page_truncated_at_engine_window",
-			"concern",
-			"process.daemon.lifecycle",
-			"component",
-			"daemon",
-			"offset",
-			offset,
-			"limit",
-			limit,
-			"returned",
-			len(page.matches),
-			"ranked",
-			page.ranked,
-			"withheld",
-			page.withheld,
-			"engine_limit",
-			engineLimit,
-		)
+	page.short = engineLimit < maxEngineOverfetchLimit
+	logIncompleteEnginePage(ctx, page, bounds, engineLimit)
 
-		return page, nil
+	return page, nil
+}
+
+func logIncompleteEnginePage(
+	ctx context.Context,
+	page engineSearchPage,
+	bounds engineSearchBounds,
+	engineLimit int,
+) {
+	event := "daemon.search_conversations.page_truncated_at_engine_window"
+	if page.short {
+		event = "daemon.search_conversations.page_short_after_overfetch"
 	}
 
-	page.short = true
 	slog.WarnContext(
 		ctx,
-		"daemon.search_conversations.page_short_after_overfetch",
+		event,
 		"concern",
 		"process.daemon.lifecycle",
 		"component",
 		"daemon",
 		"offset",
-		offset,
+		bounds.offset,
 		"limit",
-		limit,
+		bounds.limit,
 		"returned",
 		len(page.matches),
 		"ranked",
@@ -198,8 +229,6 @@ func engineSearchMatches(
 		"engine_limit",
 		engineLimit,
 	)
-
-	return page, nil
 }
 
 func hasDateBound(options conversation.SearchConversationsOptions) bool {
@@ -353,6 +382,7 @@ func resolveEngineHits(
 		matches = append(
 			matches,
 			conversation.SearchMatch{
+				Backend:      "",
 				Record:       record,
 				MessageIndex: int(hit.MessageIndex),
 				Role:         hit.Role,

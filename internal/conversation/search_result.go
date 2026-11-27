@@ -19,6 +19,8 @@ const (
 	SearchSourceRawText
 	// SearchSourceLocal means the local backend produced the matches.
 	SearchSourceLocal
+	// SearchSourceMixed means Milvus and local both produced matches.
+	SearchSourceMixed
 )
 
 // String renders the source as a stable lowercase label for text output.
@@ -30,6 +32,8 @@ func (s SearchSource) String() string {
 		return "raw_text"
 	case SearchSourceLocal:
 		return "local"
+	case SearchSourceMixed:
+		return "mixed"
 	case SearchSourceUnspecified:
 		return "unspecified"
 	default:

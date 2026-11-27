@@ -201,6 +201,10 @@ func (s *controlServer) SearchConversations(
 
 	result, err := s.searchSource.SearchConversations(ctx, searchConversationsOptionsFromProto(req))
 	if err != nil {
+		if code := searchCancellationCode(ctx, err); code != codes.OK {
+			return nil, status.Error(code, "conversation search interrupted")
+		}
+
 		var invalidBounds invalidSearchBoundsError
 		if errors.As(err, &invalidBounds) {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -452,6 +456,7 @@ func searchConversationsResponse(
 				ContextWindow: match.ContextWindow,
 				LoadRules:     match.LoadRules,
 				ContextState:  protoSearchContextState(match.ContextState),
+				Backend:       protoSearchMatchBackend(match.Backend),
 			},
 		)
 	}
@@ -469,6 +474,30 @@ func searchConversationsResponse(
 		SemanticFreshness:    protoSearchFreshness(result.Freshness),
 		FilterAccounting:     protoFilterAccounting(result.FilterAccounting),
 		NextCursor:           result.NextCursor,
+	}
+}
+
+func protoSearchMatchBackend(backend conversation.SearchBackend) clydev1.SemanticBackend {
+	switch backend {
+	case conversation.SearchBackendMilvus:
+		return clydev1.SemanticBackend_SEMANTIC_BACKEND_MILVUS
+	case conversation.SearchBackendLocal:
+		return clydev1.SemanticBackend_SEMANTIC_BACKEND_LOCAL
+	default:
+		return clydev1.SemanticBackend_SEMANTIC_BACKEND_UNSPECIFIED
+	}
+}
+
+func searchMatchBackendFromProto(backend clydev1.SemanticBackend) conversation.SearchBackend {
+	switch backend {
+	case clydev1.SemanticBackend_SEMANTIC_BACKEND_MILVUS:
+		return conversation.SearchBackendMilvus
+	case clydev1.SemanticBackend_SEMANTIC_BACKEND_LOCAL:
+		return conversation.SearchBackendLocal
+	case clydev1.SemanticBackend_SEMANTIC_BACKEND_UNSPECIFIED:
+		return ""
+	default:
+		return ""
 	}
 }
 
@@ -498,6 +527,8 @@ func protoSearchSource(source conversation.SearchSource) clydev1.SearchSource {
 		return clydev1.SearchSource_SEARCH_SOURCE_RAW_TEXT
 	case conversation.SearchSourceLocal:
 		return clydev1.SearchSource_SEARCH_SOURCE_LOCAL
+	case conversation.SearchSourceMixed:
+		return clydev1.SearchSource_SEARCH_SOURCE_MIXED
 	case conversation.SearchSourceUnspecified:
 		return clydev1.SearchSource_SEARCH_SOURCE_UNSPECIFIED
 	default:

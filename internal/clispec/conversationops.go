@@ -217,7 +217,7 @@ func searchParams() []Param[searchInput] {
 		),
 		StringParam(
 			"backend",
-			"Search backend: milvus or local. Omit to use the configured backend.",
+			"Search backend: milvus or local. Omit to use the configured search policy.",
 			"",
 			false,
 			func(in *searchInput, v string) { in.Backend = v },
@@ -766,6 +766,10 @@ func formatSearchConversationsResult(result conv.SearchConversationsResult, quer
 		query,
 	)
 
+	if result.Source == conv.SearchSourceMixed {
+		fmt.Fprintf(&out, "Source: %s\n\n", result.Source)
+	}
+
 	for index, match := range result.Matches {
 		role := match.Role
 		if role == "" {
@@ -778,6 +782,10 @@ func formatSearchConversationsResult(result conv.SearchConversationsResult, quer
 		fmt.Fprintf(&out, "   Role: %s\n", role)
 		fmt.Fprintf(&out, "   Timestamp: %s\n", matchTimestampText(match.Timestamp))
 		fmt.Fprintf(&out, "   Rank: %d\n", index+1)
+		if match.Backend != "" {
+			fmt.Fprintf(&out, "   Backend: %s\n", match.Backend)
+		}
+
 		snippet := strings.TrimSpace(match.Snippet)
 
 		fence := "```"
