@@ -50,8 +50,6 @@ jobs:
           key: clyde-race-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.mod', 'go.sum', 'Makefile', 'bootstrap.mk', 'third_party/gksyntax/**') }}
       - name: Native build prerequisites
         run: make native-prereqs
-      - name: Build CLI dependencies for subprocess tests
-        run: go build -o "${RUNNER_TEMP}/clyde" ./cmd/clyde
       # Ginkgo issue #871 can hang its CLI on Linux amd64 with race detection.
       # go test runs the same suites. Ginkgo requires -count=1.
       - name: Race tests
