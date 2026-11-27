@@ -534,7 +534,7 @@ internal/adapter/codex/transport_ws.go:1028:6: Function 'runWebsocketWithCache' 
 internal/adapter/codex/transport_ws.go:680:2: return with no blank line before (nlreturn)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
 internal/adapter/codex/transport_ws.go:1244:6: Function 'openSessionAndWarmup' is too long (105 > 100) (funlen)	# golangci-lint:first_added=2026-11-10T09:44:41Z last_seen=2026-11-10T12:28:03Z
 internal/adapter/codex/transport_ws.go:1315:15: do not define dynamic errors, use wrapped static errors instead: "errors.New(\"codex websocket warmup failed: missing response_id\")" (err113)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
-internal/adapter/codex/transport_ws.go:1371:1: file-length-limit: file length is 1253 lines, which exceeds the limit of 1000 (revive)	# golangci-lint:first_added=2026-11-10T10:02:15Z last_seen=2026-11-10T12:28:03Z
+internal/adapter/codex/transport_ws.go:1371:1: file-length-limit: file length is 1126 lines, which exceeds the limit of 1000 (revive)	# golangci-lint:first_added=2026-11-10T10:02:15Z last_seen=2026-11-10T12:28:03Z
 internal/adapter/codex/transport_ws.go:189:15: do not define dynamic errors, use wrapped static errors instead: "fmt.Errorf(\"codex websocket message missing type\")" (err113)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
 internal/adapter/codex/transport_ws.go:189:15: error-format: fmt.Errorf can be replaced with errors.New (perfsprint)	# golangci-lint:first_added=2026-11-10T09:39:19Z last_seen=2026-11-10T12:28:03Z
 internal/adapter/codex/transport_ws.go:209:2: variable name 'pr' is too short for the scope of its usage (varnamelen)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
@@ -1167,7 +1167,7 @@ internal/cli/daemon/repair_timestamps.go:136:1: The line is 141 characters long,
 internal/cli/daemon/repair_timestamps.go:140:1: The line is 177 characters long, which exceeds the maximum of 120 characters. (lll)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
 internal/cli/daemon/repair_timestamps.go:145:4: return with no blank line before (nlreturn)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
 internal/cli/daemon/repair_timestamps.go:141:1: The line is 340 characters long, which exceeds the maximum of 120 characters. (lll)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
-internal/cli/daemon/repair_timestamps.go:1424:1: file-length-limit: file length is 1400 lines, which exceeds the limit of 1000 (revive)	# golangci-lint:first_added=2026-11-10T10:02:15Z last_seen=2026-11-10T12:28:03Z
+internal/cli/daemon/repair_timestamps.go:1424:1: file-length-limit: file length is 1225 lines, which exceeds the limit of 1000 (revive)	# golangci-lint:first_added=2026-11-10T10:02:15Z last_seen=2026-11-10T12:28:03Z
 internal/cli/daemon/repair_timestamps.go:202:1: The line is 132 characters long, which exceeds the maximum of 120 characters. (lll)	# golangci-lint:first_added=2026-11-10T09:44:41Z last_seen=2026-11-10T12:28:03Z
 internal/cli/daemon/repair_timestamps.go:208:6: Function 'runRepairConversationTimestamps' is too long (121 > 100) (funlen)	# golangci-lint:first_added=2026-11-10T10:02:15Z last_seen=2026-11-10T12:28:03Z
 internal/cli/daemon/repair_timestamps.go:335:10: do not define dynamic errors, use wrapped static errors instead: "errors.New(\"set --limit to zero or a positive number\")" (err113)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
@@ -2034,7 +2034,7 @@ internal/conversation/vectorsearch/timestamp_repair_source.go:1174:26: Magic num
 internal/conversation/vectorsearch/timestamp_repair_source.go:1188:31: Magic number: 2, in <assign> detected (mnd)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
 internal/conversation/vectorsearch/timestamp_repair_source.go:1205:20: Magic number: 2, in <condition> detected (mnd)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
 internal/conversation/vectorsearch/timestamp_repair_source.go:1228:1: The line is 133 characters long, which exceeds the maximum of 120 characters. (lll)	# golangci-lint:first_added=2026-11-10T09:44:41Z last_seen=2026-11-10T12:28:03Z
-internal/conversation/vectorsearch/timestamp_repair_source.go:1318:1: file-length-limit: file length is 1220 lines, which exceeds the limit of 1000 (revive)	# golangci-lint:first_added=2026-11-10T10:02:15Z last_seen=2026-11-10T12:28:03Z
+internal/conversation/vectorsearch/timestamp_repair_source.go:1318:1: file-length-limit: file length is 1057 lines, which exceeds the limit of 1000 (revive)	# golangci-lint:first_added=2026-11-10T10:02:15Z last_seen=2026-11-10T12:28:03Z
 internal/conversation/vectorsearch/timestamp_repair_source.go:951:1: godoc line is too long (80 > 77) (godoclint)	# golangci-lint:first_added=2026-11-10T09:39:02Z last_seen=2026-11-10T12:28:03Z
 internal/conversation/vectorsearch/timestamp_repair_source.go:135:18: Function 'RepairTimestampsFromSource' is too long (160 > 100) (funlen)	# golangci-lint:first_added=2026-11-10T09:44:41Z last_seen=2026-11-10T12:28:03Z
 internal/conversation/vectorsearch/timestamp_repair_source.go:142:3: embedlit: embedded field type can be removed from struct literal (modernize)	# golangci-lint:first_added=2026-11-10T09:38:04Z last_seen=2026-11-10T12:28:03Z
@@ -2085,7 +2085,7 @@ internal/daemon/client.go:1063:33: do not define dynamic errors, use wrapped sta
 internal/daemon/client.go:410:39: error-format: fmt.Errorf can be replaced with errors.New (perfsprint)	# golangci-lint:first_added=2026-11-10T09:39:19Z last_seen=2026-11-10T12:28:03Z
 internal/daemon/client.go:1268:13: do not define dynamic errors, use wrapped static errors instead: "fmt.Errorf(\"reload lock panic: %v\", recovered)" (err113)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
 internal/daemon/client.go:1276:3: return with no blank line before (nlreturn)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
-internal/daemon/client.go:1301:1: file-length-limit: file length is 1242 lines, which exceeds the limit of 1000 (revive)	# golangci-lint:first_added=2026-11-10T09:44:41Z last_seen=2026-11-10T12:28:03Z
+internal/daemon/client.go:1301:1: file-length-limit: file length is 1091 lines, which exceeds the limit of 1000 (revive)	# golangci-lint:first_added=2026-11-10T09:44:41Z last_seen=2026-11-10T12:28:03Z
 internal/daemon/client.go:26:1: godoc line is too long (78 > 77) (godoclint)	# golangci-lint:first_added=2026-11-10T09:39:02Z last_seen=2026-11-10T12:28:03Z
 internal/daemon/client.go:410:39: do not define dynamic errors, use wrapped static errors instead: "fmt.Errorf(\n\t\"reorient conversation: daemon returned no current conversation; deploy matching daemon binary\",\n)" (err113)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
 internal/daemon/client.go:911:1: godoc line is too long (79 > 77) (godoclint)	# golangci-lint:first_added=2026-11-10T09:39:02Z last_seen=2026-11-10T12:28:03Z
@@ -2383,7 +2383,7 @@ internal/daemonsupervisor/supervisor.go:911:3: return with no blank line before 
 internal/daemonsupervisor/supervisor.go:1192:33: do not define dynamic errors, use wrapped static errors instead: "fmt.Errorf(\n\t\"supervisor request body %d bytes exceeds limit %d\",\n\tlength,\n\tmaxControlRequestBytes,\n)" (err113)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
 internal/daemonsupervisor/supervisor.go:128:6: Function 'SuperviseContext' is too long (170 > 100) (funlen)	# golangci-lint:first_added=2026-11-10T10:02:15Z last_seen=2026-11-10T12:28:03Z
 internal/daemonsupervisor/supervisor.go:130:10: do not define dynamic errors, use wrapped static errors instead: "fmt.Errorf(\"daemon supervisor runtime dir is empty\")" (err113)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
-internal/daemonsupervisor/supervisor.go:1335:1: file-length-limit: file length is 1268 lines, which exceeds the limit of 1000 (revive)	# golangci-lint:first_added=2026-11-10T10:02:15Z last_seen=2026-11-10T12:28:03Z
+internal/daemonsupervisor/supervisor.go:1335:1: file-length-limit: file length is 1110 lines, which exceeds the limit of 1000 (revive)	# golangci-lint:first_added=2026-11-10T10:02:15Z last_seen=2026-11-10T12:28:03Z
 internal/daemonsupervisor/supervisor.go:191:71: Magic number: 3, in <argument> detected (mnd)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
 internal/daemonsupervisor/supervisor.go:209:35: Magic number: 2, in <argument> detected (mnd)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
 internal/daemonsupervisor/supervisor.go:328:1: 328-384 lines are duplicate of `internal/daemonsupervisor/supervisor.go:392-448` (dupl)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
@@ -2419,7 +2419,7 @@ internal/deploy/deploy.go:501:3: return with no blank line before (nlreturn)	# g
 internal/deploy/deploy.go:1231:14: do not define dynamic errors, use wrapped static errors instead: "errors.New(\"empty home dir\")" (err113)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
 internal/deploy/deploy.go:1347:5: errorsastype: errors.As can be simplified using AsType[*exec.ExitError] (modernize)	# golangci-lint:first_added=2026-11-10T09:38:50Z last_seen=2026-11-10T12:28:03Z
 internal/deploy/deploy.go:1422:8: parameter name 'r' is too short for the scope of its usage (varnamelen)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
-internal/deploy/deploy.go:1441:1: file-length-limit: file length is 1429 lines, which exceeds the limit of 1000 (revive)	# golangci-lint:first_added=2026-11-10T10:02:15Z last_seen=2026-11-10T12:28:03Z
+internal/deploy/deploy.go:1441:1: file-length-limit: file length is 1219 lines, which exceeds the limit of 1000 (revive)	# golangci-lint:first_added=2026-11-10T10:02:15Z last_seen=2026-11-10T12:28:03Z
 internal/deploy/deploy.go:188:46: string `err` has 13 occurrences, make it a constant (goconst)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
 internal/deploy/deploy.go:218:14: do not define dynamic errors, use wrapped static errors instead: "fmt.Errorf(\"unsupported platform %q\", runtime.GOOS)" (err113)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
 internal/deploy/deploy.go:307:20: do not define dynamic errors, use wrapped static errors instead: "fmt.Errorf(\"unsupported platform %q\", targetPlatform)" (err113)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
@@ -2657,7 +2657,7 @@ internal/mitm/connect_tunnel.go:266:18: error-format: fmt.Errorf can be replaced
 internal/mitm/connect_tunnel.go:1285:23: Magic number: 3, in <condition> detected (mnd)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
 internal/mitm/connect_tunnel.go:1449:23: Magic number: 2, in <condition> detected (mnd)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
 internal/mitm/connect_tunnel.go:1460:24: Magic number: 30, in <assign> detected (mnd)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
-internal/mitm/connect_tunnel.go:1564:1: file-length-limit: file length is 1416 lines, which exceeds the limit of 1000 (revive)	# golangci-lint:first_added=2026-11-10T10:02:15Z last_seen=2026-11-10T12:28:03Z
+internal/mitm/connect_tunnel.go:1564:1: file-length-limit: file length is 1267 lines, which exceeds the limit of 1000 (revive)	# golangci-lint:first_added=2026-11-10T10:02:15Z last_seen=2026-11-10T12:28:03Z
 internal/mitm/connect_tunnel.go:253:18: do not define dynamic errors, use wrapped static errors instead: "fmt.Errorf(\"missing CONNECT host\")" (err113)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
 internal/mitm/connect_tunnel.go:257:18: do not define dynamic errors, use wrapped static errors instead: "fmt.Errorf(\"CONNECT target contains NUL\")" (err113)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
 internal/mitm/connect_tunnel.go:266:18: do not define dynamic errors, use wrapped static errors instead: "fmt.Errorf(\"CONNECT port out of range\")" (err113)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
@@ -3020,7 +3020,7 @@ internal/providers/cursor/parser/parser.go:233:1: godoc line is too long (78 > 7
 internal/providers/cursor/parser/parser.go:232:1: godoc line is too long (79 > 77) (godoclint)	# golangci-lint:first_added=2026-11-10T09:39:02Z last_seen=2026-11-10T12:28:03Z
 internal/providers/cursor/parser/parser.go:1380:13: do not define dynamic errors, use wrapped static errors instead: "fmt.Errorf(\"cursor root not found for %s\", discovered.Path)" (err113)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
 internal/providers/cursor/parser/parser.go:821:3: return with no blank line before (nlreturn)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
-internal/providers/cursor/parser/parser.go:1446:1: file-length-limit: file length is 1318 lines, which exceeds the limit of 1000 (revive)	# golangci-lint:first_added=2026-11-10T10:02:15Z last_seen=2026-11-10T12:28:03Z
+internal/providers/cursor/parser/parser.go:1446:1: file-length-limit: file length is 1150 lines, which exceeds the limit of 1000 (revive)	# golangci-lint:first_added=2026-11-10T10:02:15Z last_seen=2026-11-10T12:28:03Z
 internal/providers/cursor/parser/parser.go:152:1: unexported method "discover" for struct "Parser" should be placed after the exported method "Stream" (funcorder)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
 internal/providers/cursor/parser/parser.go:238:18: Function 'ScanRecord' is too long (151 > 100) (funlen)	# golangci-lint:first_added=2026-11-10T10:02:15Z last_seen=2026-11-10T12:28:03Z
 internal/providers/cursor/parser/parser.go:441:18: Function 'discoverJSONL' is too long (114 > 100) (funlen)	# golangci-lint:first_added=2026-11-10T10:02:15Z last_seen=2026-11-10T12:28:03Z
@@ -3178,7 +3178,7 @@ internal/providers/cursor/store/tool_call_record.go:21:1: godoc line is too long
 internal/providers/cursor/store/tool_call_record.go:34:1: The line is 143 characters long, which exceeds the maximum of 120 characters. (lll)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
 internal/providers/cursor/store/tool_call_record.go:34:1: godoc line is too long (140 > 77) (godoclint)	# golangci-lint:first_added=2026-11-10T09:39:02Z last_seen=2026-11-10T12:28:03Z
 internal/providers/zed/parser/parser.go:484:4: continue with no blank line before (nlreturn)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
-internal/providers/zed/parser/parser.go:1186:1: file-length-limit: file length is 1161 lines, which exceeds the limit of 1000 (revive)	# golangci-lint:first_added=2026-11-10T10:02:15Z last_seen=2026-11-10T12:28:03Z
+internal/providers/zed/parser/parser.go:1186:1: file-length-limit: file length is 1012 lines, which exceeds the limit of 1000 (revive)	# golangci-lint:first_added=2026-11-10T10:02:15Z last_seen=2026-11-10T12:28:03Z
 internal/providers/zed/parser/parser.go:350:2: return with no blank line before (nlreturn)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
 internal/providers/zed/parser/parser.go:736:3: variable name 'db' is too short for the scope of its usage (varnamelen)	# golangci-lint:first_added=2026-11-10T09:38:31Z last_seen=2026-11-10T12:28:03Z
 internal/providers/zed/parser/parser.go:503:18: Function 'resolveDiscoveredThread' is too long (121 > 100) (funlen)	# golangci-lint:first_added=2026-11-10T10:02:15Z last_seen=2026-11-10T12:28:03Z
