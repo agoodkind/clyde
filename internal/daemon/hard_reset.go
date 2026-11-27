@@ -615,8 +615,10 @@ func validateResetCredentialPaths(target, resolvedTarget string, cfg *config.Con
 			withinResetRoot(resolvedTarget, resolved) {
 			slog.Warn(
 				"daemon.hard_reset.credential_overlap",
-				"concern", "process.daemon.lifecycle",
-				"target", target,
+				"concern",
+				"process.daemon.lifecycle",
+				"target",
+				target,
 			)
 
 			return fmt.Errorf("%w: %s", errProtectedCredentialReset, target)
