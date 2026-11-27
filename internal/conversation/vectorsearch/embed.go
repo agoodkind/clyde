@@ -333,22 +333,9 @@ func (c *Client) vectorsFor(
 		return vectors, nil, nil
 	}
 
-	result, err := c.embedder.EmbedBatch(ctx, missTexts)
+	result, err := c.embedIngestionBatch(ctx, missTexts)
 	if err != nil {
-		slog.WarnContext(
-			ctx,
-			"conversation.vectorsearch.embed_batch_failed",
-			"concern",
-			"conversation.semantic",
-			"component",
-			"conversation",
-			"inputs",
-			len(missTexts),
-			"err",
-			err,
-		)
-
-		return nil, nil, fmt.Errorf("embed %d conversation rows: %w", len(missTexts), err)
+		return nil, nil, err
 	}
 
 	if len(result.Vectors) != len(missTexts) {

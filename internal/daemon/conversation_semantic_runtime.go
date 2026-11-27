@@ -278,19 +278,20 @@ func openConversationSearchClient(
 	client, err := vectorsearch.Open(
 		ctx,
 		vectorsearch.Options{
-			Backend:                backend,
-			LocalRoot:              semanticCfg.LocalRoot,
-			MilvusAddress:          semanticCfg.MilvusAddress,
-			MilvusDatabase:         semanticCfg.MilvusDatabase,
-			MilvusLayout:           vectorsearch.Layout(semanticCfg.MilvusLayout),
-			EmbeddingBaseURL:       semanticCfg.EmbeddingBaseURL,
-			EmbeddingModel:         semanticCfg.EmbeddingModel,
-			EmbeddingDimension:     semanticCfg.EmbeddingDimension,
-			EmbeddingAPIKey:        apiKey,
-			EmbeddingTimeout:       semanticCfg.EmbeddingRequestTimeout.AsDuration(),
-			QueryInstructionPrefix: semanticCfg.QueryInstructionPrefix,
-			DenseSearchParams:      semanticCfg.DenseSearchParams(),
-			CheckpointDir:          checkpointDir,
+			Backend:                 backend,
+			LocalRoot:               semanticCfg.LocalRoot,
+			MilvusAddress:           semanticCfg.MilvusAddress,
+			MilvusDatabase:          semanticCfg.MilvusDatabase,
+			MilvusLayout:            vectorsearch.Layout(semanticCfg.MilvusLayout),
+			EmbeddingBaseURL:        semanticCfg.EmbeddingBaseURL,
+			EmbeddingModel:          semanticCfg.EmbeddingModel,
+			EmbeddingDimension:      semanticCfg.EmbeddingDimension,
+			EmbeddingAPIKey:         apiKey,
+			EmbeddingTimeout:        semanticCfg.EmbeddingRequestTimeout.AsDuration(),
+			MilvusEmbeddingIdleOnly: semanticCfg.MilvusEmbeddingIdleOnly,
+			QueryInstructionPrefix:  semanticCfg.QueryInstructionPrefix,
+			DenseSearchParams:       semanticCfg.DenseSearchParams(),
+			CheckpointDir:           checkpointDir,
 		},
 	)
 	if err != nil {
@@ -306,6 +307,9 @@ func openConversationSearchClient(
 // sync worker when ingestion is enabled. The runtime owns unavailable and
 // recovered logging across repeated attempts.
 func semanticConnectorFor(semanticCfg config.ConversationSemanticConfig) semanticConnector {
+	semanticCfg.MilvusEmbeddingIdleOnly = semanticCfg.MilvusEmbeddingIdleOnly &&
+		semanticCfg.FeedsEngine()
+
 	return func(ctx context.Context) (semanticConnection, error) {
 		failed := semanticConnection{search: nil, feeder: nil, connCloser: nil, close: nil}
 		var client *vectorsearch.Client
@@ -809,4 +813,18 @@ func (r *conversationSemanticRuntime) syncClient() conversationSemanticClient {
 	}
 
 	return r.feeder
+}
+
+func (r *conversationSemanticRuntime) embeddingWaitingMetrics() []StatusMetric {
+	client, ok := r.syncClient().(*vectorsearch.Client)
+	if !ok {
+		return nil
+	}
+
+	reason := client.EmbeddingWaitingReason()
+	if reason == "" {
+		return nil
+	}
+
+	return []StatusMetric{textMetric("semantic_sync.embedding_waiting_reason", reason)}
 }

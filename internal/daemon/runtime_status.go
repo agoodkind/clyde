@@ -28,6 +28,13 @@ func (r *runtimeServices) statusSnapshot() *clydev1.GetDaemonStatusResponse {
 		semantic.Detail,
 		statusMetricsProto(r.semanticBackendMetrics(cfg.Conversation.Semantic))...,
 	)
+	if len(cfg.Conversation.Semantic.Backends) == 0 {
+		semantic.Detail = append(
+			semantic.Detail,
+			statusMetricsProto(r.semantic.embeddingWaitingMetrics())...,
+		)
+	}
+
 	if cfg.Conversation.Semantic.UsesEngine() {
 		semantic.Connection = clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_UNAVAILABLE
 		if r.semantic != nil {

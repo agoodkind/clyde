@@ -256,7 +256,18 @@ func runInitialSemanticIndex(
 	index conversationSemanticIndex,
 	output io.Writer,
 ) (bool, error) {
-	contentKinds, err := SemanticContentKinds(cfg.Conversation.Semantic)
+	semantic := cfg.Conversation.Semantic
+	if semantic.MilvusEmbeddingIdleOnly &&
+		semantic.DefaultBackend() == config.ConversationSemanticBackendMilvus {
+		_, _ = fmt.Fprintln(
+			output,
+			"Initial indexing: the daemon will embed Milvus content when idle",
+		)
+
+		return false, nil
+	}
+
+	contentKinds, err := SemanticContentKinds(semantic)
 	if err != nil {
 		return false, err
 	}

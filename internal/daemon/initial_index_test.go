@@ -98,6 +98,35 @@ func TestRunInitialConversationIndexReportsProgress(t *testing.T) {
 	}
 }
 
+func TestInitialConversationIndexLeavesQuietMilvusIngestionToDaemon(t *testing.T) {
+	configureInitialIndexTest(t, true)
+	configPath := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "clyde", "config.toml")
+	settings := "[conversation.semantic]\ningestion_enabled = true\nmilvus_embedding_idle_only = true\n"
+	if err := os.WriteFile(configPath, []byte(settings), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	previousDial := dialInitialSemantic
+	dialInitialSemantic = func(context.Context, config.ConversationSemanticConfig) (
+		initialSemanticClient,
+		error,
+	) {
+		t.Fatal("initial indexing tried to open a quiet Milvus ingestion connection")
+
+		return nil, errors.New("unexpected semantic dial")
+	}
+	t.Cleanup(func() { dialInitialSemantic = previousDial })
+
+	var output bytes.Buffer
+	if err := RunInitialConversationIndex(t.Context(), &output, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(conversation.CachePath()); err != nil {
+		t.Fatalf("initial indexing did not create the raw cache: %v", err)
+	}
+}
+
 func TestInitialIndexRefreshFailureNamesRawDiscovery(t *testing.T) {
 	wantErr := errors.New("store unreadable")
 	var output bytes.Buffer

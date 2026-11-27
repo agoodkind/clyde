@@ -12,6 +12,7 @@ import (
 	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/conversation/semsearch"
 	"goodkind.io/lm-semantic-search/collection"
+	"goodkind.io/lm-semantic-search/embedding/scheduling"
 )
 
 const (
@@ -46,17 +47,19 @@ func (e operationError) Unwrap() error {
 
 // Options configures a [Client].
 type Options struct {
-	Backend                Backend
-	MilvusAddress          string
-	MilvusDatabase         string
-	MilvusLayout           Layout
-	EmbeddingBaseURL       string
-	EmbeddingModel         string
-	EmbeddingDimension     int
-	EmbeddingAPIKey        string
-	EmbeddingTimeout       time.Duration
-	QueryInstructionPrefix string
-	DenseSearchParams      map[string]string
+	Backend            Backend
+	MilvusAddress      string
+	MilvusDatabase     string
+	MilvusLayout       Layout
+	EmbeddingBaseURL   string
+	EmbeddingModel     string
+	EmbeddingDimension int
+	EmbeddingAPIKey    string
+	EmbeddingTimeout   time.Duration
+	// MilvusEmbeddingIdleOnly defers Milvus ingestion embedding batches.
+	MilvusEmbeddingIdleOnly bool
+	QueryInstructionPrefix  string
+	DenseSearchParams       map[string]string
 	// LocalRoot is the store directory of BackendLocal. BackendLocal ignores the
 	// Milvus and embedding endpoint options.
 	LocalRoot string
@@ -69,6 +72,7 @@ type Options struct {
 type Client struct {
 	store       backend
 	embedder    textEmbedder
+	ingestGate  embeddingBatchGate
 	dimension   int
 	queryPrefix string
 	declaration collection.Declaration
@@ -121,9 +125,16 @@ func Open(ctx context.Context, options Options) (*Client, error) {
 		return nil, err
 	}
 
+	var gate embeddingBatchGate
+	if options.MilvusEmbeddingIdleOnly && options.Backend != BackendLocal {
+		// The connection deadline ends after Open. Close owns the scheduler.
+		gate = scheduling.NewQuiet(context.WithoutCancel(ctx))
+	}
+
 	return &Client{
 		store:       opened.store,
 		embedder:    opened.embedder,
+		ingestGate:  gate,
 		dimension:   opened.dimension,
 		queryPrefix: opened.queryPrefix,
 		declaration: Declaration(),
@@ -172,7 +183,26 @@ func (c *Client) Close(ctx context.Context) error {
 		return nil
 	}
 
+	if c.ingestGate != nil {
+		c.ingestGate.Close()
+	}
+
 	return c.store.close(ctx)
+}
+
+// EmbeddingWaitingReason reports why a Milvus ingestion batch is waiting.
+//
+// The scheduler supplies the reason while idle policy blocks the batch.
+//
+// For example, an active user session can block embedding:
+//
+//	reason := client.EmbeddingWaitingReason()
+func (c *Client) EmbeddingWaitingReason() string {
+	if c == nil || c.ingestGate == nil {
+		return ""
+	}
+
+	return c.ingestGate.WaitingReason()
 }
 
 // SearchConversations ranks the conversation collection for query and returns

@@ -99,6 +99,12 @@ When `backends` is absent, selecting local stops Milvus ingestion. Clyde does no
 
    Search without an explicit backend uses a raw text scan when the configured store is disabled, unavailable, or fails. The scan reports `"source":"raw_text"`. Set `raw_text_fallback = false` under `[conversation.semantic]` to return the indexed search error instead. The change takes effect after a daemon reload.
 
+## Defer Milvus ingestion embeddings until idle
+
+Set `milvus_embedding_idle_only = true` under `[conversation.semantic]` and wait for the daemon to reload. Clyde uses the LMS quiet scheduler to start Milvus ingestion embedding batches after five minutes without host input. An active batch can finish when input resumes. Search queries and local ingestion can continue while Milvus waits.
+
+The setting defaults to `false` and works with Milvus alone or alongside local ingestion. Daemon status reports why the scheduler is holding a batch.
+
 ## Return to Milvus
 
 When `backends` is absent, selecting Milvus stops local ingestion.

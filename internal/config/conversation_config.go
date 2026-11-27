@@ -88,6 +88,9 @@ type ConversationSemanticConfig struct {
 
 	MilvusAddress  string `json:"milvusAddress,omitempty" toml:"milvus_address,omitempty"`
 	MilvusDatabase string `json:"milvusDatabase,omitempty" toml:"milvus_database,omitempty"`
+
+	// MilvusEmbeddingIdleOnly defers Milvus ingestion embeddings until the host is idle.
+	MilvusEmbeddingIdleOnly bool `json:"milvusEmbeddingIdleOnly,omitempty" toml:"milvus_embedding_idle_only,omitempty"`
 	// MilvusLayout selects how the Milvus backend stores the collection. Empty
 	// and "single" store each row with its dense vector in one collection.
 	// "shared" stores rows without the dense vector and stores each distinct
