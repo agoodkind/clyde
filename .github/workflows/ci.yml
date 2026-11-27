@@ -14,9 +14,9 @@ permissions:
 
 jobs:
   go:
-    uses: agoodkind/go-makefile/.github/workflows/_ci.yml@98e13fcc7f099042822bba079f9fc78492981f85
+    uses: agoodkind/go-makefile/.github/workflows/_ci.yml@a9e00ca3f6db26d9fc7dd72e8b8703364372b43e
     with:
-      bootstrap_ref: 98e13fcc7f099042822bba079f9fc78492981f85
+      bootstrap_ref: a9e00ca3f6db26d9fc7dd72e8b8703364372b43e
       golangci_lint_install_mode: goinstall
       cgo: true
       submodules: recursive
