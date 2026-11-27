@@ -323,7 +323,10 @@ func TestLocalSearchRanksEveryAllowedPassage(t *testing.T) {
 func stabilizeDefaultRollouts(t *testing.T, projectDir string) {
 	t.Helper()
 
-	for _, session := range []string{localtest.RawTextReadableSession, localtest.RawTextUnreadableSession} {
+	for _, session := range []string{
+		localtest.RawTextReadableSession,
+		localtest.RawTextUnreadableSession,
+	} {
 		stabilizeRollout(t, filepath.Join(projectDir, session+".jsonl"))
 	}
 }

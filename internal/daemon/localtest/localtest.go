@@ -180,7 +180,6 @@ func StartRawTextDaemonWithFixtures(
 			t.Error("daemon did not stop")
 		}
 	})
-
 }
 
 // LocalBackendSearchCLIOutput searches the daemon in the test process through Cobra commands rendered from registry.

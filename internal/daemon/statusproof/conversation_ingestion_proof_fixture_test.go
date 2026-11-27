@@ -211,9 +211,12 @@ func startIngestionProofDaemonWithConfig(t *testing.T, daemonConfig string) inge
 		ingestionProofFirstAge,
 	)
 
-	ctx := daemon.WithIngestionClock(t.Context(), func() time.Time {
-		return time.Now().Add(time.Duration(proof.clockShift.Load()))
-	})
+	ctx := daemon.WithIngestionClock(
+		t.Context(),
+		func() time.Time {
+			return time.Now().Add(time.Duration(proof.clockShift.Load()))
+		},
+	)
 	proof.stop = runIngestionProofDaemonWithContext(t, ctx)
 
 	return proof
