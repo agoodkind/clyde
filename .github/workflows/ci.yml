@@ -19,6 +19,7 @@ jobs:
       golangci_lint_install_mode: goinstall
       cgo: true
       submodules: recursive
+      darwin_runner: macos-15
     permissions:
       contents: read
       id-token: write
@@ -36,16 +37,36 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+          cache: false
+      - name: Identify race cache inputs
+        id: race-cache-inputs
+        env:
+          GO_MODULE_DIGEST: ${{ hashFiles('go.mod', 'go.sum', 'Makefile', 'bootstrap.mk') }}
+        run: |
+          printf 'build=%s\n' "$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+          printf 'modules=%s\n' "$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+          {
+            go version
+            cc --version
+            c++ --version
+            git rev-parse HEAD:third_party/gksyntax
+            printf '%s\n' "$GO_MODULE_DIGEST"
+          } > "$RUNNER_TEMP/clyde-race-inputs"
+          read -r digest _ < <(sha256sum "$RUNNER_TEMP/clyde-race-inputs")
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+      - name: Restore race build cache
+        id: race-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ${{ steps.race-cache-inputs.outputs.build }}
+            ${{ steps.race-cache-inputs.outputs.modules }}
+          key: clyde-race-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.race-cache-inputs.outputs.digest }}
       # Prepare the workspace and native dependencies before running go test.
       - name: Native build prerequisites
         run: make native-prereqs
-      # The step builds clyde with the flags used by the test helpers.
-      # It compiles and links every race test binary, then runs true in place of each binary.
-      # The timed race run reuses those build cache entries.
-      - name: Build race test inputs
-        run: |
-          go build -o "${RUNNER_TEMP}/clyde" ./cmd/clyde
-          go test -race -count=1 -exec true ./...
+      - name: Build CLI dependencies for subprocess tests
+        run: go build -o "${RUNNER_TEMP}/clyde" ./cmd/clyde
       # Race coverage runs the suites with `go test -race` (Go's own runner)
       # rather than `ginkgo -r --race`. The ginkgo CLI orchestrator wedges after
       # the suites finish on linux/amd64 under -race (reproduced on every CI run,
@@ -59,3 +80,11 @@ jobs:
         env:
           GOTRACEBACK: all
         run: go test -race -shuffle=on -count=1 -timeout=8m ./...
+      - name: Save race build cache
+        if: steps.race-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ${{ steps.race-cache-inputs.outputs.build }}
+            ${{ steps.race-cache-inputs.outputs.modules }}
+          key: ${{ steps.race-cache.outputs.cache-primary-key }}
