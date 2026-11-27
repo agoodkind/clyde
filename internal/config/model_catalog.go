@@ -1,11 +1,20 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"path"
 	"slices"
 	"strings"
+)
+
+var (
+	errPassthroughOverrideUnset      = errors.New("passthrough_override must be set")
+	errPassthroughOverrideUndeclared = errors.New("passthrough_override is not declared")
+	errPassthroughOverrideProvider   = errors.New(
+		"passthrough_override is only valid for provider passthrough_override",
+	)
 )
 
 // AdapterModelProvider is a provider selected by an exact model or route.
@@ -158,6 +167,8 @@ type AdapterModelRoute struct {
 	Provider         AdapterModelProvider            `json:"provider,omitempty" toml:"provider,omitempty"`
 	WireModelPolicy  AdapterWireModelPolicy          `json:"wireModelPolicy,omitempty" toml:"wire_model_policy,omitempty"`
 	CapabilityPolicy AdapterWildcardCapabilityPolicy `json:"capabilityPolicy,omitempty" toml:"capability_policy,omitempty"`
+
+	PassthroughOverride string `json:"passthroughOverride,omitempty" toml:"passthrough_override,omitempty"`
 }
 
 // ModelPricing returns model-local rates keyed by configured wire model.
@@ -510,20 +521,13 @@ func validateAdapterModelDeclaration(
 		)
 	}
 
-	if model.Provider == AdapterModelProviderPassthroughOverride {
-		name := strings.TrimSpace(model.PassthroughOverride)
-		if name == "" {
-			return fmt.Errorf("%s.passthrough_override must be set", modelPath)
-		}
-
-		if _, ok := adapter.PassthroughOverrides[name]; !ok {
-			return fmt.Errorf("%s.passthrough_override %q is not declared", modelPath, name)
-		}
-	} else if strings.TrimSpace(model.PassthroughOverride) != "" {
-		return fmt.Errorf(
-			"%s.passthrough_override is only valid for provider passthrough_override",
-			modelPath,
-		)
+	if err := validatePassthroughOverrideReference(
+		adapter,
+		modelPath,
+		model.Provider,
+		model.PassthroughOverride,
+	); err != nil {
+		return err
 	}
 
 	if strings.TrimSpace(model.WireProfile) != "" &&
@@ -719,13 +723,21 @@ func validateAdapterModelRoute(adapter AdapterConfig, index int, route AdapterMo
 		surfaces[surface] = true
 	}
 
-	if route.Provider != AdapterModelProviderCodex &&
-		route.Provider != AdapterModelProviderAnthropic {
+	if !route.Provider.valid() {
 		return fmt.Errorf(
 			"%s.provider %q is invalid for wildcard routing",
 			routePath,
 			route.Provider,
 		)
+	}
+
+	if err := validatePassthroughOverrideReference(
+		adapter,
+		routePath,
+		route.Provider,
+		route.PassthroughOverride,
+	); err != nil {
+		return err
 	}
 
 	if !adapterProviderEnabled(adapter, route.Provider) {
@@ -741,6 +753,43 @@ func validateAdapterModelRoute(adapter AdapterConfig, index int, route AdapterMo
 	}
 
 	return nil
+}
+
+func validatePassthroughOverrideReference(
+	adapter AdapterConfig,
+	settingPath string,
+	provider AdapterModelProvider,
+	passthroughOverride string,
+) error {
+	name := strings.TrimSpace(passthroughOverride)
+	_, declared := adapter.PassthroughOverrides[name]
+
+	var reason error
+	switch {
+	case provider != AdapterModelProviderPassthroughOverride && name != "":
+		reason = errPassthroughOverrideProvider
+	case provider != AdapterModelProviderPassthroughOverride:
+		return nil
+	case name == "":
+		reason = errPassthroughOverrideUnset
+	case !declared:
+		reason = errPassthroughOverrideUndeclared
+	default:
+		return nil
+	}
+
+	wrapped := fmt.Errorf("%s.%w: %q", settingPath, reason, name)
+	slog.Warn(
+		"config.adapter.passthrough_override_invalid",
+		"concern",
+		"config",
+		"setting",
+		settingPath,
+		"err",
+		wrapped,
+	)
+
+	return wrapped
 }
 
 func adapterProviderEnabled(adapter AdapterConfig, provider AdapterModelProvider) bool {
