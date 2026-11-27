@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -79,6 +80,7 @@ type ingestionProofDaemon struct {
 	projectDir string
 	stagingDir string
 	stop       func()
+	clockShift *atomic.Int64
 }
 
 func ingestionProofTranscript(session string, number int, messages []ingestionProofMessage) string {
@@ -167,6 +169,7 @@ func startIngestionProofDaemonWithConfig(t *testing.T, daemonConfig string) inge
 	proof := ingestionProofDaemon{
 		projectDir: filepath.Join(home, ".claude", "projects", "-repo"),
 		stagingDir: filepath.Join(roots.Base, "staging"),
+		clockShift: new(atomic.Int64),
 	}
 	directories := []string{proof.projectDir, proof.stagingDir}
 	t.Setenv("HOME", home)
@@ -208,14 +211,23 @@ func startIngestionProofDaemonWithConfig(t *testing.T, daemonConfig string) inge
 		ingestionProofFirstAge,
 	)
 
-	proof.stop = runIngestionProofDaemon(t)
+	ctx := daemon.WithIngestionClock(t.Context(), func() time.Time {
+		return time.Now().Add(time.Duration(proof.clockShift.Load()))
+	})
+	proof.stop = runIngestionProofDaemonWithContext(t, ctx)
 
 	return proof
 }
 
 func runIngestionProofDaemon(t *testing.T) func() {
 	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
+
+	return runIngestionProofDaemonWithContext(t, context.Background())
+}
+
+func runIngestionProofDaemonWithContext(t *testing.T, parent context.Context) func() {
+	t.Helper()
+	ctx, cancel := context.WithCancel(parent)
 	done := make(chan error, 1)
 	go func() {
 		done <- daemon.RunContext(ctx, slog.Default())

@@ -109,6 +109,8 @@ func (proof ingestionProofDaemon) installUnloadable(t *testing.T, step string) {
 			err,
 		)
 	}
+
+	proof.clockShift.Store(int64(ingestionProofUnreadableDeferral))
 }
 
 func runIngestionProofUnloadableTranscriptStep(t *testing.T, proof ingestionProofDaemon) {

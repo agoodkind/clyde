@@ -25,6 +25,8 @@ const (
 ingestion_enabled = true
 search_enabled = true
 backend = "local"
+sync_interval = "1s"
+index_refresh_interval = "1s"
 embedding_api_key_file = "/nonexistent/clyde-local-backend-test-key"
 
 [adapter]
@@ -36,7 +38,7 @@ enabled_default = false
 )
 
 func TestLocalBackendIngestsAndSearchesWithoutMilvus(t *testing.T) {
-	localtest.StartRawTextDaemon(t, localBackendDaemonConfig)
+	localtest.StartRawTextDaemonWithFixtures(t, localBackendDaemonConfig, stabilizeDefaultRollouts)
 	options := conversation.SearchConversationsOptions{
 		Query: "why does the daemon bind its listener again after a configuration edit",
 		Limit: 5,

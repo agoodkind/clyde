@@ -82,6 +82,8 @@ func writeLocalSearchArchivedRollout(t *testing.T) {
 	if err := os.WriteFile(path, body.Bytes(), 0o600); err != nil {
 		t.Fatalf("write archived rollout: %v", err)
 	}
+
+	stabilizeRollout(t, path)
 }
 
 func waitForLocalSearch(
@@ -132,21 +134,29 @@ func searchLocalContract(
 }
 
 func TestLocalSearchRanksEveryAllowedPassage(t *testing.T) {
-	projectDir := localtest.StartRawTextDaemon(t, localBackendDaemonConfig)
 	sessions := []string{localtest.RawTextReadableSession, localtest.RawTextUnreadableSession}
+	localtest.StartRawTextDaemonWithFixtures(
+		t,
+		localBackendDaemonConfig,
+		func(t *testing.T, projectDir string) {
+			stabilizeDefaultRollouts(t, projectDir)
 
-	for extra := range localSearchExtraSessions {
-		session := fmt.Sprintf("local-search-visible-session-%d", extra)
-		localtest.WriteRawTextTranscript(
-			t,
-			filepath.Join(projectDir, session+".jsonl"),
-			session,
-			extra+localSearchFirstExtraMinute,
-		)
-		sessions = append(sessions, session)
-	}
+			for extra := range localSearchExtraSessions {
+				session := fmt.Sprintf("local-search-visible-session-%d", extra)
+				path := filepath.Join(projectDir, session+".jsonl")
+				localtest.WriteRawTextTranscript(
+					t,
+					path,
+					session,
+					extra+localSearchFirstExtraMinute,
+				)
+				stabilizeRollout(t, path)
+				sessions = append(sessions, session)
+			}
 
-	writeLocalSearchArchivedRollout(t)
+			writeLocalSearchArchivedRollout(t)
+		},
+	)
 
 	deadline := time.Now().Add(localSearchReadyTimeout)
 
@@ -308,4 +318,23 @@ func TestLocalSearchRanksEveryAllowedPassage(t *testing.T) {
 			}
 		},
 	)
+}
+
+func stabilizeDefaultRollouts(t *testing.T, projectDir string) {
+	t.Helper()
+
+	for _, session := range []string{localtest.RawTextReadableSession, localtest.RawTextUnreadableSession} {
+		stabilizeRollout(t, filepath.Join(projectDir, session+".jsonl"))
+	}
+}
+
+func stabilizeRollout(t *testing.T, path string) {
+	t.Helper()
+
+	// These search tests use completed transcripts. The ingestion proof covers
+	// the separate behavior for files still inside the growth window.
+	modified := time.Now().Add(-2 * time.Minute)
+	if err := os.Chtimes(path, modified, modified); err != nil {
+		t.Fatalf("set fixture modification time: %v", err)
+	}
 }

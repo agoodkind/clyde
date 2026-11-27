@@ -111,6 +111,8 @@ func waitForBackfillWorkflow(
 // Backfill indexes a recent chat that the daemon defers. The daemon indexes a third
 // chat. CLI and MCP searches find each chat's conversation ID and message token.
 func TestLocalBackfillAndDaemonKeepEachOthersRows(t *testing.T) {
+	t.Parallel()
+
 	home := t.TempDir()
 	installBackfillWorkflowChat(
 		t,

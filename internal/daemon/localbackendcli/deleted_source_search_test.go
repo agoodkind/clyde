@@ -271,6 +271,8 @@ func requireDeletedSourceMatchesKept(
 
 // TestLocalBackendKeepsDeletedSourceSearchable checks that CLI and MCP search retain deleted transcript matches after a rescan and daemon restart.
 func TestLocalBackendKeepsDeletedSourceSearchable(t *testing.T) {
+	t.Parallel()
+
 	localRoot := filepath.Join(t.TempDir(), "local-index")
 	settingsPath := writeSandboxSemanticSettings(t, "")
 	checkDeletedSourceSearchable(
