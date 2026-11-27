@@ -1,108 +1,13 @@
-# Reference [adapter] stanza for ~/.config/clyde/config.toml.
+# Example Clyde configuration.
 #
-# Copy sections into your
-# config; the adapter refuses to start when required tables are
-# missing ([adapter.model_profiles], [adapter.models], [adapter.client_identity],
-# [adapter.anthropic.oauth]
-# when direct_oauth = true).
-#
-# Bootstrap:
-#   cat clyde.example.toml >> ~/.config/clyde/config.toml
-#   $EDITOR ~/.config/clyde/config.toml
-#   launchctl kickstart -k gui/$UID/io.goodkind.clyde
-#
-# Operator note: [adapter.anthropic.oauth] and the stainless/* / cc_* fields under
-# [adapter.client_identity] must match the canonical desktop client you
-# use for login (capture from your environment or vendor docs).
+# Use this file as a reference for ~/.config/clyde/config.toml.
+# Copy the sections needed for the installation. Replace the REDACTED
+# placeholders before using the Anthropic OAuth and client identity examples.
 
-[logging]
-level = "debug"
+# ============================================================================
+# Adapter
+# ============================================================================
 
-# Transcripts written by a dispatched agent are indexed only when this is true.
-# They are hidden by default because one working session can write hundreds of
-# them in a day. Changing it needs no cache deletion.
-[conversation]
-include_subagent_conversations = false
-
-[conversation.semantic]
-# Offer conversations to the search engine. This embeds text, so it occupies the
-# GPU and grows the store. Turning it off stops new embedding.
-ingestion_enabled = false
-# Answer conversation searches from the engine. Reading queries a corpus that
-# already exists and costs nothing. This opt-in works without ingestion.
-search_enabled = true
-collection_id = "clyde-conversations"
-# Content kinds offered to the search engine, using the same selector names the
-# export surface accepts. Omit the key for this default, which is the chat turns
-# plus tool calls without their results. The three tool kinds are nested rather
-# than parallel: "tools" is names only, "tool_calls" adds the command and
-# arguments, and "tool_outputs" adds what the tool returned. Name "thinking",
-# "system_messages", or "tool_outputs" here to index those too. Use
-# ingestion_enabled = false to stop indexing entirely; an empty list means the
-# default.
-indexed_content = ["chat", "tool_calls"]
-
-
-[logging.rotation]
-enabled = true
-max_size_mb = 1
-max_backups = 1
-max_age_days = 7
-compress = true
-
-# The daemon applies one budget across every Clyde-owned log file and archive.
-[logging.cleanup]
-enabled = true
-max_total_mb = 5
-max_backups = 1
-max_age_days = 7
-
-# Logging sinks. The canonical sink names are: daemon, cli, codex_sidecar,
-# anthropic_sidecar, audit, concerns, transcripts, inventory_index.
-# Each sink is enabled by default (transcripts additionally requires
-# logging.transcript.enabled). MITM wire events land in the per-concern file
-# logs/providers/mitm/wire.jsonl via the concerns sink; full MITM request and
-# response bodies persist to mitm/capture.db (see [mitm.capture_store]).
-#
-# Back-compatible flat form: restrict the active sink set to an explicit
-# allowlist. When set, only the listed sinks stay enabled.
-#
-# [logging.sinks]
-# enabled = ["daemon", "cli", "concerns", "inventory_index"]
-#
-# Per-sink table form: configure one sink at a time with its own enabled flag,
-# level, path, and rotation. Each sink inherits the global [logging.rotation]
-# block above unless its own [logging.sinks.<name>.rotation] table overrides a
-# field. The flat allowlist and the per-sink tables can be used together; an
-# explicit [logging.sinks.<name>] enabled value wins over the flat allowlist for
-# that sink.
-#
-# [logging.sinks.audit]
-# enabled = true
-# level = "warn"
-# [logging.sinks.audit.rotation]
-# enabled = true
-# max_size_mb = 16
-# max_backups = 6
-# max_age_days = 3
-# compress = true
-#
-# [logging.sinks.anthropic_sidecar]
-# enabled = true
-# [logging.sinks.anthropic_sidecar.rotation]
-# enabled = true
-# max_size_mb = 32
-# max_backups = 12
-# max_age_days = 3
-# compress = true
-
-# Optional per-process log file overrides.
-# Defaults:
-#   CLI commands   -> $XDG_STATE_HOME/clyde/clyde-cli.jsonl
-#   daemon command -> $XDG_STATE_HOME/clyde/clyde-daemon.jsonl
-[logging.paths]
-cli = ""
-daemon = ""
 [adapter]
 enabled = true
 direct_oauth = true
@@ -146,41 +51,9 @@ enabled = true
 [adapter.codex]
 enabled = true
 
-# Reusable exact-model capability profiles. Transport limits report the same
-# context budget used by the selected Codex transport.
-[adapter.model_profiles."codex-1m"]
-contexts = [{ name = "1m", tokens = 1000000, alias_suffix = "1m", transport_limits = [{ transport = "codex_http", tokens = 272000 }, { transport = "codex_websocket", tokens = 1000000 }] }]
-max_output_tokens = 128000
-reasoning_efforts = ["low", "medium", "high", "xhigh"]
-default_effort = "medium"
-supports_tools = true
-supports_vision = true
-
-[adapter.model_profiles."codex-272k"]
-contexts = [{ name = "standard", tokens = 272000, transport_limits = [{ transport = "codex_http", tokens = 272000 }, { transport = "codex_websocket", tokens = 272000 }] }]
-max_output_tokens = 128000
-reasoning_efforts = ["low", "medium", "high", "xhigh"]
-default_effort = "medium"
-supports_tools = true
-supports_vision = true
-
-[adapter.models."gpt-5.4"]
-provider = "codex"
-wire_model = "gpt-5.4"
-profile = "codex-1m"
-advertise = true
-# Optional: prepend a shared developer instruction file before any caller
-# system message. Paths resolve relative to this config.toml.
-# instructions_file = "prompts/gpt-5.4.md"
-generated_aliases = { prefix = "clyde-gpt-5.4", advertise = true, dimensions = ["context", "reasoning_effort"] }
-
-[adapter.models."gpt-5.5"]
-provider = "codex"
-wire_model = "gpt-5.5"
-profile = "codex-272k"
-advertise = true
-aliases = [{ id = "gpt-5.5-extra", advertise = true, reasoning_effort = "xhigh" }]
-generated_aliases = { prefix = "clyde-codex-5.5", advertise = true, dimensions = ["reasoning_effort"] }
+# ============================================================================
+# Model routing
+# ============================================================================
 
 # Ordered full-string provider claims preserve undeclared future model IDs and
 # caller-supplied optional controls. Wildcard matches route but are not listed
@@ -204,6 +77,10 @@ surfaces = ["cursor", "openai", "anthropic"]
 provider = "anthropic"
 wire_model_policy = "preserve"
 capability_policy = "passthrough"
+
+# ============================================================================
+# Provider settings
+# ============================================================================
 
 # Optional: forward otherwise-unknown model aliases to one
 # OpenAI-compatible upstream. The caller's model value is preserved unless
@@ -276,6 +153,262 @@ cc_entrypoint = "sdk-cli"
 # passthrough routes pass through verbatim regardless of this stanza.
 [adapter.logprobs]
 anthropic = "reject"
+
+# ============================================================================
+# Conversation indexing and search
+# ============================================================================
+
+[conversation]
+# Include subagent transcripts in semantic ingestion.
+include_subagent_conversations = false
+
+[conversation.semantic]
+# Ingestion embeds new content. Search can use an existing index on its own.
+ingestion_enabled = false
+search_enabled = true
+collection_id = "clyde-conversations"
+
+# Enable independent ingestion into both stores.
+# backend = "milvus"
+# backends = ["milvus", "local"]
+
+# Requires both backends. Search Milvus first and use local for missing content.
+milvus_first_local_fallback = false
+
+# Wait for host idle time before embedding new content for Milvus.
+# This also works when Milvus is the only backend.
+milvus_embedding_idle_only = false
+
+# Content kinds offered to the search engine, using the same selector names the
+# export surface accepts. Omit the key for this default, which is the chat turns
+# plus tool calls without their results. The three tool kinds are nested rather
+# than parallel: "tools" is names only, "tool_calls" adds the command and
+# arguments, and "tool_outputs" adds what the tool returned. Name "thinking",
+# "system_messages", or "tool_outputs" here to index those too. Use
+# ingestion_enabled = false to stop indexing entirely; an empty list means the
+# default.
+indexed_content = ["chat", "tool_calls"]
+
+# ============================================================================
+# MITM capture and listeners
+# ============================================================================
+
+[mitm]
+providers = ["claude", "codex", "conductor", "cursor"]
+
+# Inject pre-compaction transcript content into Claude MITM summaries and
+# authenticated native Codex Responses summaries. Both paths read the transcript
+# from the intercepted request and open no transcript file.
+reorient_summary_injection = false
+
+# Markdown file both splits append after the injected transcript, inside
+# <compaction-instructions> tags. Read on every compaction; edits apply to the
+# next /compact with no reload. A relative path resolves against this
+# config.toml. Omit it to append nothing.
+# reorient_inject_instructions_file = "compaction-instructions.md"
+
+# Default token budget the Claude split and the native Codex split retain when
+# no --max-tokens argument follows /compact. Omit it to use the default (500000).
+# reorient_inject_max_tokens = 500000
+
+# Content kinds both splits retain when no --only argument or content shortcut
+# follows /compact. Accepts the clyde conversation export --only values. Omit
+# it to keep every kind.
+# reorient_inject_content = ["chat", "thinking", "tool_outputs"]
+
+# sentinel = "MYKEYWORD"
+# actual_user_sentinel = "ACTUAL_USER"
+
+# Zero disables the selected limit. Keep at least one limit enabled.
+[mitm.capture_store]
+retention_max_age = "168h"
+retention_max_bytes = 5000000000
+retention_interval = "1s"
+
+# Per-client MITM listeners, split into CLIs ([mitm.cli.<name>]) and desktop apps
+# ([mitm.app.<name>]). The table key is the client name; each gets its own
+# loopback port so every captured exchange in mitm/capture.db is tagged with the
+# originating client. The id lands in the capture `client` column as the
+# group-qualified "cli.<name>" / "app.<name>", so the same leaf name (codex) can
+# appear in both groups. One traffic type per port keeps the `client` tag
+# unambiguous. The full map is the [mitm.cli.*] and [mitm.app.*] blocks below.
+
+# CLI model-API base URLs (passthrough; these capture the wire baseline source).
+[mitm.cli.claude-code]
+host = "localhost"
+port = 48723
+
+[mitm.cli.codex]
+host = "localhost"
+port = 48724
+
+# CLI everything-else via HTTPS_PROXY (telemetry, updates, and so on).
+[mitm.cli.claude-code-proxy]
+host = "localhost"
+port = 48728
+
+[mitm.cli.codex-proxy]
+host = "localhost"
+port = 48729
+
+# Codex CLI chatgpt_base_url backend (auth, cloud, analytics; codex auth bypasses
+# HTTPS_PROXY, so this is the only listener that captures it).
+[mitm.cli.codex-backend]
+host = "localhost"
+port = 48730
+
+# Desktop Electron shells (the apps' own non-CLI traffic; the embedded CLI rides
+# the cli.* listeners above).
+[mitm.app.cursor]
+host = "localhost"
+port = 48725
+
+[mitm.app.claude]
+host = "localhost"
+port = 48726
+
+[mitm.app.codex]
+host = "localhost"
+port = 48727
+
+[mitm.app.conductor]
+host = "localhost"
+port = 48731
+
+# MITM baseline / drift loop.
+#
+# The loop closes the cycle capture -> baseline refresh -> drift log:
+# every captured request to a known upstream debounces a baseline refresh,
+# and the daemon also runs a periodic compare-only drift check that diffs
+# the current local capture store against a pinned reference snapshot and
+# appends the outcome to <drift_log_dir>/<upstream>.jsonl. Operators enable
+# the loop by adding this [mitm.drift] block; with enabled = false (or the
+# block absent) nothing runs.
+[mitm.drift]
+enabled = true
+interval = "5m"
+drift_log_dir = "~/.local/state/clyde/mitm-drift"
+capture_root = "~/.local/state/clyde/mitm"
+
+[mitm.drift.upstreams.claude-code]
+reference = "~/.local/state/clyde/mitm-baselines/claude-code/baseline-reference.toml"
+include_ua = ["claude-cli"]
+
+[mitm.drift.upstreams.codex-cli]
+reference = "~/.local/state/clyde/mitm-baselines/codex-cli/baseline-reference.toml"
+include_ua = ["codex_cli_rs", "codex-tui"]
+
+# ============================================================================
+# Logging
+# ============================================================================
+
+[logging]
+level = "debug"
+
+[logging.rotation]
+enabled = true
+max_size_mb = 1
+max_backups = 1
+max_age_days = 7
+compress = true
+
+# The daemon applies one budget across every Clyde-owned log file and archive.
+[logging.cleanup]
+enabled = true
+max_total_mb = 5
+max_backups = 1
+max_age_days = 7
+
+# Logging sinks. The canonical sink names are: daemon, cli, codex_sidecar,
+# anthropic_sidecar, audit, concerns, transcripts, inventory_index.
+# Each sink is enabled by default (transcripts additionally requires
+# logging.transcript.enabled). MITM wire events land in the per-concern file
+# logs/providers/mitm/wire.jsonl via the concerns sink; full MITM request and
+# response bodies persist to mitm/capture.db (see [mitm.capture_store]).
+#
+# Back-compatible flat form: restrict the active sink set to an explicit
+# allowlist. When set, only the listed sinks stay enabled.
+#
+# [logging.sinks]
+# enabled = ["daemon", "cli", "concerns", "inventory_index"]
+#
+# Per-sink table form: configure one sink at a time with its own enabled flag,
+# level, path, and rotation. Each sink inherits the global [logging.rotation]
+# block above unless its own [logging.sinks.<name>.rotation] table overrides a
+# field. The flat allowlist and the per-sink tables can be used together; an
+# explicit [logging.sinks.<name>] enabled value wins over the flat allowlist for
+# that sink.
+#
+# [logging.sinks.audit]
+# enabled = true
+# level = "warn"
+# [logging.sinks.audit.rotation]
+# enabled = true
+# max_size_mb = 16
+# max_backups = 6
+# max_age_days = 3
+# compress = true
+#
+# [logging.sinks.anthropic_sidecar]
+# enabled = true
+# [logging.sinks.anthropic_sidecar.rotation]
+# enabled = true
+# max_size_mb = 32
+# max_backups = 12
+# max_age_days = 3
+# compress = true
+
+# Optional per-process log file overrides.
+# Defaults:
+#   CLI commands   -> $XDG_STATE_HOME/clyde/clyde-cli.jsonl
+#   daemon command -> $XDG_STATE_HOME/clyde/clyde-daemon.jsonl
+[logging.paths]
+cli = ""
+daemon = ""
+
+# ============================================================================
+# Codex model profiles and aliases
+# ============================================================================
+
+# Reusable exact-model capability profiles. Transport limits report the same
+# context budget used by the selected Codex transport.
+[adapter.model_profiles."codex-1m"]
+contexts = [{ name = "1m", tokens = 1000000, alias_suffix = "1m", transport_limits = [{ transport = "codex_http", tokens = 272000 }, { transport = "codex_websocket", tokens = 1000000 }] }]
+max_output_tokens = 128000
+reasoning_efforts = ["low", "medium", "high", "xhigh"]
+default_effort = "medium"
+supports_tools = true
+supports_vision = true
+
+[adapter.model_profiles."codex-272k"]
+contexts = [{ name = "standard", tokens = 272000, transport_limits = [{ transport = "codex_http", tokens = 272000 }, { transport = "codex_websocket", tokens = 272000 }] }]
+max_output_tokens = 128000
+reasoning_efforts = ["low", "medium", "high", "xhigh"]
+default_effort = "medium"
+supports_tools = true
+supports_vision = true
+
+[adapter.models."gpt-5.4"]
+provider = "codex"
+wire_model = "gpt-5.4"
+profile = "codex-1m"
+advertise = true
+# Optional: prepend a shared developer instruction file before any caller
+# system message. Paths resolve relative to this config.toml.
+# instructions_file = "prompts/gpt-5.4.md"
+generated_aliases = { prefix = "clyde-gpt-5.4", advertise = true, dimensions = ["context", "reasoning_effort"] }
+
+[adapter.models."gpt-5.5"]
+provider = "codex"
+wire_model = "gpt-5.5"
+profile = "codex-272k"
+advertise = true
+aliases = [{ id = "gpt-5.5-extra", advertise = true, reasoning_effort = "xhigh" }]
+generated_aliases = { prefix = "clyde-codex-5.5", advertise = true, dimensions = ["reasoning_effort"] }
+
+# ============================================================================
+# Anthropic model profiles and aliases
+# ============================================================================
 
 # opus-4-6: adaptive/default/enabled/disabled thinking, low/medium/high/max
 # effort, 200k and 1M context. Claude Code upstream names this exact family
@@ -433,108 +566,3 @@ wire_model = "claude-haiku-4-5-20251001"
 profile = "anthropic-haiku-4-5"
 advertise = true
 aliases = [{ id = "claude-haiku-4-5", advertise = true }]
-
-[mitm]
-providers = ["claude", "codex", "conductor", "cursor"]
-
-# Inject pre-compaction transcript content into Claude MITM summaries and
-# authenticated native Codex Responses summaries. Both paths read the transcript
-# from the intercepted request and open no transcript file.
-reorient_summary_injection = false
-
-# Markdown file both splits append after the injected transcript, inside
-# <compaction-instructions> tags. Read on every compaction; edits apply to the
-# next /compact with no reload. A relative path resolves against this
-# config.toml. Omit it to append nothing.
-# reorient_inject_instructions_file = "compaction-instructions.md"
-
-# Default token budget the Claude split and the native Codex split retain when
-# no --max-tokens argument follows /compact. Omit it to use the default (500000).
-# reorient_inject_max_tokens = 500000
-
-# Content kinds both splits retain when no --only argument or content shortcut
-# follows /compact. Accepts the clyde conversation export --only values. Omit
-# it to keep every kind.
-# reorient_inject_content = ["chat", "thinking", "tool_outputs"]
-
-# sentinel = "MYKEYWORD"
-# actual_user_sentinel = "ACTUAL_USER"
-
-# Zero disables the selected limit. Keep at least one limit enabled.
-[mitm.capture_store]
-retention_max_age = "168h"
-retention_max_bytes = 5000000000
-retention_interval = "1s"
-
-# Per-client MITM listeners, split into CLIs ([mitm.cli.<name>]) and desktop apps
-# ([mitm.app.<name>]). The table key is the client name; each gets its own
-# loopback port so every captured exchange in mitm/capture.db is tagged with the
-# originating client. The id lands in the capture `client` column as the
-# group-qualified "cli.<name>" / "app.<name>", so the same leaf name (codex) can
-# appear in both groups. One traffic type per port keeps the `client` tag
-# unambiguous. The full map is the [mitm.cli.*] and [mitm.app.*] blocks below.
-
-# CLI model-API base URLs (passthrough; these capture the wire baseline source).
-[mitm.cli.claude-code]
-host = "localhost"
-port = 48723
-
-[mitm.cli.codex]
-host = "localhost"
-port = 48724
-
-# CLI everything-else via HTTPS_PROXY (telemetry, updates, and so on).
-[mitm.cli.claude-code-proxy]
-host = "localhost"
-port = 48728
-
-[mitm.cli.codex-proxy]
-host = "localhost"
-port = 48729
-
-# Codex CLI chatgpt_base_url backend (auth, cloud, analytics; codex auth bypasses
-# HTTPS_PROXY, so this is the only listener that captures it).
-[mitm.cli.codex-backend]
-host = "localhost"
-port = 48730
-
-# Desktop Electron shells (the apps' own non-CLI traffic; the embedded CLI rides
-# the cli.* listeners above).
-[mitm.app.cursor]
-host = "localhost"
-port = 48725
-
-[mitm.app.claude]
-host = "localhost"
-port = 48726
-
-[mitm.app.codex]
-host = "localhost"
-port = 48727
-
-[mitm.app.conductor]
-host = "localhost"
-port = 48731
-
-# MITM baseline / drift loop.
-#
-# The loop closes the cycle capture -> baseline refresh -> drift log:
-# every captured request to a known upstream debounces a baseline refresh,
-# and the daemon also runs a periodic compare-only drift check that diffs
-# the current local capture store against a pinned reference snapshot and
-# appends the outcome to <drift_log_dir>/<upstream>.jsonl. Operators enable
-# the loop by adding this [mitm.drift] block; with enabled = false (or the
-# block absent) nothing runs.
-[mitm.drift]
-enabled = true
-interval = "5m"
-drift_log_dir = "~/.local/state/clyde/mitm-drift"
-capture_root = "~/.local/state/clyde/mitm"
-
-[mitm.drift.upstreams.claude-code]
-reference = "~/.local/state/clyde/mitm-baselines/claude-code/baseline-reference.toml"
-include_ua = ["claude-cli"]
-
-[mitm.drift.upstreams.codex-cli]
-reference = "~/.local/state/clyde/mitm-baselines/codex-cli/baseline-reference.toml"
-include_ua = ["codex_cli_rs", "codex-tui"]
