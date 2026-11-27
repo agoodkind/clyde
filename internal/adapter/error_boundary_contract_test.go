@@ -10,9 +10,27 @@ import (
 	"testing"
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
+	"goodkind.io/clyde/internal/adapter/antigravity"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	"goodkind.io/clyde/internal/config"
 )
+
+func TestErrorBoundaryAntigravityProviderAdapterError(t *testing.T) {
+	t.Parallel()
+	upstream := antigravity.ParseUpstreamError(
+		http.StatusTooManyRequests,
+		[]byte(`{"error":{"message":"fixture rate limit","status":"RESOURCE_EXHAUSTED"}}`),
+	)
+	mapped := antigravityProviderAdapterError(upstream)
+	envelope := renderedOpenAIEnvelope(t, mapped)
+	if mapped.HTTPStatus != http.StatusBadRequest ||
+		mapped.UpstreamStatus != http.StatusTooManyRequests ||
+		envelope.Error.Type != "invalid_request_error" ||
+		envelope.Error.Code != "upstream_rate_limited" ||
+		!strings.Contains(envelope.Error.Message, "fixture rate limit") {
+		t.Fatalf("mapped error = %+v, envelope = %+v", mapped, envelope.Error)
+	}
+}
 
 // errorBoundaryRouteFamily is the family-tag used by table-driven
 // rows in the contract test so each row's assertion can pick the

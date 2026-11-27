@@ -145,7 +145,9 @@ func (s *Server) dispatchResolvedChat(
 		s.dispatchAnthropicProvider(w, r, effort, reqID, resolvedReq)
 	case adapterresolver.ProviderCodex:
 		s.dispatchCodexProvider(w, r, req, reqID, ingressCtx, resolvedReq)
-	case BackendClaude, BackendPassthroughOverride, BackendAntigravity:
+	case adapterresolver.ProviderAntigravity:
+		s.dispatchAntigravityProvider(w, r, reqID, resolvedReq, provider)
+	case BackendClaude, BackendPassthroughOverride:
 		fallthrough
 	default:
 		s.respondAdapterError(w, r, unsupportedBackendError(&resolvedReq, req.Model))

@@ -157,6 +157,7 @@ type Server struct {
 	providerRegistry     *adapterprovider.Registry
 	codexProvider        *adaptercodex.Provider
 	anthropicProvider    *anthropic.Provider
+	antigravityProvider  adapterprovider.Provider
 	errorRenderers       map[adapterRouteFamily]errcontract.ErrorRenderer
 	streamErrorRenderers map[adapterRouteFamily]errcontract.StreamErrorRenderer
 	// ingress is this Server's own ingress contract. It owns a
@@ -255,6 +256,7 @@ func New(
 		providerRegistry:     nil,
 		codexProvider:        nil,
 		anthropicProvider:    nil,
+		antigravityProvider:  nil,
 		errorRenderers:       defaultBoundaryRegistry.snapshotRenderers(),
 		streamErrorRenderers: defaultBoundaryRegistry.snapshotStreamErrorRenderers(),
 		ingress:              newServerIngress(),
@@ -277,7 +279,10 @@ func New(
 		return nil, fmt.Errorf("adapter: resolve logging policy: %w", err)
 	}
 
-	s.registerProviders(ctx, cfg, deps, log, maxConcurrent, wsReg, policies)
+	if err := s.registerProviders(ctx, cfg, deps, log, maxConcurrent, wsReg, policies); err != nil {
+		return nil, err
+	}
+
 	s.mux = s.routes()
 
 	return s, nil
@@ -302,7 +307,7 @@ func resolveServerToken(cfg config.AdapterConfig) (string, error) {
 	return token, nil
 }
 
-// registerProviders wires the optional Codex and Anthropic providers
+// registerProviders wires the optional providers
 // into the server's provider registry. Extracted from [New] so that
 // function stays under the funlen limit.
 func (s *Server) registerProviders(
@@ -313,7 +318,7 @@ func (s *Server) registerProviders(
 	maxConcurrent int,
 	wsReg *livetrack.Registry[adaptercodex.WsSessionMeta],
 	policies logpolicy.PolicySet,
-) {
+) error {
 	if cfg.Codex.Enabled {
 		codexAuth := deps.authForProvider(adapterresolver.ProviderCodex)
 		if codexAuth == nil {
@@ -359,6 +364,12 @@ func (s *Server) registerProviders(
 	if cfg.Anthropic.Enabled || cfg.DirectOAuth {
 		s.registerAnthropicProvider(ctx, cfg, deps, log, maxConcurrent, policies)
 	}
+
+	if cfg.Antigravity.Enabled {
+		return s.registerAntigravityProvider(ctx)
+	}
+
+	return nil
 }
 
 // registerAnthropicProvider wires the Anthropic OAuth provider into

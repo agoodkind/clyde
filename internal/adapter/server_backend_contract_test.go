@@ -57,6 +57,19 @@ func TestServerRegistersAnthropicAndCodexProviders(t *testing.T) {
 	}
 }
 
+func TestServerRegistersAntigravityProvider(t *testing.T) {
+	srv := newAntigravityRoutingServer(
+		t,
+		http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+			t.Error("registration made an upstream request")
+		}),
+	)
+	backend, err := srv.providerRegistry.Lookup(adapterresolver.ProviderAntigravity)
+	if err != nil || backend == nil || backend.ID() != adapterresolver.ProviderAntigravity {
+		t.Fatalf("registered Antigravity provider = %v, error = %v", backend != nil, err)
+	}
+}
+
 // TestDispatchUnknownBackendReturnsUnsupportedBackend locks in that a
 // resolved backend that is not a known provider family returns the typed
 // unsupported-backend adapter error through the OpenAI error boundary.

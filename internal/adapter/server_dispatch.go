@@ -34,7 +34,11 @@ func (s *Server) handleModels(ctx context.Context, hctx *handlerCtx) error {
 	corr := hctx.Correlation
 	clydeingress.SetHTTPHeaders(corr, w.Header())
 	registry := s.modelRegistry()
-	entries := registry.List()
+	entries, discoveryErr := s.availableModelEntries(ctx, registry.List())
+	if discoveryErr != nil {
+		return discoveryErr
+	}
+
 	fingerprint := modelCatalogFingerprint(entries)
 	resp := ModelsResponse{Object: "list", Data: nil}
 
@@ -74,6 +78,69 @@ func (s *Server) handleModels(ctx context.Context, hctx *handlerCtx) error {
 	)
 
 	return nil
+}
+
+type accountModelLister interface {
+	AvailableModels(ctx context.Context) ([]string, error)
+}
+
+func (s *Server) availableModelEntries(
+	ctx context.Context,
+	entries []adaptermodel.ResolvedAlias,
+) ([]adaptermodel.ResolvedAlias, error) {
+	for _, entry := range entries {
+		if entry.Backend == BackendAntigravity {
+			return s.filterAccountModels(ctx, entries)
+		}
+	}
+
+	return entries, nil
+}
+
+func (s *Server) filterAccountModels(
+	ctx context.Context,
+	entries []adaptermodel.ResolvedAlias,
+) ([]adaptermodel.ResolvedAlias, error) {
+	backend, ok := s.antigravityProvider.(accountModelLister)
+	if !ok {
+		return nil, newAdapterError(
+			adapterErrorUpstreamUnavailable,
+			"Antigravity model discovery is unavailable",
+		)
+	}
+
+	ctx, _, release := registerEgress(
+		ctx,
+		s.egressRegistry,
+		egressSessionKindHTTP,
+		EgressMeta{
+			Provider:          BackendAntigravity.String(),
+			UpstreamURL:       "",
+			UpstreamRequestID: "",
+			AttemptNo:         0,
+			ParentRequestID:   "",
+		},
+	)
+	defer release("model discovery returned")
+
+	ids, err := backend.AvailableModels(ctx)
+	if err != nil {
+		return nil, antigravityProviderAdapterError(err)
+	}
+
+	available := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		available[id] = true
+	}
+
+	result := make([]adaptermodel.ResolvedAlias, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Backend != BackendAntigravity || available[entry.WireModel] {
+			result = append(result, entry)
+		}
+	}
+
+	return result, nil
 }
 
 // On the OpenAI listener, advertisedModelEntry sets created to the catalog

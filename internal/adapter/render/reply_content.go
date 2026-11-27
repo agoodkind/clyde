@@ -166,3 +166,8 @@ func (reply *ReplyContent) record(delta adapteropenai.StreamDelta) {
 		)
 	}
 }
+
+func (reply *ReplyContent) recordMetadata(part SyntheticPart) {
+	offset := reply.visible.Len()
+	reply.Blocks = append(reply.Blocks, ReplyBlock{Start: offset, End: offset, Part: part})
+}

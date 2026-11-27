@@ -1,14 +1,19 @@
 package adapter
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
 	adapteranthropic "goodkind.io/clyde/internal/adapter/anthropic"
+	"goodkind.io/clyde/internal/adapter/antigravity"
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	"goodkind.io/clyde/internal/adapter/ingresscontract"
+	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
+	"goodkind.io/clyde/internal/slogger"
 )
 
 // newServerIngress builds a fresh ingress contract owned by one adapter
@@ -39,6 +44,75 @@ func init() {
 	adaptercursor.RegisterIngress(defaultIngressRegistry)
 	adaptercodex.RegisterBackendFacet(defaultBackendFacetRegistry)
 	adapteranthropic.RegisterBackendFacet(defaultBackendFacetRegistry)
+	antigravity.RegisterBackendFacet(defaultBackendFacetRegistry)
+}
+
+func (s *Server) registerAntigravityProvider(ctx context.Context) error {
+	backend, err := antigravity.NewProvider(
+		adapterprovider.Deps{
+			Config:     s.cfg,
+			Auth:       s.deps.authForProvider(adapterresolver.ProviderAntigravity),
+			Logger:     slogger.WithConcern(s.log, slogger.ConcernAdapterProviderAntigravity),
+			HTTPClient: s.httpClient,
+			Telemetry:  nil,
+			Now:        nil,
+		},
+		antigravity.WithCaptureStore(s.deps.CaptureStore),
+	)
+	if err != nil {
+		s.log.WarnContext(ctx, "adapter.antigravity.register_failed", "err", err)
+
+		return fmt.Errorf("register Antigravity provider: %w", err)
+	}
+
+	s.antigravityProvider = backend
+	s.providerRegistry.Register(backend)
+	s.log.InfoContext(
+		ctx,
+		"adapter.provider_registry.registered",
+		"provider",
+		backend.ID().String(),
+	)
+
+	return nil
+}
+
+func antigravityProviderAdapterError(err error) *adapterError {
+	provider := adapterresolver.ProviderAntigravity.String()
+	var typed *antigravity.UpstreamError
+	var invalid *antigravity.InvalidRequestError
+	var refresh *antigravity.AuthRefreshError
+
+	var mapped *adapterError
+	switch {
+	case errors.As(err, &typed):
+		mapped = mapUpstreamForFamily(
+			adapterRouteOpenAI,
+			provider,
+			typed.Status,
+			typed.Class,
+			typed.Code,
+			typed.Message,
+		)
+	case errors.As(err, &invalid):
+		mapped = adapterErrInvalidRequest(invalid.Error(), err)
+	case errors.As(err, &refresh) && refresh.Permanent:
+		mapped = mapUpstreamForFamily(
+			adapterRouteOpenAI,
+			provider,
+			0,
+			upstreamClassAuth,
+			refresh.Code,
+			refresh.Error(),
+		)
+	default:
+		mapped = adapterErrUpstreamFailed(provider, err.Error(), err)
+	}
+
+	mapped.Provider = provider
+	mapped.Cause = err
+
+	return mapped
 }
 
 // resolveCursorChatRequest is the registration-root indirection that

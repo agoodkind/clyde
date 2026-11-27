@@ -33,6 +33,7 @@ type responsesStreamWriter struct {
 	warnings   []adaptercompat.CompatibilityWarning
 
 	began           bool
+	onBegin         func()
 	seq             int
 	nextOutputIndex int
 
@@ -199,6 +200,7 @@ func newResponsesStreamWriter(
 		createdAt:            clock.Now().Unix(),
 		warnings:             warnings,
 		began:                false,
+		onBegin:              nil,
 		seq:                  0,
 		nextOutputIndex:      0,
 		reasoningOpen:        false,
@@ -270,6 +272,10 @@ func (p *responsesStreamWriter) begin() error {
 
 	if err := p.emitEnvelope(adapteropenai.ResponsesEventCreated, inProgress); err != nil {
 		return err
+	}
+
+	if p.onBegin != nil {
+		p.onBegin()
 	}
 
 	inProgress.Clyde = nil

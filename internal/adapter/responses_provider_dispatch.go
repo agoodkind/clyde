@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -11,16 +12,18 @@ import (
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 )
 
-// preparedResponsesProvider retains the exact concrete provider request that
-// succeeded before the Responses writer commits headers.
+// preparedResponsesProvider retains provider preparation required before
+// the Responses writer commits headers.
 type preparedResponsesProvider struct {
-	provider  adapterresolver.ProviderID
-	codex     *adaptercodex.PreparedRequest
-	anthropic *anthropic.PreparedRequest
+	provider    adapterresolver.ProviderID
+	codex       *adaptercodex.PreparedRequest
+	anthropic   *anthropic.PreparedRequest
+	antigravity *adapterresolver.ResolvedRequest
 }
 
 func responsesProviderPath(provider adapterresolver.ProviderID) string {
-	if provider == adapterresolver.ProviderAnthropic {
+	if provider == adapterresolver.ProviderAnthropic ||
+		provider == adapterresolver.ProviderAntigravity {
 		return "oauth"
 	}
 
@@ -66,9 +69,10 @@ func (s *Server) prepareResponsesProvider(
 		}
 
 		return preparedResponsesProvider{
-			provider:  adapterresolver.ProviderCodex,
-			codex:     &prepared,
-			anthropic: nil,
+			provider:    adapterresolver.ProviderCodex,
+			codex:       &prepared,
+			anthropic:   nil,
+			antigravity: nil,
 		}, nil
 	case adapterresolver.ProviderAnthropic:
 		if s.anthropicProvider == nil {
@@ -88,11 +92,27 @@ func (s *Server) prepareResponsesProvider(
 		}
 
 		return preparedResponsesProvider{
-			provider:  adapterresolver.ProviderAnthropic,
-			codex:     nil,
-			anthropic: &prepared,
+			provider:    adapterresolver.ProviderAnthropic,
+			codex:       nil,
+			anthropic:   &prepared,
+			antigravity: nil,
 		}, nil
-	case BackendClaude, BackendPassthroughOverride, BackendAntigravity:
+	case adapterresolver.ProviderAntigravity:
+		if s.antigravityProvider == nil {
+			return preparedResponsesProvider{}, upstreamUnavailableForProvider(
+				resolved.Provider,
+				&resolved,
+				resolvedRequestAlias(&resolved),
+			)
+		}
+
+		return preparedResponsesProvider{
+			provider:    resolved.Provider,
+			codex:       nil,
+			anthropic:   nil,
+			antigravity: &resolved,
+		}, nil
+	case BackendClaude, BackendPassthroughOverride:
 		fallthrough
 	default:
 		return preparedResponsesProvider{}, fmt.Errorf(
@@ -102,7 +122,11 @@ func (s *Server) prepareResponsesProvider(
 	}
 }
 
-// Execute runs the concrete request selected by prepareResponsesProvider.
+// Execute runs the request selected by prepareResponsesProvider.
+//
+// The adapter selects the writer for a streaming or collected response.
+//
+//	result, err := prepared.Execute(ctx, writer, server)
 func (p preparedResponsesProvider) Execute(
 	ctx context.Context,
 	w adapterprovider.EventWriter,
@@ -151,7 +175,9 @@ func (p preparedResponsesProvider) Execute(
 		}
 
 		return result, nil
-	case BackendClaude, BackendPassthroughOverride, BackendAntigravity:
+	case adapterresolver.ProviderAntigravity:
+		return s.executeAntigravityProvider(ctx, *p.antigravity, s.antigravityProvider, w)
+	case BackendClaude, BackendPassthroughOverride:
 		fallthrough
 	default:
 		return adapterprovider.Result{}, fmt.Errorf(
@@ -190,6 +216,14 @@ func responsesPreparedProviderError(
 ) *adapterError {
 	if providerID == adapterresolver.ProviderAnthropic {
 		return anthropicProviderAdapterError(err)
+	}
+
+	if providerID == adapterresolver.ProviderAntigravity {
+		if mapped, ok := errors.AsType[*adapterError](err); ok {
+			return mapped
+		}
+
+		return antigravityDispatchError(resolved, err)
 	}
 
 	var aerr *adapterError

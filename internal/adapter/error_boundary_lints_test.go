@@ -203,6 +203,7 @@ func TestAdapterErrorFileImportsNoProviderPackage(t *testing.T) {
 	forbiddenImports := []string{
 		"goodkind.io/clyde/internal/adapter/openai",
 		"goodkind.io/clyde/internal/adapter/anthropic",
+		"goodkind.io/clyde/internal/adapter/antigravity",
 		"goodkind.io/clyde/internal/adapter/codex",
 	}
 	fset := token.NewFileSet()

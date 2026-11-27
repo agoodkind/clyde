@@ -30,12 +30,12 @@ const (
 	EventReasoningFinished EventKind = "reasoning_finished"
 	// EventToolCallDelta is an OpenAI-compatible tool call delta.
 	EventToolCallDelta EventKind = "tool_call_delta"
+	// EventReplayMetadata stores metadata for the assistant reply.
+	EventReplayMetadata EventKind = "replay_metadata"
 )
 
 // Event is the sealed marker interface for normalized adapter stream events.
-// The six concrete variants are TextDelta, RefusalDelta, ReasoningSignaled,
-// ReasoningDelta, ReasoningFinished, and ToolCallDelta. Consumers type-switch
-// on the concrete type.
+// Consumers type-switch on the concrete type.
 type Event interface {
 	isEvent()
 	// eventKind returns the EventKind discriminator for logging and routing.
@@ -154,6 +154,14 @@ type NativePatchInput struct {
 
 func (ToolCallDelta) isEvent()             {}
 func (ToolCallDelta) eventKind() EventKind { return EventToolCallDelta }
+
+// ReplayMetadata adds one invisible part to the saved reply.
+type ReplayMetadata struct {
+	Part SyntheticPart
+}
+
+func (ReplayMetadata) isEvent()             {}
+func (ReplayMetadata) eventKind() EventKind { return EventReplayMetadata }
 
 // RendererState exposes reasoning state needed by response collectors that need
 // to know whether synthetic reasoning was opened during a stream.
@@ -424,6 +432,10 @@ func (r *EventRenderer) dispatchEvent(ev Event) []adapteropenai.StreamChunk {
 		return r.handleAssistantRefusalDelta(e)
 	case ToolCallDelta:
 		return r.handleToolCallDelta(e)
+	case ReplayMetadata:
+		if r.reply != nil {
+			r.reply.recordMetadata(e.Part)
+		}
 	}
 
 	return nil

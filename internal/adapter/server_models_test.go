@@ -7,12 +7,59 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	"goodkind.io/clyde/internal/config"
 )
+
+func TestAvailableModelEntriesIntersectsAntigravityAccountAndCatalog(t *testing.T) {
+	server := newAntigravityRoutingServer(
+		t,
+		http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			if request.URL.Path != "/v1internal:fetchAvailableModels" {
+				t.Errorf("unexpected model discovery request %s", request.URL.Path)
+			}
+
+			_, _ = io.WriteString(
+				writer,
+				`{"models":{"gemini-available":{},"gemini-unlisted":{},"claude-test":{}}}`,
+			)
+		}),
+	)
+
+	entries, err := server.availableModelEntries(
+		t.Context(),
+		[]adaptermodel.ResolvedAlias{
+			{
+				Alias:     "gemini-local-alias",
+				WireModel: "gemini-available",
+				Backend:   BackendAntigravity,
+			},
+			{
+				Alias:     "gemini-unavailable",
+				WireModel: "gemini-unavailable",
+				Backend:   BackendAntigravity,
+			},
+			{Alias: "claude-local", WireModel: "claude-test", Backend: BackendAnthropic},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var aliases []string
+
+	for _, entry := range entries {
+		aliases = append(aliases, entry.Alias)
+	}
+
+	if !slices.Equal(aliases, []string{"gemini-local-alias", "claude-local"}) {
+		t.Fatalf("model aliases = %v", aliases)
+	}
+}
 
 func TestHandleModelsIncludesLegacyAndOpenAIContextFields(t *testing.T) {
 	cfg := modelMatrixConfig()

@@ -726,9 +726,8 @@ func (s *Server) dispatchResolvedResponsesWithID(
 }
 
 // dispatchResponsesStream runs the provider with the streaming Responses
-// writer. response.created and response.in_progress are emitted before
-// Execute; a mid-stream provider error surfaces as response.failed
-// because the headers are already committed.
+// writer. Antigravity commits headers on its first event. A provider
+// error after headers have been committed surfaces as response.failed.
 func (s *Server) dispatchResponsesStream(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -749,18 +748,20 @@ func (s *Server) dispatchResponsesStream(
 		writer.useDocumentedContract(*echo)
 	}
 
-	if beginErr := writer.begin(); beginErr != nil {
-		s.log.LogAttrs(
-			ctx,
-			slog.LevelWarn,
-			"adapter.responses.begin_failed",
-			slog.String("concern", "adapter.chat.render"),
-			slog.String("request_id", resolvedReq.RequestID),
-			slog.String("model", alias),
-			slog.Any("err", beginErr),
-		)
+	if prepared.provider != adapterresolver.ProviderAntigravity {
+		if beginErr := writer.begin(); beginErr != nil {
+			s.log.LogAttrs(
+				ctx,
+				slog.LevelWarn,
+				"adapter.responses.begin_failed",
+				slog.String("concern", "adapter.chat.render"),
+				slog.String("request_id", resolvedReq.RequestID),
+				slog.String("model", alias),
+				slog.Any("err", beginErr),
+			)
 
-		return
+			return
+		}
 	}
 
 	ctx, lifecycle := s.beginProviderRequestLifecycle(
@@ -771,11 +772,23 @@ func (s *Server) dispatchResponsesStream(
 		resolvedReq.Model,
 		true,
 	)
-	lifecycle.streamOpened(ctx)
+	if writer.began {
+		lifecycle.streamOpened(ctx)
+	} else {
+		writer.onBegin = func() { lifecycle.streamOpened(ctx) }
+	}
+
 	result, runErr := prepared.Execute(ctx, writer, s)
 	lifecycle.terminal(ctx, result, runErr)
 	if runErr != nil {
 		mappedErr := responsesPreparedProviderError(prepared.provider, alias, resolvedReq, runErr)
+		if !writer.began {
+			mappedErr.Warnings = warnings
+			s.respondAdapterError(w, r, mappedErr)
+
+			return
+		}
+
 		if failErr := writer.fail(mappedErr); failErr != nil {
 			s.log.LogAttrs(
 				ctx,

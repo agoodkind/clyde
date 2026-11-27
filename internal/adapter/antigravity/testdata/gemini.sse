@@ -1,0 +1,4 @@
+: keepalive
+
+data: {"traceId":"trace1","response":{"candidates":[{"content":{"parts":[{"text":"plan","thought":true},{"text":"answer"}]}}]}}
+data: {"response":{"candidates":[{"content":{"parts":[{"functionCall":{"name":"read","args":{"key":1}}},{"functionCall":{"name":"read","id":"second","args":{}}}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":7,"thoughtsTokenCount":2,"totalTokenCount":14}}}

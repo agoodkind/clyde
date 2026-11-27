@@ -128,7 +128,8 @@ func recoverToolReply(
 	parts := make([]render.SyntheticPart, 0, len(record.Blocks))
 	for _, block := range record.Blocks {
 		if block.Part.Kind == render.SyntheticKindThinking ||
-			block.Part.Kind == render.SyntheticRedactedThinking {
+			block.Part.Kind == render.SyntheticRedactedThinking ||
+			block.Part.Kind == render.SyntheticToolSignature {
 			parts = append(parts, block.Part)
 		}
 	}

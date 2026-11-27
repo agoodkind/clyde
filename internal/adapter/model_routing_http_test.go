@@ -21,6 +21,112 @@ import (
 	"goodkind.io/clyde/internal/config"
 )
 
+func TestAntigravityRoutesChatAndResponses(t *testing.T) {
+	srv := newAntigravityRoutingServer(
+		t,
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/v1internal:streamGenerateContent" ||
+				r.URL.Query().Get("alt") != "sse" {
+				t.Errorf("upstream URL = %s, want Gemini SSE", r.URL)
+			}
+
+			if r.Header.Get("Authorization") != "Bearer fixture-antigravity-token" {
+				t.Error("upstream did not receive the fixture bearer")
+			}
+
+			_, _ = io.WriteString(
+				w,
+				"data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"fixture answer\"}]},"+
+					"\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":3,\"candidatesTokenCount\":1,"+
+					"\"totalTokenCount\":4,\"thoughtsTokenCount\":0}}}\n\n",
+			)
+		}),
+	)
+
+	tests := []struct {
+		name, path, body, terminal string
+	}{
+		{
+			name:     "chat collect",
+			path:     "/v1/chat/completions",
+			body:     `{"model":"gemini-fixture","messages":[{"role":"user","content":"hello"}]}`,
+			terminal: `"finish_reason":"stop"`,
+		},
+		{
+			name:     "chat stream",
+			path:     "/v1/chat/completions",
+			body:     `{"model":"gemini-fixture","messages":[{"role":"user","content":"hello"}],"stream":true}`,
+			terminal: "data: [DONE]",
+		},
+		{
+			name:     "responses collect",
+			path:     "/v1/responses",
+			body:     `{"model":"gemini-fixture","input":"hello"}`,
+			terminal: `"status":"completed"`,
+		},
+		{
+			name:     "responses stream",
+			path:     "/v1/responses",
+			body:     `{"model":"gemini-fixture","input":"hello","stream":true}`,
+			terminal: "event: response.completed",
+		},
+	}
+	for _, test := range tests {
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				req := httptest.NewRequest(http.MethodPost, test.path, strings.NewReader(test.body))
+				req.Header.Set("Content-Type", "application/json")
+				req = req.WithContext(context.WithValue(req.Context(), ingressLabelKey{}, "openai"))
+				rec := httptest.NewRecorder()
+				srv.mux.ServeHTTP(rec, req)
+				if rec.Code != http.StatusOK ||
+					!strings.Contains(rec.Body.String(), "fixture answer") ||
+					!strings.Contains(rec.Body.String(), test.terminal) {
+					t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+				}
+			},
+		)
+	}
+}
+
+func TestAntigravityCursorRateLimitBeforeStreaming(t *testing.T) {
+	srv := newAntigravityRoutingServer(
+		t,
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(
+				w,
+				`{"error":{"code":429,"message":"fixture quota exhausted","status":"RESOURCE_EXHAUSTED"}}`,
+			)
+		}),
+	)
+
+	tests := []struct {
+		path, body string
+	}{
+		{
+			path: "/v1/chat/completions",
+			body: `{"model":"gemini-fixture","messages":[{"role":"user","content":"hello"}],"stream":true}`,
+		},
+		{path: "/v1/responses", body: `{"model":"gemini-fixture","input":"hello","stream":true}`},
+	}
+	for _, test := range tests {
+		t.Run(
+			test.path,
+			func(t *testing.T) {
+				status, response := serveOpenAIJSON(t, srv, test.path, "cursor", test.body)
+				if status != http.StatusBadRequest ||
+					response.Error.Type != "invalid_request_error" ||
+					response.Error.Code != "upstream_rate_limited" ||
+					!strings.Contains(response.Error.Message, "fixture quota exhausted") {
+					t.Fatalf("status = %d, error = %+v", status, response.Error)
+				}
+			},
+		)
+	}
+}
+
 func TestWildcardUnknownCapabilitiesReachAnthropicProviderPath(t *testing.T) {
 	cfg := baseConfig()
 	srv, err := New(

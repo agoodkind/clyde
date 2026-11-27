@@ -27,6 +27,8 @@ const (
 	// Codex adapter replays it natively as a reasoning input item; other
 	// adapters inject it as plain text.
 	OriginCodex SyntheticOrigin = "codex"
+	// OriginAntigravity identifies metadata issued by Gemini through Code Assist.
+	OriginAntigravity SyntheticOrigin = "antigravity"
 )
 
 const (
@@ -61,6 +63,8 @@ const (
 	// of truth and the materializer can route the opaque blob to a
 	// dedicated upstream block type without conflating semantics.
 	SyntheticRedactedThinking SyntheticContentKind = "redacted_thinking"
+	// SyntheticToolSignature stores an opaque signature with its tool call ID.
+	SyntheticToolSignature SyntheticContentKind = "tool_signature"
 )
 
 // SyntheticPart represents one ordered segment of an assistant reply.
@@ -839,7 +843,7 @@ func MaterializeSyntheticParts(
 			out = append(out, materializeReasoningPart(p.Body, p.Signature, p.Origin, strategy)...)
 		case SyntheticRedactedThinking:
 			out = append(out, materializeRedactedThinkingPart(p.Encrypted, p.Origin, strategy)...)
-		case SyntheticNotice:
+		case SyntheticNotice, SyntheticToolSignature:
 			continue
 		}
 	}

@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"goodkind.io/clyde/internal/adapter/ingresscontract"
+	"goodkind.io/clyde/internal/adapter/render"
 	"goodkind.io/clyde/internal/adapter/replay"
 )
 
@@ -99,6 +101,90 @@ func currentReply(ctx context.Context) *pendingReply {
 	reply, _ := ctx.Value(pendingReplyKey{}).(*pendingReply)
 
 	return reply
+}
+
+const openAIReplayConversationPrefix = "openai:"
+
+func (s *Server) prepareGenericAntigravityReplay(
+	ctx context.Context,
+	req *ChatRequest,
+) context.Context {
+	if currentReply(ctx) != nil || !listenerFollowsDocumentedContract(ctx) {
+		return ctx
+	}
+
+	store := s.deps.ReplyStore
+	if store.Path == "" {
+		return ctx
+	}
+
+	conversation := ""
+
+	for index := range req.Messages {
+		message := &req.Messages[index]
+		if message.Role != antigravityAssistantRole {
+			continue
+		}
+
+		if ref := s.restoreGenericAntigravityReply(ctx, store, conversation, message); ref != "" {
+			conversation = ref
+		}
+	}
+
+	if conversation == "" {
+		conversation = openAIReplayConversationPrefix + replay.NewID()
+	}
+
+	ref := replay.Reference{ConversationID: conversation, ReplyID: replay.NewID()}
+
+	return context.WithValue(ctx, pendingReplyKey{}, &pendingReply{ref: ref, store: store})
+}
+
+func (s *Server) restoreGenericAntigravityReply(
+	ctx context.Context,
+	store replay.Store,
+	conversation string,
+	message *ChatMessage,
+) string {
+	var text string
+	if err := json.Unmarshal(message.Content, &text); err != nil {
+		return ""
+	}
+
+	visible, ref, found := replay.StripReference(text)
+	if !found || !strings.HasPrefix(ref.ConversationID, openAIReplayConversationPrefix) {
+		return ""
+	}
+
+	encoded, err := json.Marshal(visible)
+	if err != nil {
+		return ""
+	}
+
+	message.Content = encoded
+	if conversation != "" && ref.ConversationID != conversation {
+		return ""
+	}
+
+	record, found, err := store.Load(ctx, ref)
+	if err != nil {
+		s.log.WarnContext(ctx, "adapter.antigravity.replay_read_failed", "err", err)
+
+		return ""
+	}
+
+	if !found || record.Provider != BackendAntigravity.String() ||
+		record.Digest != replay.Fingerprint(visible, message.ToolCalls) {
+		return ""
+	}
+
+	for _, block := range record.Blocks {
+		if block.Part.Kind == render.SyntheticToolSignature {
+			message.ReplayParts = append(message.ReplayParts, block.Part)
+		}
+	}
+
+	return ref.ConversationID
 }
 
 func (s *Server) prepareReplyReplay(
