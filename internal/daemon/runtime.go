@@ -904,8 +904,10 @@ func newAntigravityAuth(
 	if err != nil {
 		slog.Warn(
 			"daemon.antigravity.auth_settings_failed",
-			"concern", "adapter.providers.antigravity.oauth",
-			"err", err,
+			"concern",
+			"adapter.providers.antigravity.oauth",
+			"err",
+			err,
 		)
 
 		return nil, fmt.Errorf("resolve Antigravity OAuth client settings: %w", err)
@@ -915,20 +917,25 @@ func newAntigravityAuth(
 	if err != nil {
 		slog.Warn(
 			"daemon.antigravity.credential_source_failed",
-			"concern", "adapter.providers.antigravity.oauth",
-			"err", err,
+			"concern",
+			"adapter.providers.antigravity.oauth",
+			"err",
+			err,
 		)
 
 		return nil, fmt.Errorf("initialize Antigravity credential source: %w", err)
 	}
 
-	return adapterantigravity.NewAuthManager(source, adapterantigravity.AuthManagerOptions{
-		HTTPClient:   nil,
-		ClientID:     clientID,
-		ClientSecret: secret,
-		Endpoint:     "",
-		Now:          nil,
-	}), nil
+	return adapterantigravity.NewAuthManager(
+		source,
+		adapterantigravity.AuthManagerOptions{
+			HTTPClient:   nil,
+			ClientID:     clientID,
+			ClientSecret: secret,
+			Endpoint:     "",
+			Now:          nil,
+		},
+	), nil
 }
 
 type unavailableProviderAuth struct {
