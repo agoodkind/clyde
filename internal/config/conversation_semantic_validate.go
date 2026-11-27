@@ -22,6 +22,13 @@ func normalizeAndValidateConversationSemantic(semantic *ConversationSemanticConf
 		return err
 	}
 
+	if semantic.MilvusFirstLocalFallback && len(semantic.Backends) != 2 {
+		return invalidConversationSemanticSetting(
+			"milvus_first_local_fallback",
+			"requires conversation.semantic.backends to contain both milvus and local",
+		)
+	}
+
 	if err := validateConversationSemanticMilvusLayout(semantic); err != nil {
 		return err
 	}

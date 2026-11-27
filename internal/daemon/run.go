@@ -385,6 +385,21 @@ func newControlServer(
 		collectionID: cfg.Conversation.Semantic.CollectionID,
 		backend:      cfg.Conversation.Semantic.Backend,
 	}
+	backendClient := func(backend config.ConversationSemanticBackend) (
+		conversationSemanticSearchClient,
+		bool,
+	) {
+		backendRuntime, enabled := runtime.semanticBackends[backend]
+		return backendRuntime.runtime.currentSearchClient(), enabled
+	}
+	if cfg.Conversation.Semantic.MilvusFirstLocalFallback {
+		searchSource = &milvusFirstSearchSource{
+			index:    index,
+			settings: cfg.Conversation.Semantic,
+			client:   backendClient,
+		}
+	}
+
 	if cfg.Conversation.Semantic.RawTextFallbackEnabled() {
 		searchSource = &rawTextFallbackSearchSource{primary: searchSource, index: index}
 	}
@@ -426,13 +441,7 @@ func newControlServer(
 			configured: searchSource,
 			index:      index,
 			settings:   func() config.ConversationSemanticConfig { return cfg.Conversation.Semantic },
-			client: func(backend config.ConversationSemanticBackend) (
-				conversationSemanticSearchClient,
-				bool,
-			) {
-				backendRuntime, enabled := runtime.semanticBackends[backend]
-				return backendRuntime.runtime.currentSearchClient(), enabled
-			},
+			client:     backendClient,
 		},
 		captureStore:       runtime.captureStore,
 		freshness:          semanticFreshness,

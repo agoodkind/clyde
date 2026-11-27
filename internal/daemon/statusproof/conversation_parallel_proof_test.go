@@ -25,6 +25,7 @@ ingestion_enabled = true
 search_enabled = true
 backend = "milvus"
 backends = ["milvus", "local"]
+milvus_first_local_fallback = true
 milvus_address = "localhost:1"
 sync_interval = "1s"
 index_refresh_interval = "1s"
@@ -129,6 +130,26 @@ func TestParallelIngestionContinuesLocalWhileMilvusIsUnavailable(t *testing.T) {
 	)
 	if result.Source != conversation.SearchSourceLocal || result.Freshness.Manifest != 1 {
 		t.Fatalf("local search = %+v", result)
+	}
+
+	fallback, err := daemon.SearchConversations(
+		t.Context(),
+		conversation.SearchConversationsOptions{
+			Query: ingestionProofFirstToken,
+			Limit: ingestionProofSearchLimit,
+		},
+	)
+	if err != nil || fallback.Source != conversation.SearchSourceLocal ||
+		!ingestionProofHasMatch(fallback, ingestionProofMainSession, ingestionProofFirstToken) {
+		t.Fatalf(
+			"implicit search did not use the local backend: %s, error: %v",
+			ingestionProofDescribe(fallback),
+			err,
+		)
+	}
+
+	if fallback.Matches[0].Backend != conversation.SearchBackendLocal {
+		t.Fatalf("fallback match backend = %q, want local", fallback.Matches[0].Backend)
 	}
 
 	metrics := waitForStatusProof(

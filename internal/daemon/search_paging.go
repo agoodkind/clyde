@@ -60,7 +60,6 @@ func semanticSearchResult(
 	source conversation.SearchSource,
 	options conversation.SearchConversationsOptions,
 ) (conversation.SearchConversationsResult, error) {
-	accounting := filterAccounting(ctx, index, options)
 	normalizedLimit := normalizedSearchLimit(options.Limit)
 	normalizedOffset := normalizedPagingOffset(options.Offset)
 	page, err := engineSearchMatches(ctx, index, semantic, collectionID, options)
@@ -68,20 +67,54 @@ func semanticSearchResult(
 		return conversation.SearchConversationsResult{}, err
 	}
 
+	backend := conversation.SearchBackendMilvus
+	if source == conversation.SearchSourceLocal {
+		backend = conversation.SearchBackendLocal
+	}
+
+	markSearchBackend(page.matches, backend)
+
+	return searchResultPage(
+		ctx,
+		index,
+		options,
+		source,
+		page,
+		normalizedLimit,
+		normalizedOffset,
+	), nil
+}
+
+func markSearchBackend(matches []conversation.SearchMatch, backend conversation.SearchBackend) {
+	for index := range matches {
+		matches[index].Backend = backend
+	}
+}
+
+func searchResultPage(
+	ctx context.Context,
+	index conversationSearchIndex,
+	options conversation.SearchConversationsOptions,
+	source conversation.SearchSource,
+	page engineSearchPage,
+	limit int,
+	offset int,
+) conversation.SearchConversationsResult {
+	accounting := filterAccounting(ctx, index, options)
 	matches := page.matches
 
 	return conversation.SearchConversationsResult{
 		Matches:              matches,
 		ConversationsScanned: len(matches),
 		ReturnedCount:        len(matches),
-		Limit:                normalizedLimit,
-		Offset:               normalizedOffset,
-		NextOffset:           normalizedOffset + len(matches),
+		Limit:                limit,
+		Offset:               offset,
+		NextOffset:           offset + len(matches),
 		// HasMore is true only on a page with at least one row. NextOffset is
 		// then greater than the request offset, and a caller that follows it
 		// never requests the same page again. A short page with rows reports
 		// HasMore because ranked hits remain after the over-fetch budget ran out.
-		HasMore:    len(matches) > 0 && (len(matches) >= normalizedLimit || page.short),
+		HasMore:    len(matches) > 0 && (len(matches) >= limit || page.short),
 		NextCursor: "",
 		Source:     source,
 		Facets:     conversation.ComputeFacets(matches, searchFacetTopN),
@@ -96,7 +129,7 @@ func semanticSearchResult(
 			appendWithheldStages(accounting, page),
 			len(matches),
 		),
-	}, nil
+	}
 }
 
 // appendWithheldStages records the ranked hits the engine returned and how many

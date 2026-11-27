@@ -84,12 +84,9 @@ func localSearchMatches(
 	semantic conversationSemanticSearchClient,
 	collectionID string,
 	options conversation.SearchConversationsOptions,
+	offset int,
+	searchLimit int,
 ) (engineSearchPage, error) {
-	_, offset, searchLimit, err := semanticSearchPageBounds(options)
-	if err != nil {
-		return emptyEngineSearchPage(), err
-	}
-
 	allowed, err := localSearchAllowedRecords(ctx, snapshots, options)
 	if err != nil {
 		return emptyEngineSearchPage(), err
@@ -145,6 +142,7 @@ func localSearchMatches(
 		matches = append(
 			matches,
 			conversation.SearchMatch{
+				Backend:       conversation.SearchBackendLocal,
 				Record:        record,
 				MessageIndex:  int(hit.MessageIndex),
 				Role:          hit.Role,

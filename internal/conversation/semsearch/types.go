@@ -77,6 +77,10 @@ type SemHit struct {
 	// LoadRules is the loading rules tag of the matched row. An empty value
 	// means the default rules.
 	LoadRules string
+	// RelativePath and SplitPart identify the original field and byte offset of
+	// this row. A positive SplitPart stores the byte offset plus one.
+	RelativePath string
+	SplitPart    int32
 }
 
 // SearchFilter narrows conversation retrieval by row attributes. The zero value

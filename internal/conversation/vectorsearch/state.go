@@ -25,6 +25,17 @@ type storedFamilyRow struct {
 	timeKnown         bool
 }
 
+func familyRowFromStorage(row collection.StoredRow) storedFamilyRow {
+	return storedFamilyRow{
+		id:                row.ID,
+		relativePath:      row.RelativePath,
+		content:           row.Content,
+		splitPart:         row.SplitPart,
+		splitPartRecorded: row.SplitPartRecorded,
+		timeKnown:         !rowHasZeroTime(row) && rowTimestampPresent(row),
+	}
+}
+
 func (row storedFamilyRow) hasCurrentKey() bool {
 	if !row.splitPartRecorded {
 		return false
@@ -223,17 +234,7 @@ func (batch *storedBatch) add(
 	}
 
 	familyKey := chunkFamilyKey(conversationID, row.RelativePath)
-	state.families[familyKey] = append(
-		state.families[familyKey],
-		storedFamilyRow{
-			id:                row.ID,
-			relativePath:      row.RelativePath,
-			content:           row.Content,
-			splitPart:         row.SplitPart,
-			splitPartRecorded: row.SplitPartRecorded,
-			timeKnown:         !rowHasZeroTime(row) && rowTimestampPresent(row),
-		},
-	)
+	state.families[familyKey] = append(state.families[familyKey], familyRowFromStorage(row))
 }
 
 func (batch *storedBatch) state(conversationID string) *conversationState {

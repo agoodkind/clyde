@@ -100,6 +100,8 @@ func semHit(hit collection.Hit) (semsearch.SemHit, error) {
 		Content:              hit.Content,
 		Score:                hit.Score,
 		LoadRules:            scalarString(hit, loadRulesColumn),
+		RelativePath:         hit.RelativePath,
+		SplitPart:            hit.SplitPart,
 	}, nil
 }
 

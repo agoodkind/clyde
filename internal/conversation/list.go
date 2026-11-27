@@ -95,6 +95,8 @@ const (
 // SearchMatch is one matching message returned during cross-conversation
 // discovery.
 type SearchMatch struct {
+	// Backend identifies the index that returned this match.
+	Backend      SearchBackend
 	Record       Record
 	MessageIndex int
 	Role         string

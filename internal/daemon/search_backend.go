@@ -160,5 +160,7 @@ func openRequestedSearchBackend(
 		}
 	}
 
+	settings.MilvusEmbeddingIdleOnly = false
+
 	return OpenConversationSearchClient(ctx, settings)
 }

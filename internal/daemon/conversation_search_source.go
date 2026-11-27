@@ -3,7 +3,10 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+
+	"google.golang.org/grpc/codes"
 
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
@@ -71,6 +74,10 @@ func (s *rawTextFallbackSearchSource) SearchConversations(
 	result, err := s.primary.SearchConversations(ctx, options)
 	if err == nil {
 		return result, nil
+	}
+
+	if statusCode := searchCancellationCode(ctx, err); statusCode != codes.OK {
+		return conversation.SearchConversationsResult{}, fmt.Errorf("search interrupted: %w", err)
 	}
 
 	var sourceFailure conversationSearchSourceError

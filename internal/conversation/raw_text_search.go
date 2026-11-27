@@ -174,6 +174,7 @@ func (idx *Index) firstRawTextMatch(
 			indexText := transcript.RenderMessageIndexText(message)
 			if textContainsTerms(indexText, terms) {
 				return SearchMatch{
+					Backend:       "",
 					Record:        record,
 					MessageIndex:  messageIndex,
 					Role:          message.Role,
@@ -195,6 +196,7 @@ func (idx *Index) firstRawTextMatch(
 
 func emptySearchMatch() SearchMatch {
 	return SearchMatch{
+		Backend:       "",
 		Record:        emptyRecord(),
 		MessageIndex:  0,
 		Role:          "",

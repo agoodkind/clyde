@@ -141,6 +141,7 @@ func (r *runtimeServices) semanticBackendMetrics(
 			settings.ForSearchBackend(backend),
 			freshness.syncStatus(),
 		)
+		backendMetrics = append(backendMetrics, state.runtime.embeddingWaitingMetrics()...)
 		connection := &clydev1.SemanticStatus{
 			Connection: clydev1.SemanticConnectionState_SEMANTIC_CONNECTION_STATE_DISABLED,
 		}

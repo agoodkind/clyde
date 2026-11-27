@@ -80,12 +80,17 @@ type ConversationSemanticConfig struct {
 	Backend ConversationSemanticBackend `json:"backend,omitempty" toml:"backend,omitempty"`
 	// Backends enables independent ingestion pipelines. Omission uses Backend alone.
 	Backends []ConversationSemanticBackend `json:"backends,omitempty" toml:"backends,omitempty"`
+	// MilvusFirstLocalFallback searches local for content Milvus has not embedded.
+	MilvusFirstLocalFallback bool `json:"milvusFirstLocalFallback,omitempty" toml:"milvus_first_local_fallback,omitempty"`
 	// LocalRoot applies to the local backend only. An empty value selects a
 	// directory under the Clyde state directory.
 	LocalRoot string `json:"localRoot,omitempty" toml:"local_root,omitempty"`
 
 	MilvusAddress  string `json:"milvusAddress,omitempty" toml:"milvus_address,omitempty"`
 	MilvusDatabase string `json:"milvusDatabase,omitempty" toml:"milvus_database,omitempty"`
+
+	// MilvusEmbeddingIdleOnly defers Milvus ingestion embeddings until the host is idle.
+	MilvusEmbeddingIdleOnly bool `json:"milvusEmbeddingIdleOnly,omitempty" toml:"milvus_embedding_idle_only,omitempty"`
 	// MilvusLayout selects how the Milvus backend stores the collection. Empty
 	// and "single" store each row with its dense vector in one collection.
 	// "shared" stores rows without the dense vector and stores each distinct
