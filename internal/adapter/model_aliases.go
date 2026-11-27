@@ -11,6 +11,8 @@ const (
 	BackendAnthropic = adaptermodel.BackendAnthropic
 	// BackendCodex is part of Clyde's typed adapter surface.
 	BackendCodex = adaptermodel.BackendCodex
+	// BackendAntigravity selects the Antigravity backend.
+	BackendAntigravity = adaptermodel.BackendAntigravity
 
 	// EffortLow is part of Clyde's typed adapter surface.
 	EffortLow = adaptermodel.EffortLow

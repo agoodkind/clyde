@@ -169,6 +169,22 @@ func TestHardResetProtectsConfiguredClaudeRoot(t *testing.T) {
 	}
 }
 
+func TestHardResetProtectsConfiguredAntigravityCredentialFile(t *testing.T) {
+	resetTestRoots(t)
+	state := config.DefaultStateDir()
+	credentialPath := filepath.Join(state, "hooks", "antigravity-token.json")
+	cfg := &config.Config{
+		Adapter: config.AdapterConfig{
+			Antigravity: config.AdapterAntigravity{CredentialsFile: credentialPath},
+		},
+	}
+	target := resetLogTarget(filepath.Dir(credentialPath), state, true)
+	if err := validateResetTarget(t.Context(), target, cfg); err == nil ||
+		!strings.Contains(err.Error(), "protected") {
+		t.Fatalf("validateResetTarget error = %v, want protected credential path rejection", err)
+	}
+}
+
 func TestHardResetRejectsProtectedTargetsBeforeServiceRemoval(t *testing.T) {
 	root := resetTestRoots(t)
 

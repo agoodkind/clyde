@@ -127,6 +127,12 @@ func (cfg AdapterConfig) ValidateSecrets() error {
 		return err
 	}
 
+	if cfg.Antigravity.Enabled {
+		if _, _, err := cfg.Antigravity.ResolveOAuthClient(); err != nil {
+			return err
+		}
+	}
+
 	passthrough := cfg.OpenAICompatPassthrough
 	if _, err := ResolvePassthroughAPIKey(
 		"adapter.openai_compat_passthrough",

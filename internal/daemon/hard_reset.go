@@ -18,6 +18,7 @@ import (
 	"goodkind.io/clyde/internal/daemonsupervisor"
 	"goodkind.io/clyde/internal/deploy"
 	"goodkind.io/clyde/internal/homedir"
+	antigravityoauthcredentials "goodkind.io/clyde/internal/providers/antigravity/oauthcredentials"
 	"goodkind.io/clyde/internal/providers/claude/oauthcredentials"
 	codexstore "goodkind.io/clyde/internal/providers/codex/store"
 	cursorstore "goodkind.io/clyde/internal/providers/cursor/store"
@@ -31,6 +32,8 @@ type resetTarget struct {
 	RemoveTree     bool
 	AllowProtected bool
 }
+
+var errProtectedCredentialReset = errors.New("reset target overlaps protected credential data")
 
 // HardResetScope names one Clyde-owned local data group.
 type HardResetScope string
@@ -511,6 +514,30 @@ func validateResetTarget(ctx context.Context, target resetTarget, cfg *config.Co
 		return err
 	}
 
+	if cfg != nil {
+		credentialPaths, err := resetProtectedCredentialFiles(cfg)
+		if err != nil {
+			return err
+		}
+
+		for _, path := range credentialPaths {
+			if path == "" {
+				continue
+			}
+
+			resolved, err := resolvedResetPath(homedir.Expand(path))
+			if err != nil {
+				return err
+			}
+
+			if resolved == resolvedTarget ||
+				withinResetRoot(resolved, resolvedTarget) ||
+				withinResetRoot(resolvedTarget, resolved) {
+				return fmt.Errorf("%w: %s", errProtectedCredentialReset, target.Path)
+			}
+		}
+	}
+
 	if target.AllowProtected {
 		return nil
 	}
@@ -581,6 +608,28 @@ func resetProtectedFiles(cfg *config.Config) []string {
 	}
 
 	return protected
+}
+
+func resetProtectedCredentialFiles(cfg *config.Config) ([]string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		wrapped := fmt.Errorf("resolve Antigravity credential home directory: %w", err)
+		slog.Warn(
+			"daemon.hard_reset.credential_home_failed",
+			"concern",
+			"process.daemon.lifecycle",
+			"err",
+			wrapped,
+		)
+
+		return nil, wrapped
+	}
+
+	return []string{
+		filepath.Join(home, antigravityoauthcredentials.CLITokenFile),
+		filepath.Join(home, antigravityoauthcredentials.DesktopTokenFile),
+		homedir.Expand(cfg.Adapter.Antigravity.CredentialsFile),
+	}, nil
 }
 
 func resolvedResetPath(path string) (_ string, err error) {

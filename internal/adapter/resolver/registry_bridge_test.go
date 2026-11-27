@@ -18,6 +18,7 @@ func TestProviderIDAliasesBackendID(t *testing.T) {
 	}{
 		{adaptermodel.BackendAnthropic, ProviderAnthropic},
 		{adaptermodel.BackendCodex, ProviderCodex},
+		{adaptermodel.BackendAntigravity, ProviderAntigravity},
 		{adaptermodel.BackendPassthroughOverride, ProviderPassthrough},
 		{adaptermodel.BackendID(""), ProviderUnknown},
 	}

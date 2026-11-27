@@ -10,6 +10,7 @@ func TestProviderIDString(t *testing.T) {
 		{ProviderUnknown, ""},
 		{ProviderAnthropic, "anthropic"},
 		{ProviderCodex, "codex"},
+		{ProviderAntigravity, "antigravity"},
 	}
 	for _, tc := range cases {
 		if got := tc.id.String(); got != tc.want {
@@ -26,6 +27,7 @@ func TestProviderIDValid(t *testing.T) {
 		{ProviderUnknown, false},
 		{ProviderAnthropic, true},
 		{ProviderCodex, true},
+		{ProviderAntigravity, true},
 		{ProviderID("nonsense"), false},
 	}
 	for _, tc := range cases {

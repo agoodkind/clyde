@@ -67,6 +67,8 @@ func (a *ModelRegistryAdapter) Resolve(
 		parsedWireEffort = parsedEffort
 	}
 
+	thinkingLevel := resolved.EffortWireValues[effort]
+
 	family := resolved.Profile
 	if family == "" {
 		family = resolved.WireModel
@@ -78,6 +80,7 @@ func (a *ModelRegistryAdapter) Resolve(
 		Model:                   resolved.WireModel,
 		Effort:                  parsedEffort,
 		WireEffort:              parsedWireEffort,
+		ThinkingLevel:           thinkingLevel,
 		Context:                 resolved.Context,
 		MaxOutputTokens:         resolved.MaxOutputTokens,
 		Thinking:                resolved.Thinking,

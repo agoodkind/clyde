@@ -46,6 +46,7 @@ type ResolvedModelView struct {
 	Model           string
 	Effort          Effort
 	WireEffort      Effort
+	ThinkingLevel   string
 	Context         int
 	MaxOutputTokens int
 	// Thinking is the resolved thinking mode for this alias as a typed
@@ -169,11 +170,12 @@ func Resolve(
 	}
 
 	return ResolvedRequest{
-		Provider:   view.Provider,
-		Family:     view.Family,
-		Model:      view.Model,
-		Effort:     view.Effort,
-		WireEffort: view.WireEffort,
+		Provider:      view.Provider,
+		Family:        view.Family,
+		Model:         view.Model,
+		Effort:        view.Effort,
+		WireEffort:    view.WireEffort,
+		ThinkingLevel: view.ThinkingLevel,
 		ContextBudget: ContextBudget{
 			InputTokens:  view.Context,
 			OutputTokens: view.MaxOutputTokens,

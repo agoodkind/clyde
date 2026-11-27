@@ -21,7 +21,11 @@ func (backend BackendID) String() string { return string(backend) }
 // Valid reports whether the adapter has a dispatch path for the provider.
 func (backend BackendID) Valid() bool {
 	switch backend {
-	case BackendClaude, BackendAnthropic, BackendCodex, BackendPassthroughOverride:
+	case BackendClaude,
+		BackendAnthropic,
+		BackendCodex,
+		BackendAntigravity,
+		BackendPassthroughOverride:
 		return true
 	default:
 		return false
@@ -35,6 +39,8 @@ const (
 	BackendAnthropic BackendID = "anthropic"
 	// BackendCodex selects the direct Codex Responses provider.
 	BackendCodex BackendID = "codex"
+	// BackendAntigravity selects the Antigravity Gemini backend.
+	BackendAntigravity BackendID = "antigravity"
 	// BackendPassthroughOverride selects an OpenAI-compatible upstream.
 	BackendPassthroughOverride BackendID = "passthrough_override"
 )
@@ -862,6 +868,8 @@ func backendForProvider(provider config.AdapterModelProvider) BackendID {
 	switch provider {
 	case config.AdapterModelProviderCodex:
 		return BackendCodex
+	case config.AdapterModelProviderAntigravity:
+		return BackendAntigravity
 	case config.AdapterModelProviderAnthropic:
 		return BackendAnthropic
 	case config.AdapterModelProviderPassthroughOverride:
@@ -875,6 +883,8 @@ func providerEnabled(cfg config.AdapterConfig, provider config.AdapterModelProvi
 	switch provider {
 	case config.AdapterModelProviderCodex:
 		return cfg.Codex.Enabled
+	case config.AdapterModelProviderAntigravity:
+		return cfg.Antigravity.Enabled
 	case config.AdapterModelProviderAnthropic:
 		return cfg.Anthropic.Enabled || cfg.DirectOAuth
 	case config.AdapterModelProviderPassthroughOverride:

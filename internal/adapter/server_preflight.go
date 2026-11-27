@@ -254,7 +254,7 @@ func (s *Server) validateLogprobs(
 			req.Logprobs = nil
 			req.TopLogprobs = nil
 		}
-	case BackendCodex, BackendPassthroughOverride:
+	case BackendCodex, BackendPassthroughOverride, BackendAntigravity:
 		// Logprobs policy is anthropic-specific; non-anthropic backends do not
 		// gate logprobs at this preflight stage.
 	}

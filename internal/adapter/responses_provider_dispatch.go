@@ -92,7 +92,7 @@ func (s *Server) prepareResponsesProvider(
 			codex:     nil,
 			anthropic: &prepared,
 		}, nil
-	case BackendClaude, BackendPassthroughOverride:
+	case BackendClaude, BackendPassthroughOverride, BackendAntigravity:
 		fallthrough
 	default:
 		return preparedResponsesProvider{}, fmt.Errorf(
@@ -151,7 +151,7 @@ func (p preparedResponsesProvider) Execute(
 		}
 
 		return result, nil
-	case BackendClaude, BackendPassthroughOverride:
+	case BackendClaude, BackendPassthroughOverride, BackendAntigravity:
 		fallthrough
 	default:
 		return adapterprovider.Result{}, fmt.Errorf(

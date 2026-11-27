@@ -159,6 +159,8 @@ type AdapterConfig struct {
 	// authentication. Model declarations and ordered model routes select
 	// this provider.
 	Codex AdapterCodex `json:"codex,omitzero" toml:"codex,omitempty"`
+	// Antigravity configures the Gemini backend selected by model routes.
+	Antigravity AdapterAntigravity `json:"antigravity,omitzero" toml:"antigravity,omitempty"`
 	// Anthropic carries Anthropic-specific sub-blocks under the canonical
 	// [adapter.anthropic] root. Provider-specific endpoint metadata lives
 	// at [adapter.anthropic.oauth], alongside wire-capture and reasoning

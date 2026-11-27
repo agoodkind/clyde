@@ -41,6 +41,7 @@ type ResolvedRequest struct {
 	Model         string
 	Effort        Effort
 	WireEffort    Effort
+	ThinkingLevel string
 	Verbosity     string
 	ContextBudget ContextBudget
 	RequestID     string

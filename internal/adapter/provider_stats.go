@@ -34,6 +34,8 @@ func providerName(req *adapterresolver.ResolvedRequest, path string) string {
 		}
 
 		return "passthrough-override-" + name
+	case BackendAntigravity:
+		return "antigravity"
 	default:
 		return "claude-cli"
 	}

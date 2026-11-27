@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -31,12 +32,16 @@ func (s *Server) applyBackendOverride(
 	original := resolved.Provider
 	overrideBackend := adaptermodel.BackendID(override)
 	switch overrideBackend {
-	case BackendClaude, BackendAnthropic, BackendPassthroughOverride, BackendCodex:
+	case BackendClaude,
+		BackendAnthropic,
+		BackendPassthroughOverride,
+		BackendCodex,
+		BackendAntigravity:
 		resolved.Provider = overrideBackend
 	default:
 		return newAdapterError(
 			adapterErrorUnsupportedBackend,
-			"X-Clyde-Backend must be one of: anthropic, passthrough_override, codex",
+			"X-Clyde-Backend must be one of: anthropic, passthrough_override, codex, antigravity",
 		)
 	}
 
@@ -140,7 +145,7 @@ func (s *Server) dispatchResolvedChat(
 		s.dispatchAnthropicProvider(w, r, effort, reqID, resolvedReq)
 	case adapterresolver.ProviderCodex:
 		s.dispatchCodexProvider(w, r, req, reqID, ingressCtx, resolvedReq)
-	case BackendClaude, BackendPassthroughOverride:
+	case BackendClaude, BackendPassthroughOverride, BackendAntigravity:
 		fallthrough
 	default:
 		s.respondAdapterError(w, r, unsupportedBackendError(&resolvedReq, req.Model))
@@ -168,14 +173,16 @@ func (s *Server) lookupResolvedProvider(
 // identity the registry is keyed on, and reports whether the backend
 // belongs to a known provider family. BackendClaude and BackendAnthropic
 // both map to ProviderAnthropic because the anthropic provider serves
-// both; BackendCodex maps to ProviderCodex. Passthrough is handled before
-// the lookup and any other backend is unknown.
+// both. Codex and Antigravity each map to their own provider.
+// The dispatcher handles passthrough before the registry lookup.
 func canonicalProviderID(id adapterresolver.ProviderID) (adapterresolver.ProviderID, bool) {
 	switch id {
 	case BackendClaude, BackendAnthropic:
 		return adapterresolver.ProviderAnthropic, true
 	case BackendCodex:
 		return adapterresolver.ProviderCodex, true
+	case BackendAntigravity:
+		return adapterresolver.ProviderAntigravity, true
 	case BackendPassthroughOverride:
 		// Passthrough is dispatched before this lookup; treat it as unknown
 		// here so a stray passthrough id cannot reach the provider switch.
@@ -196,7 +203,11 @@ func unsupportedBackendError(
 ) *adapterError {
 	err := newAdapterError(
 		adapterErrorUnsupportedBackend,
-		"model resolved to unsupported backend "+resolved.Provider.String()+"; configure anthropic, codex, or passthrough_override explicitly",
+		fmt.Sprintf(
+			"model resolved to unsupported backend %s; configure "+
+				"anthropic, codex, antigravity, or passthrough_override explicitly",
+			resolved.Provider,
+		),
 	)
 	err.Backend = resolved.Provider.String()
 	err.ModelAlias = alias
@@ -223,6 +234,8 @@ func upstreamUnavailableForProvider(
 	case adapterresolver.ProviderCodex:
 		message = "codex backend is not enabled in [adapter.codex]"
 		provider = "codex"
+	case adapterresolver.ProviderAntigravity:
+		message = "antigravity backend is not enabled in [adapter.antigravity]"
 	case BackendClaude, BackendPassthroughOverride:
 	}
 

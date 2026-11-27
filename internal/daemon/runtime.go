@@ -15,6 +15,7 @@ import (
 
 	"goodkind.io/clyde/internal/adapter"
 	"goodkind.io/clyde/internal/adapter/anthropic"
+	adapterantigravity "goodkind.io/clyde/internal/adapter/antigravity"
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	"goodkind.io/clyde/internal/adapter/replay"
@@ -27,6 +28,7 @@ import (
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/mitm/capture"
+	antigravityoauthcredentials "goodkind.io/clyde/internal/providers/antigravity/oauthcredentials"
 	claudecompaction "goodkind.io/clyde/internal/providers/claude/compaction"
 	claudemitm "goodkind.io/clyde/internal/providers/claude/mitmcontrib"
 	codexcompaction "goodkind.io/clyde/internal/providers/codex/compaction"
@@ -859,6 +861,16 @@ func getAuth(
 	cfg *config.Config,
 	log *slog.Logger,
 ) func(adapterresolver.ProviderID) adapterprovider.AuthLookup {
+	var antigravityAuth adapterprovider.AuthLookup
+	if cfg.Adapter.Antigravity.Enabled {
+		manager, err := newAntigravityAuth(cfg.Adapter.Antigravity)
+		if err != nil {
+			antigravityAuth = unavailableProviderAuth{err: err}
+		} else {
+			antigravityAuth = manager
+		}
+	}
+
 	return func(provider adapterresolver.ProviderID) adapterprovider.AuthLookup {
 		switch provider {
 		case adapterresolver.ProviderUnknown:
@@ -875,12 +887,60 @@ func getAuth(
 					RefreshURL: "",
 				},
 			)
+		case adapterresolver.ProviderAntigravity:
+			return antigravityAuth
 		case adapter.BackendClaude, adapter.BackendPassthroughOverride:
 			fallthrough
 		default:
 			return nil
 		}
 	}
+}
+
+func newAntigravityAuth(
+	settings config.AdapterAntigravity,
+) (*adapterantigravity.AuthManager, error) {
+	clientID, secret, err := settings.ResolveOAuthClient()
+	if err != nil {
+		slog.Warn(
+			"daemon.antigravity.auth_settings_failed",
+			"concern", "adapter.providers.antigravity.oauth",
+			"err", err,
+		)
+
+		return nil, fmt.Errorf("resolve Antigravity OAuth client settings: %w", err)
+	}
+
+	source, err := antigravityoauthcredentials.NewSource(settings.CredentialsFile)
+	if err != nil {
+		slog.Warn(
+			"daemon.antigravity.credential_source_failed",
+			"concern", "adapter.providers.antigravity.oauth",
+			"err", err,
+		)
+
+		return nil, fmt.Errorf("initialize Antigravity credential source: %w", err)
+	}
+
+	return adapterantigravity.NewAuthManager(source, adapterantigravity.AuthManagerOptions{
+		HTTPClient:   nil,
+		ClientID:     clientID,
+		ClientSecret: secret,
+		Endpoint:     "",
+		Now:          nil,
+	}), nil
+}
+
+type unavailableProviderAuth struct {
+	err error
+}
+
+func (auth unavailableProviderAuth) Token(context.Context) (string, error) {
+	return "", auth.err
+}
+
+func (auth unavailableProviderAuth) ForceRefresh(context.Context) (string, error) {
+	return "", auth.err
 }
 
 // cancelConfigWatcher cancels the config watcher loop without waiting. It is

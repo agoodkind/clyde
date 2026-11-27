@@ -108,14 +108,14 @@ var responsesCatalog = []catalogEntry{
 
 // providerColumnFor maps a resolved backend to its catalog column. Codex
 // reads the Codex column; Anthropic and Claude read the Anthropic column.
-// Passthrough and unknown providers report false so no warnings are emitted.
+// Only Codex, Anthropic, and Claude have warning columns.
 func providerColumnFor(provider adaptermodel.BackendID) (providerColumn, bool) {
 	switch provider {
 	case adaptermodel.BackendCodex:
 		return columnCodex, true
 	case adaptermodel.BackendAnthropic, adaptermodel.BackendClaude:
 		return columnAnthropic, true
-	case adaptermodel.BackendPassthroughOverride:
+	case adaptermodel.BackendPassthroughOverride, adaptermodel.BackendAntigravity:
 		return columnCodex, false
 	default:
 		return columnCodex, false

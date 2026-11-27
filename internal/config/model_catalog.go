@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"path"
@@ -8,12 +9,16 @@ import (
 	"strings"
 )
 
+var errAntigravityRoutePattern = errors.New("antigravity wildcard match must start with gemini-")
+
 // AdapterModelProvider is a provider selected by an exact model or route.
 type AdapterModelProvider string
 
 const (
 	// AdapterModelProviderCodex selects the direct Codex provider.
 	AdapterModelProviderCodex AdapterModelProvider = "codex"
+	// AdapterModelProviderAntigravity selects the Antigravity Gemini backend.
+	AdapterModelProviderAntigravity AdapterModelProvider = "antigravity"
 	// AdapterModelProviderAnthropic selects the direct Anthropic provider.
 	AdapterModelProviderAnthropic AdapterModelProvider = "anthropic"
 	// AdapterModelProviderPassthroughOverride selects a named OpenAI-compatible upstream.
@@ -720,12 +725,18 @@ func validateAdapterModelRoute(adapter AdapterConfig, index int, route AdapterMo
 	}
 
 	if route.Provider != AdapterModelProviderCodex &&
+		route.Provider != AdapterModelProviderAntigravity &&
 		route.Provider != AdapterModelProviderAnthropic {
 		return fmt.Errorf(
 			"%s.provider %q is invalid for wildcard routing",
 			routePath,
 			route.Provider,
 		)
+	}
+
+	if route.Provider == AdapterModelProviderAntigravity &&
+		!strings.HasPrefix(route.Match, "gemini-") {
+		return fmt.Errorf("%w: %s.match", errAntigravityRoutePattern, routePath)
 	}
 
 	if !adapterProviderEnabled(adapter, route.Provider) {
@@ -747,6 +758,8 @@ func adapterProviderEnabled(adapter AdapterConfig, provider AdapterModelProvider
 	switch provider {
 	case AdapterModelProviderCodex:
 		return adapter.Codex.Enabled
+	case AdapterModelProviderAntigravity:
+		return adapter.Antigravity.Enabled
 	case AdapterModelProviderAnthropic:
 		return adapter.Anthropic.Enabled || adapter.DirectOAuth
 	case AdapterModelProviderPassthroughOverride:
@@ -759,6 +772,7 @@ func adapterProviderEnabled(adapter AdapterConfig, provider AdapterModelProvider
 func (provider AdapterModelProvider) valid() bool {
 	switch provider {
 	case AdapterModelProviderCodex,
+		AdapterModelProviderAntigravity,
 		AdapterModelProviderAnthropic,
 		AdapterModelProviderPassthroughOverride:
 		return true

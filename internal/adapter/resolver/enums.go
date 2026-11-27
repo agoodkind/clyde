@@ -21,6 +21,8 @@ const (
 	// ProviderCodex dispatches to the Codex websocket implementation
 	// in internal/adapter/codex.
 	ProviderCodex = adaptermodel.BackendCodex
+	// ProviderAntigravity dispatches to the Antigravity backend.
+	ProviderAntigravity = adaptermodel.BackendAntigravity
 	// ProviderPassthrough dispatches to the passthrough-override path.
 	ProviderPassthrough = adaptermodel.BackendPassthroughOverride
 )
