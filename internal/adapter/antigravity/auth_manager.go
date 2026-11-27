@@ -20,6 +20,7 @@ const (
 	// #nosec G101 -- the Google OAuth token endpoint is public.
 	oauthTokenEndpoint       = "https://oauth2.googleapis.com/token"
 	invalidGrantCode         = "invalid_grant"
+	invalidClientCode        = "invalid_client"
 	refreshSafetyWindow      = 60 * time.Second
 	refreshHTTPTimeout       = 30 * time.Second
 	refreshResponseBodyLimit = 1 << 20
@@ -50,6 +51,10 @@ func (e *AuthRefreshError) Error() string {
 
 	if e.Code == invalidGrantCode {
 		return "Antigravity refresh token is invalid; sign in to Antigravity again"
+	}
+
+	if e.Code == invalidClientCode {
+		return "Antigravity OAuth client was rejected. Check adapter.antigravity.client_id and the client secret setting"
 	}
 
 	if e.Cause != nil {
@@ -139,24 +144,9 @@ func NewAuthManager(source CredentialSource, options AuthManagerOptions) *AuthMa
 //
 //	token, err := manager.Token(ctx)
 func (m *AuthManager) Token(ctx context.Context) (string, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	token, _, err := m.tokenForProject(ctx)
 
-	credential, err := m.readCredential(ctx)
-	if err != nil {
-		return "", err
-	}
-
-	if m.snapshot != credential.Fingerprint {
-		m.cached = credential
-		m.snapshot = credential.Fingerprint
-	}
-
-	if m.cached.AccessToken != "" && m.cached.ExpiresAt.After(m.now().Add(refreshSafetyWindow)) {
-		return m.cached.AccessToken, nil
-	}
-
-	return m.refresh(ctx, credential)
+	return token, err
 }
 
 // ForceRefresh refreshes the current credential after an upstream auth failure.
@@ -179,6 +169,29 @@ func (m *AuthManager) ForceRefresh(ctx context.Context) (string, error) {
 	}
 
 	return m.refresh(ctx, credential)
+}
+
+func (m *AuthManager) tokenForProject(ctx context.Context) (string, string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	credential, err := m.readCredential(ctx)
+	if err != nil {
+		return "", "", err
+	}
+
+	if m.snapshot != credential.Fingerprint {
+		m.cached = credential
+		m.snapshot = credential.Fingerprint
+	}
+
+	if m.cached.AccessToken != "" && m.cached.ExpiresAt.After(m.now().Add(refreshSafetyWindow)) {
+		return m.cached.AccessToken, m.snapshot, nil
+	}
+
+	token, err := m.refresh(ctx, credential)
+
+	return token, m.snapshot, err
 }
 
 func (m *AuthManager) readCredential(ctx context.Context) (Credential, error) {
@@ -270,7 +283,7 @@ func (m *AuthManager) refresh(ctx context.Context, credential Credential) (strin
 	}
 
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		permanent := result.Error == invalidGrantCode
+		permanent := result.Error == invalidGrantCode || result.Error == invalidClientCode
 
 		return "", &AuthRefreshError{
 			Permanent: permanent,

@@ -112,6 +112,43 @@ func TestAuthManagerInvalidGrantIsPermanent(t *testing.T) {
 	}
 }
 
+func TestAuthManagerInvalidClientIsPermanent(t *testing.T) {
+	server := httptest.NewServer(
+		http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			writer.WriteHeader(http.StatusUnauthorized)
+			_, _ = writer.Write(
+				[]byte(`{"error":"invalid_client","error_description":"fixture-private-detail"}`),
+			)
+		}),
+	)
+	defer server.Close()
+
+	source := &testCredentialSource{
+		credential: Credential{
+			RefreshToken: "fixture-refresh-token",
+			Fingerprint:  "fixture",
+		},
+	}
+	manager := NewAuthManager(
+		source,
+		AuthManagerOptions{
+			HTTPClient: server.Client(),
+			Endpoint:   server.URL,
+		},
+	)
+	_, err := manager.ForceRefresh(t.Context())
+	var refreshError *AuthRefreshError
+	if !errors.As(err, &refreshError) || !refreshError.Permanent ||
+		refreshError.Code != invalidClientCode {
+		t.Fatalf("ForceRefresh error = %v, want permanent invalid_client error", err)
+	}
+
+	const message = "Antigravity OAuth client was rejected. Check adapter.antigravity.client_id and the client secret setting"
+	if refreshError.Error() != message {
+		t.Fatalf("error message = %q", refreshError.Error())
+	}
+}
+
 func TestAuthManagerReadsSourceAfterFingerprintChange(t *testing.T) {
 	var requestCount int
 	server := httptest.NewServer(

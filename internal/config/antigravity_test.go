@@ -1,9 +1,76 @@
 package config
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestAntigravityOAuthClientSecretSources(t *testing.T) {
+	t.Setenv("CLYDE_TEST_ANTIGRAVITY_SECRET_SOURCE", "fixture-secret")
+
+	const section = "[adapter.antigravity]\nenabled = true\n"
+	const clientID = "client_id = \"fixture-client\"\n"
+	const literal = "client_secret = \"fixture-secret\"\n"
+	const environment = "client_secret_env = \"CLYDE_TEST_ANTIGRAVITY_SECRET_SOURCE\"\n"
+	const file = "client_secret_file = \"client-secret.txt\"\n"
+
+	cases := []struct {
+		name, settings string
+		wantErr        error
+	}{
+		{name: "missing client ID", settings: environment, wantErr: errAntigravityClientID},
+		{name: "missing secret", settings: clientID, wantErr: errEmptySecretReference},
+		{name: "literal", settings: clientID + literal},
+		{name: "environment", settings: clientID + environment},
+		{name: "relative file", settings: clientID + file},
+		{
+			name:     "literal and environment",
+			settings: clientID + literal + environment,
+			wantErr:  errSecretSourceConflict,
+		},
+		{
+			name:     "literal and file",
+			settings: clientID + literal + file,
+			wantErr:  errSecretSourceConflict,
+		},
+		{
+			name:     "environment and file",
+			settings: clientID + environment + file,
+			wantErr:  errSecretSourceConflict,
+		},
+	}
+
+	for _, test := range cases {
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				dir := t.TempDir()
+				path := filepath.Join(dir, "client-secret.txt")
+				if err := os.WriteFile(path, []byte("fixture-secret\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+
+				writeModelConfig(t, dir, section+test.settings)
+				cfg, err := loadConfig(dir)
+				if !errors.Is(err, test.wantErr) {
+					t.Fatalf("config error = %v, want %v", err, test.wantErr)
+				}
+
+				if test.wantErr != nil {
+					return
+				}
+
+				id, secret, err := cfg.Adapter.Antigravity.ResolveOAuthClient()
+				if err != nil || id != "fixture-client" || secret != "fixture-secret" {
+					t.Fatal("configuration did not resolve the fixture credentials")
+				}
+			},
+		)
+	}
+}
 
 func TestLoadAntigravityRouteRequiresEnabledBackend(t *testing.T) {
 	t.Setenv("CLYDE_TEST_ANTIGRAVITY_CLIENT_SECRET", "fixture-secret")

@@ -61,22 +61,39 @@ func (cfg AdapterConfig) ResolveRequireToken() (string, error) {
 //		"adapter.openai_compat_passthrough", "", "UPSTREAM_KEY", nil,
 //	)
 func ResolvePassthroughAPIKey(setting, literal, environment string, path *string) (string, error) {
+	return resolveCredentialSources(setting+".api_key", literal, environment, path, false)
+}
+
+func resolveCredentialSources(
+	setting string,
+	literal string,
+	environment string,
+	path *string,
+	requireOne bool,
+) (string, error) {
+	if (path != nil && (literal != "" || environment != "")) ||
+		(requireOne && literal != "" && environment != "") {
+		slog.Warn(
+			"config.adapter.key_source_conflict",
+			"component",
+			"config",
+			"setting",
+			setting,
+			"err",
+			errSecretSourceConflict,
+		)
+
+		return "", fmt.Errorf(
+			"%s, %s_env, %s_file: %w",
+			setting,
+			setting,
+			setting,
+			errSecretSourceConflict,
+		)
+	}
+
 	if path != nil {
-		if literal != "" || environment != "" {
-			slog.Warn(
-				"config.adapter.key_source_conflict",
-				"component",
-				"config",
-				"setting",
-				setting,
-				"err",
-				errSecretSourceConflict,
-			)
-
-			return "", fmt.Errorf("%s.api_key_file: %w", setting, errSecretSourceConflict)
-		}
-
-		return readAdapterSecret(setting+".api_key_file", "", *path)
+		return readAdapterSecret(setting+"_file", "", *path)
 	}
 
 	if literal != "" {
@@ -84,7 +101,17 @@ func ResolvePassthroughAPIKey(setting, literal, environment string, path *string
 	}
 
 	if environment != "" {
-		return readAdapterSecret(setting+".api_key_env", environment, "")
+		return readAdapterSecret(setting+"_env", environment, "")
+	}
+
+	if requireOne {
+		return "", fmt.Errorf(
+			"%s, %s_env, %s_file: %w",
+			setting,
+			setting,
+			setting,
+			errEmptySecretReference,
+		)
 	}
 
 	return "", nil
@@ -159,6 +186,10 @@ func (cfg AdapterConfig) ValidateSecrets() error {
 
 func resolveAdapterSecretPaths(cfg *AdapterConfig, directory string) {
 	cfg.RequireTokenFile = resolveSecretPath(directory, cfg.RequireTokenFile)
+	cfg.Antigravity.ClientSecretFile = resolveSecretPath(
+		directory,
+		cfg.Antigravity.ClientSecretFile,
+	)
 	cfg.OpenAICompatPassthrough.APIKeyFile = resolveSecretPath(
 		directory,
 		cfg.OpenAICompatPassthrough.APIKeyFile,

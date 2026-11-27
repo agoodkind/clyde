@@ -24,15 +24,19 @@ type AdapterAntigravity struct {
 	ClientVersion string `json:"clientVersion,omitempty" toml:"client_version,omitempty"`
 	// ClientID identifies the configured Google OAuth client.
 	ClientID string `json:"clientId,omitempty" toml:"client_id,omitempty"`
+	// ClientSecret supplies a literal from the local configuration.
+	ClientSecret string `json:"-" toml:"client_secret,omitempty"`
 	// ClientSecretEnv identifies the environment variable with the secret.
 	ClientSecretEnv string `json:"clientSecretEnv,omitempty" toml:"client_secret_env,omitempty"`
+	// ClientSecretFile identifies a file with the client secret.
+	ClientSecretFile *string `json:"clientSecretFile,omitempty" toml:"client_secret_file,omitempty"`
 	// Reasoning controls whether Clyde requests reasoning text.
 	Reasoning AdapterAntigravityReasoning `json:"reasoning,omitzero" toml:"reasoning,omitempty"`
 }
 
 // ResolveOAuthClient reads the configured Google OAuth client values.
 //
-// The secret comes from the named environment variable.
+// Exactly one secret source must supply the value.
 //
 //	clientID, secret, err := cfg.ResolveOAuthClient()
 func (cfg AdapterAntigravity) ResolveOAuthClient() (string, string, error) {
@@ -41,10 +45,12 @@ func (cfg AdapterAntigravity) ResolveOAuthClient() (string, string, error) {
 		return "", "", errAntigravityClientID
 	}
 
-	secret, err := readAdapterSecret(
-		"adapter.antigravity.client_secret_env",
+	secret, err := resolveCredentialSources(
+		"adapter.antigravity.client_secret",
+		strings.TrimSpace(cfg.ClientSecret),
 		cfg.ClientSecretEnv,
-		"",
+		cfg.ClientSecretFile,
+		true,
 	)
 	if err != nil {
 		return "", "", err

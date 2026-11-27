@@ -625,11 +625,16 @@ func resetProtectedCredentialFiles(cfg *config.Config) ([]string, error) {
 		return nil, wrapped
 	}
 
-	return []string{
+	paths := []string{
 		filepath.Join(home, antigravityoauthcredentials.CLITokenFile),
 		filepath.Join(home, antigravityoauthcredentials.DesktopTokenFile),
 		homedir.Expand(cfg.Adapter.Antigravity.CredentialsFile),
-	}, nil
+	}
+	if path := cfg.Adapter.Antigravity.ClientSecretFile; path != nil {
+		paths = append(paths, *path)
+	}
+
+	return paths, nil
 }
 
 func resolvedResetPath(path string) (_ string, err error) {

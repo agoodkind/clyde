@@ -151,7 +151,7 @@ enabled = true
 # Use the Google Cloud Console entry for the OAuth client that issued the login.
 # https://developers.google.com/identity/protocols/oauth2/native-app#creatingcred
 # client_id = ""
-# client_secret_env = "CLYDE_ANTIGRAVITY_CLIENT_SECRET"
+# client_secret_env = "ANTIGRAVITY_CLIENT_SECRET"
 
 # Reusable exact-model capability profiles. Transport limits report the same
 # context budget used by the selected Codex transport.
